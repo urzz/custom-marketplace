@@ -1,0 +1,14 @@
+{
+  "name": "jade-tools-marketplace",
+  "owner": {
+    "name": "Jade Liu",
+    "email": "[redacted-email]"
+  },
+  "plugins": [
+    {
+      "name": "quality-review-plugin",
+      "source": "./plugins/quality-review-plugin",
+      "description": "Adds a /quality-review skill for quick code reviews"
+    }
+  ]
+}
