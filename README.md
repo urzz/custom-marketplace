@@ -4,7 +4,7 @@
 
 当前仓库包含：
 
-- `quality-review-plugin`：提供 `/quality-review` 技能，用于对选中代码或最近改动进行快速审查。
+- `openclaw-plugin`：提供 `/openclaw-skill-creator` 技能，用于帮助用户起草 OpenClaw skill。
 
 ## 仓库结构
 
@@ -24,5 +24,5 @@
 当前仓库没有独立的构建或测试流程，可以先做基础静态校验：
 
 ```bash
-jq . .claude-plugin/marketplace.json >/dev/null && jq . plugins/quality-review-plugin/.claude-plugin/plugin.json >/dev/null
+jq . .claude-plugin/marketplace.json >/dev/null && jq . plugins/openclaw-plugin/.claude-plugin/plugin.json >/dev/null
 ```

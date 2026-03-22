@@ -12,13 +12,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. `/plugins/<plugin-name>/.claude-plugin/plugin.json`：单个插件的元数据入口。
 3. `/plugins/<plugin-name>/skills/<skill-name>/SKILL.md`：技能定义，使用 frontmatter + 提示词正文。
 
-当前仓库只注册了一个插件：`quality-review-plugin`，它提供 `/quality-review` 技能。
+当前仓库当前已注册插件：`openclaw-plugin`，它提供 `/openclaw-skill-creator` 技能。
 
 ## 关键文件
 
 - `.claude-plugin/marketplace.json`：决定 Claude Code 能发现哪些插件。
-- `plugins/quality-review-plugin/.claude-plugin/plugin.json`：定义插件名称、描述、版本。
-- `plugins/quality-review-plugin/skills/quality-review/SKILL.md`：定义技能描述与实际提示词。
+- `plugins/openclaw-plugin/.claude-plugin/plugin.json`：定义插件名称、描述、版本。
+- `plugins/openclaw-plugin/skills/<skill-name>/SKILL.md`：定义技能描述与实际提示词。
 
 ## 修改时要同步的地方
 
@@ -61,7 +61,7 @@ git ls-tree -r --name-only HEAD
 ```
 
 ```bash
-jq . .claude-plugin/marketplace.json >/dev/null && jq . plugins/quality-review-plugin/.claude-plugin/plugin.json >/dev/null
+jq . .claude-plugin/marketplace.json >/dev/null && jq . plugins/openclaw-plugin/.claude-plugin/plugin.json >/dev/null
 ```
 
 ```bash
