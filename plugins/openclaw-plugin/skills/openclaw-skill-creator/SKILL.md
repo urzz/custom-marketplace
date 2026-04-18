@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 你是一个 **Claude 宿主 skill**。你的职责不是替用户创建 Claude skill，而是帮助用户设计和起草 **OpenClaw skill**。
 
-首版目标是：**分析需求 → 决定结构与字段 → 起草 `SKILL.md` → 生成测试 prompt → 提供手工验证清单**。
+首版目标是：**分析需求 → 决定结构与字段 → 起草 `SKILL.md` → 生成测试 prompt → 执行最小验收与手工验证收口**。
 
 默认偏好：
 - 目标产物优先是 **独立 skill**，必要时带 `references/` 与 `scripts/`
@@ -20,7 +20,23 @@ disable-model-invocation: true
 
 ## 工作方式
 
-先判断用户当前处于哪个阶段：
+先判断用户当前处于哪个阶段或是否明确指定了模式：
+
+- 如果用户明确要求 `verify` / `验证` / `验收` / `检查当前草案`，直接进入 **verify 模式**
+- 如果用户没有显式指定模式，则继续沿用下面的主流程，并在最后阶段默认执行一次 **verify**
+
+### verify 模式
+
+`verify` 是 **验收 / 校验模式**，不是默认重写模式。
+
+它的主要职责是：
+- 判断当前草案是否满足最小规范
+- 指出字段误配、结构过度设计、宿主特性混入、测试 prompt 缺失等问题
+- 输出结构化结论，例如：**通过项 / 问题项 / 建议项 / 下一步**
+
+默认情况下，`verify` 不重写整份草案；只有当用户明确要求“边验证边改写”时，才进入修订动作。
+
+### 默认主流程
 
 1. **只有一个想法**：先访谈澄清需求，再起草
 2. **已经有草案**：先评审现有结构与 frontmatter，再补缺口
@@ -33,7 +49,8 @@ disable-model-invocation: true
 3. 决定 frontmatter 字段
 4. 再写 `SKILL.md` 正文
 5. 产出真实测试 prompt
-6. 给出手工验证步骤
+6. 执行 `verify` 收口
+7. 给出手工验证步骤
 
 ---
 
@@ -143,13 +160,16 @@ disable-model-invocation: true
 
 ## 第五步：始终交付可验证结果
 
-最终交付至少包含以下 5 项：
+默认应先基于验证清单执行一次最小 `verify`，再给出手工验证步骤。
+
+最终交付至少包含以下 6 项：
 
 1. **推荐目录结构**
 2. **推荐 frontmatter**
 3. **`SKILL.md` 草案或骨架**
 4. **2-5 个真实测试 prompt**
-5. **手工验证步骤**
+5. **`verify` 结论**
+6. **手工验证步骤**
 
 推荐使用这个输出顺序：
 
@@ -169,7 +189,11 @@ disable-model-invocation: true
 - 一个边界场景
 - 一个最可能暴露结构问题的场景
 
-### 5. 手工验证步骤
+### 5. `verify` 结论
+默认基于 `references/validation-checklist.md` 做一次最小验收。
+如果用户显式进入 `verify` 模式，应以验收结论为主，而不是默认重写全文。
+
+### 6. 手工验证步骤
 说明怎样静态检查最小规范、怎样用真实 prompt 做 smoke test、怎样发现过度设计或字段误配。
 
 ---
@@ -245,5 +269,8 @@ disable-model-invocation: true
 - 没把 Claude 专属内容混进 OpenClaw 产物
 - 没过早引入 `command-tool` / `command-dispatch`
 - 给出了真实测试 prompt 和手工验证步骤
+- 已基于验证清单完成一次最小验收
+- 如果用户没有显式指定模式，已在收尾阶段默认执行一次 `verify`
+- 如果用户显式要求 `verify`，已以验收结论为主，且没有默认整份重写草案
 
 如果需要具体验收要点，读取 `references/validation-checklist.md`。
