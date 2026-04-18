@@ -1,5 +1,5 @@
 {
   "name": "openclaw-plugin",
   "description": "Adds a /openclaw-skill-creator skill for drafting OpenClaw skills",
-  "version": "1.0.0"
+  "version": "1.0.1"
 }
