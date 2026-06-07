@@ -9,6 +9,11 @@
       "name": "openclaw-plugin",
       "source": "./plugins/openclaw-plugin",
       "description": "Adds a /openclaw-skill-creator skill for drafting OpenClaw skills"
+    },
+    {
+      "name": "dev-stack",
+      "source": "./plugins/dev-stack",
+      "description": "Adds a /skill-creator skill for creating and improving Claude Code skills"
     }
   ]
 }

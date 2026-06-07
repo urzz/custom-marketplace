@@ -5,6 +5,7 @@
 当前仓库包含：
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator` 技能，用于帮助用户起草 OpenClaw skill。
+- `dev-stack`：提供 `/skill-creator` 技能，用于创建、设计和改进 Claude Code skill。
 
 ## 仓库结构
 
@@ -21,8 +22,16 @@
 
 ## 本地校验
 
-当前仓库没有独立的构建或测试流程，可以先做基础静态校验：
+当前仓库没有独立的构建流程，但可以先做基础静态校验：
 
 ```bash
-jq . .claude-plugin/marketplace.json >/dev/null && jq . plugins/openclaw-plugin/.claude-plugin/plugin.json >/dev/null
+jq . .claude-plugin/marketplace.json >/dev/null \
+  && jq . plugins/openclaw-plugin/.claude-plugin/plugin.json >/dev/null \
+  && jq . plugins/dev-stack/.claude-plugin/plugin.json >/dev/null
+```
+
+如需检查 `skill-creator` 内容，可重点审阅：
+
+```bash
+find plugins/dev-stack/skills/skill-creator -maxdepth 3 -type f | sort
 ```
