@@ -13,7 +13,7 @@
     {
       "name": "dev-stack",
       "source": "./plugins/dev-stack",
-      "description": "Adds a /skill-creator skill for creating and improving Claude Code skills"
+      "description": "Dev stack plugin with dev rel skills"
     }
   ]
 }
