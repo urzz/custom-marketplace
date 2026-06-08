@@ -1,15 +1,32 @@
 ---
-name: skill-creator
-description: Use when creating, designing, or implementing a new Claude Code skill from scratch, or when modifying, improving, optimizing, or updating an existing skill. Guides through Socratic discovery with first-principles thinking, spec definition with Google 8 pattern selection, implementation planning, code generation following Anthropic best practices, and dual-layer quality validation. Triggers on skill creation requests, skill improvement requests, packaging workflows into reusable skills, or explicit invocation.
+name: ug-skill-creator
+description: Use when creating, designing, or implementing a new Claude Code skill from scratch, when modifying, improving, optimizing, or updating an existing skill, or when auditing/reviewing existing skill changes for completeness. Guides through Socratic discovery with first-principles thinking, spec definition with Google 8 pattern selection, implementation planning, code generation following Anthropic best practices, and dual-layer quality validation. Triggers on skill creation requests, skill improvement requests, skill audit/review requests ("检查", "查看遗漏", "对比", "review changes", "是否完整", "validate"), packaging workflows into reusable skills, or explicit invocation.
 ---
 
 # UG Skill Creator
 
 End-to-end workflow for creating and iterating Claude Code skills. Enforces Anthropic best practices and Google 8 Agent Design Patterns.
 
+## Critical Constraints
+
+⚠️ **MANDATORY: 禁止跳过路由直接执行操作。**
+
+无论用户指令看起来多么"简单"或"明确"，必须：
+1. 先匹配 Routing Table 确定路径（CREATE / MODIFY / AUDIT）
+2. 执行该路径对应的流程（Phase 1 或 Phase 1A 起步）
+3. 只有在路径流程中明确允许的步骤内，才能执行实际操作
+
+**禁止的行为：**
+- 路由未匹配就直接执行操作（必须 HALT 并询问）
+- 看到"检查变更"就直接跑 git diff 并给出结论（必须走 AUDIT 路径）
+- 看到"修改 X"就直接编辑文件（必须走 MODIFY 路径）
+- 跳过 Phase 1/1A 直接进入实现
+- 将 AUDIT 请求当作简单问答处理
+
 ## Contents
 - [Routing](#routing)
 - [Phase 1: Socratic Discovery](#phase-1-socratic-discovery)
+- [Phase 1A: Audit Analysis](#phase-1a-audit-analysis)
 - [Phase 2: Spec](#phase-2-spec)
 - [Phase 3: Plan](#phase-3-plan)
 - [Phase 4: Implement](#phase-4-implement)
@@ -21,8 +38,11 @@ End-to-end workflow for creating and iterating Claude Code skills. Enforces Anth
 |--------|------|
 | User describes new capability, no existing skill referenced | **CREATE** |
 | User points to existing skill + modification verb ("improve", "fix", "update", "优化", "修改", "修复") | **MODIFY** |
-| CWD contains SKILL.md | **MODIFY** |
-| Ambiguous | Ask: "是创建新 skill，还是改进已有的？" |
+| User asks to review/check/audit/validate existing changes ("检查", "查看遗漏", "对比", "review", "validate", "是否完整", "是否有遗漏") | **AUDIT** |
+| CWD contains SKILL.md + modification verb | **MODIFY** |
+| CWD contains SKILL.md + review/check/audit verb | **AUDIT** |
+| Ambiguous (multiple paths plausible) | Ask: "是创建新 skill、改进已有的、还是审查现有变更？" |
+| **No match (兜底)** | **HALT — 禁止直接执行。输出："无法匹配路径，请明确你的意图：创建 / 修改 / 审查？" 等待用户回答后重新路由** |
 
 ---
 
@@ -91,6 +111,84 @@ End-to-end workflow for creating and iterating Claude Code skills. Enforces Anth
 Output format templates: [references/templates.md#phase-1-output](references/templates.md#phase-1-output)
 
 **Gate:** User confirms the statement before proceeding to Phase 2.
+
+---
+
+## Phase 1A: Audit Analysis
+
+**Goal:** 对已有变更进行结构化完整性审查，产出 Gap Report。AUDIT 路径不修改任何文件，只产出诊断报告。
+
+### 适用场景
+- 用户已完成一轮修改，想验证是否有遗漏
+- 用户要求对比当前分支与 main 的变更
+- 用户要求 review skill 变更的完整性
+
+### Step A.1 — Scope Determination (no user interaction)
+
+1. **确定审查目标：** 从用户指令中提取 skill 名称或分支名称
+2. **确定对比基准：** 默认 `main`，用户指定则用指定值
+3. **获取变更清单：** `git diff --name-only <base>...<head>` + `git diff <base>...<head>`
+4. **分类变更文件：** 按 skill 结构分组（SKILL.md / references/ / agents/ / scripts/）
+
+### Step A.2 — Structural Completeness Check
+
+对变更后的完整 skill 按 [references/validation-checklist.md](references/validation-checklist.md) 的 6 个维度逐一审查：
+
+1. **Spec Conformance** — 新增路由/步骤是否与已有 Spec 一致
+2. **Pattern Consistency** — 是否引入了与主 Pattern 冲突的结构
+3. **Flow Completeness** — 新增路径是否有完整的 Gate、退出条件、错误处理
+4. **Structural Compliance** — description 是否覆盖新增触发词、body 行数、TOC 完整性
+5. **Token Efficiency** — 是否有冗余重复、过长 inline 内容
+6. **Cross-reference Integrity** — 被引用的 references/agents 文件是否存在且内容匹配
+
+### Step A.3 — Functional Gap Analysis
+
+针对变更的语义意图，检查：
+- 新增的路由信号是否有对应处理路径
+- 新增的步骤是否在 Contents/TOC 中注册
+- 新增的动词/触发词是否在 description 中覆盖
+- 模板/引用的新增字段是否在所有调用方同步更新
+- 上下游 skill 的联动是否受影响（参考 CLAUDE.md 联动检查清单）
+
+### Step A.4 — Gap Report (structured output)
+
+输出格式：
+
+~~~markdown
+## Audit Report: <skill-name>
+
+**对比基准：** <base>...<head>
+**变更文件数：** N
+
+### 变更摘要
+- [列出关键变更点]
+
+### 完整性审查
+
+| 维度 | 状态 | 发现 |
+|------|------|------|
+| Spec Conformance | ✅/⚠️/❌ | 具体描述 |
+| Pattern Consistency | ✅/⚠️/❌ | 具体描述 |
+| Flow Completeness | ✅/⚠️/❌ | 具体描述 |
+| Structural Compliance | ✅/⚠️/❌ | 具体描述 |
+| Token Efficiency | ✅/⚠️/❌ | 具体描述 |
+| Cross-reference Integrity | ✅/⚠️/❌ | 具体描述 |
+
+### 功能遗漏项（如有）
+1. [遗漏描述 + 建议修复方向]
+
+### 结论
+- ✅ 变更完整，无遗漏
+- ⚠️ 存在 N 项建议改进（非阻塞）
+- ❌ 存在 N 项必须修复的遗漏
+~~~
+
+### 硬性约束
+- **AUDIT 路径禁止执行任何文件修改操作（Edit/Write）**
+- 只输出诊断报告 + 建议修复项
+- 如果发现需要修改，输出建议后**等待用户确认**
+- 用户确认修复 → 切换到 MODIFY 路径（从 Phase 1 Step 1.2a 开始，root cause 已知）
+- 用户确认无需修复 → 流程结束
 
 ---
 
