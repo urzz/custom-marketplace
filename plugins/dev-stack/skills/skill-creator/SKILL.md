@@ -1,6 +1,6 @@
 ---
 name: ug-skill-creator
-description: Use when creating, designing, or implementing a new Claude Code skill from scratch, when modifying, improving, optimizing, or updating an existing skill, or when auditing/reviewing existing skill changes for completeness. Guides through Socratic discovery with first-principles thinking, spec definition with Google 8 pattern selection, implementation planning, code generation following Anthropic best practices, and dual-layer quality validation. Triggers on skill creation requests, skill improvement requests, skill audit/review requests ("检查", "查看遗漏", "对比", "review changes", "是否完整", "validate"), packaging workflows into reusable skills, or explicit invocation.
+description: Use when creating, designing, or implementing a new Claude Code skill from scratch, or when modifying, improving, auditing, or reviewing an existing skill.
 ---
 
 # UG Skill Creator
