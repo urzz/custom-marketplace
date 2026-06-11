@@ -133,7 +133,11 @@ Phase 3 — use this format for every Task in the Plan:
 - 重复代码也要完整写出（sub agent 可能不按顺序读 Task）
 - 最后一步必须是验证步骤（implementer 自检）
 - Acceptance Criteria 写明通过标准，供 superpowers spec reviewer 做 compliance check
-- Pattern 结构约束在 Phase 3 输出时直接写入对应 Task 的 Acceptance Criteria（不需要 implementer 去查 design-patterns.md）
+- Acceptance Criteria 必须包含三类信息（Phase 3 输出时直接写入，不需要 implementer 去查外部文件）：
+  1. **Pattern 结构约束**（来自 Spec Section 3 Architecture — 该 Task 涉及的架构模式、文件结构、命名规范）
+  2. **业务意图**（来自 Spec Section 1 First Principles — 该 Task 解决什么问题、不可削减的核心是什么）
+  3. **验收标准**（来自 Spec Section 5 Success Criteria — 与该 Task 相关的具体可验证条件）
+- Plan 是 self-contained 的执行文档 — Acceptance Criteria 必须包含 subagent 判断完成所需的全部信息，禁止引用外部 Spec 文件
 
 **CREATE 拆分参考：**
 - Task 1: 创建 SKILL.md 骨架（frontmatter + workflow overview + step 标题）
@@ -152,7 +156,7 @@ Phase 3 — use this format for every Task in the Plan:
 Phase 4 — 委托 superpowers:subagent-driven-development 时注入的领域约束模板。
 
 ```
-请执行 Plan（路径: `.claude/plans/<skill-name>-plan.md`）。
+请执行 Plan（路径: `.claude/plans/<skill-name>-<变更主题>-plan.md`）。
 
 **领域约束（spec reviewer 须验证）：**
 - description: starts with "Use when", third person, ≤ 1024 chars
@@ -162,13 +166,11 @@ Phase 4 — 委托 superpowers:subagent-driven-development 时注入的领域约
 - Stable logic (regex, validation, shell commands) → scripts/
 - Files > 100 lines → must include `## Contents` with anchor links
 - name format: ≤ 64 chars, only letters/numbers/hyphens
-- 实现必须反映 Spec Section 3 中选定的 Pattern 结构（Pattern 约束已写入每个 Task 的 Acceptance Criteria）
+- 业务意图、Pattern 结构约束、验收标准均已编码到 Plan 每个 Task 的 Acceptance Criteria 中，subagent 无需查阅外部 Spec 文件
 
 **MODIFY 额外约束：**
 - 只修改 Plan 中明确列出的内容
 - 发现的 scope 外问题 → 记录到输出，不做修改
-
-**Spec 参考:** `.claude/plans/<skill-name>-spec.md`
 ```
 
 ---

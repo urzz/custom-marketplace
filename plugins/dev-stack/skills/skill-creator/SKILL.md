@@ -22,6 +22,8 @@ End-to-end workflow for creating and iterating Claude Code skills. Enforces Anth
 - 看到"修改 X"就直接编辑文件（必须走 MODIFY 路径）
 - 跳过 Phase 1/1A 直接进入实现
 - 将 AUDIT 请求当作简单问答处理
+- 在任何阶段使用 EnterPlanMode（Phase 3 直接写入文件供用户 review，不切换模式）
+- 以 fallback 为由降级为自行实现（superpowers 不可用 → 停止并等待用户指示，唯一选项）
 
 ## Contents
 - [Routing](#routing)
@@ -212,13 +214,29 @@ Fill the template from [references/templates.md#delta-spec](references/templates
 
 Reference: [references/design-patterns.md](references/design-patterns.md) for pattern details and templates.
 
-**Gate:** User confirms Spec / Delta Spec before proceeding to Phase 3.
+### Hard Gate: Spec 确认（Phase 2 → Phase 3 唯一出口）
 
-### Persist (MUST)
+⚠️ **Direct Write + Review Gate 模式：**
 
-Gate 通过后，**立即**执行：
-1. Write 确认的 Spec 到 `.claude/plans/<skill-name>-spec.md`（已存在则覆盖）
-2. 输出确认："✅ Spec 已保存到 `.claude/plans/<skill-name>-spec.md`"
+1. **直接保存** — 使用 Write 工具将 Spec 写入 `.claude/plans/<skill-name>-<变更主题>-spec.md`（已存在则覆盖）
+2. **输出摘要** — 使用以下固定模板：
+   ```
+   ✅ Spec 已保存到 `.claude/plans/<skill-name>-<变更主题>-spec.md`
+
+   **摘要：** [3-5 行核心要点]
+
+   请 review 文件内容，确认后说"继续"进入下一阶段。如需调整请直接说明。
+   ```
+3. **等待用户** — 用户说"继续"/"确认"/"可以" → 进入 Phase 3；用户提出调整 → 修改后重新保存
+
+**文件命名规则：** `<变更主题>` ≤ 3 个单词，kebab-case，概括本次变更核心。
+
+自检清单（进入 Phase 3 前必须全部为 YES）：
+- [ ] 已执行 Write 工具保存 Spec 文件？
+- [ ] 已输出保存确认模板（含摘要 + review 提示）？
+- [ ] 用户说了肯定词？
+
+全部 YES → 进入 Phase 3。任一 NO → 停留在 Phase 2。
 
 ---
 
@@ -236,7 +254,7 @@ Use the format from [references/templates.md#task-format](references/templates.m
 
 **格式要求：**
 - Steps 必须自包含（完整内容，不用 placeholder，不引用外部文件）
-- Pattern 结构约束直接写入对应 Task 的 Acceptance Criteria（sub agent 不需要查 design-patterns.md）
+- Spec 关键信息（业务意图 + Pattern 结构 + 验收标准）直接写入对应 Task 的 Acceptance Criteria（sub agent 不需要查外部文件）
 - 最后一步必须是验证步骤（implementer 自检）
 - Acceptance Criteria 供 superpowers spec reviewer 做 compliance check
 
@@ -244,33 +262,67 @@ Use the format from [references/templates.md#task-format](references/templates.m
 
 Present in conversation (do NOT use EnterPlanMode). User confirms → proceed; adjustments → revise and re-confirm.
 
-**Gate:** User confirms Plan before proceeding to Phase 4.
+### Hard Gate: Plan 确认（Phase 3 → Phase 4 唯一出口）
 
-### Persist (MUST)
+⚠️ **Direct Write + Review Gate 模式：**
 
-Gate 通过后，**立即**执行：
-1. Write 确认的 Plan 到 `.claude/plans/<skill-name>-plan.md`（已存在则覆盖）
-2. 输出确认："✅ Plan 已保存到 `.claude/plans/<skill-name>-plan.md`"
+1. **直接保存** — 使用 Write 工具将 Plan 写入 `.claude/plans/<skill-name>-<变更主题>-plan.md`（已存在则覆盖）
+2. **输出摘要** — 使用以下固定模板：
+   ```
+   ✅ Plan 已保存到 `.claude/plans/<skill-name>-<变更主题>-plan.md`
+
+   **摘要：** [3-5 行核心要点]
+
+   请 review 文件内容，确认后说"继续"进入下一阶段。如需调整请直接说明。
+   ```
+3. **等待用户** — 用户说"继续"/"确认"/"可以" → 进入 Phase 4；用户提出调整 → 修改后重新保存
+
+**文件命名规则：** 与 Phase 2 一致，使用相同的 `<变更主题>` slug。
+
+自检清单（进入 Phase 4 前必须全部为 YES）：
+- [ ] 已执行 Write 工具保存 Plan 文件？
+- [ ] 已输出保存确认模板（含摘要 + review 提示）？
+- [ ] 用户说了肯定词？
+
+全部 YES → 进入 Phase 4。任一 NO → 停留在 Phase 3。
 
 ---
 
 ## Phase 4: Implement
+
+⚠️ **MANDATORY: 禁止自行实现。本 Phase 的唯一执行方式是委托 superpowers:subagent-driven-development。**
+
+**禁止的行为：**
+- 直接使用 Edit/Write 工具修改 skill 文件（SKILL.md、references/、agents/）
+- 以"先改一下试试"为由跳过委托
+- 部分委托 + 部分自行修改
+- 在委托前"预先"修改文件
+
+**Red Flags — 以下想法出现时立即停止，你正在绕过流程：**
+
+| 你的想法 | 现实 |
+|---------|------|
+| "这只是改一行，不值得 spawn agent" | 无论变更大小，Phase 4 唯一路径是委托 |
+| "任务太简单了，直接改更快" | 简单 ≠ 可以绕过流程；流程保证一致性 |
+| "superpowers 加载失败，我先手动改" | 不可用 → 停止等待用户指示，不可降级 |
+| "sub agent 已经完成了，我补充一点小修改" | 追加修改 → 必须重新进入 Phase 4 Step 4.2 |
+| "我先预处理一下文件再委托" | 预处理 = 违规修改，禁止 |
+
+**唯一合法路径：** Phase 3 Hard Gate 通过 → Step 4.1 准备上下文 → Step 4.2 调用 superpowers → superpowers 完成后 Step 4.3 生成 Eval Prompts。
 
 **Goal:** 委托 superpowers 执行 Plan，获得 dev→spec review→code quality review→fix 循环。
 
 ### Step 4.1 — 准备委托上下文
 
 组装以下信息：
-1. Plan 文件路径: `.claude/plans/<skill-name>-plan.md`
-2. Spec 文件路径: `.claude/plans/<skill-name>-spec.md`
-3. 领域约束: 使用 [references/templates.md#delegation-context](references/templates.md#delegation-context) 模板，填入当前 skill 信息
+1. Plan 文件路径: `.claude/plans/<skill-name>-<变更主题>-plan.md`
+2. 领域约束: 使用 [references/templates.md#delegation-context](references/templates.md#delegation-context) 模板，填入当前 skill 信息
 
 ### Step 4.2 — 委托 superpowers:subagent-driven-development
 
 通过 Skill tool 调用 `superpowers:subagent-driven-development`，传入：
 - Plan 路径
 - 领域约束（作为 spec reviewer 的验证标准）
-- Spec 路径（作为 context 参考）
 
 **Fallback:** 如果 superpowers 插件不可用，输出："⚠️ superpowers 插件未安装，无法执行 Phase 4。请安装后重试，或手动按 Plan 逐 Task 执行。"
 
@@ -284,6 +336,13 @@ Use the format from [references/templates.md#eval-prompts-template](references/t
 1. **行为验证（Trajectory）** — 2-3 个：路径选择、Gate 暂停、输出结构
 2. **边界验证（Adversarial）** — 1-2 个：模糊输入、跨领域输入
 3. **质量基线（LLM-as-Judge）** — 1-2 个：with-skill vs baseline 对比
+
+### Post-delegation Constraint
+
+⚠️ **superpowers 返回后禁止追加修改：**
+- 禁止主 session 使用 Edit/Write 修改 skill 文件（SKILL.md、references/、agents/）
+- 如需追加修改 → 必须重新进入 Phase 4 Step 4.2 委托
+- 唯一例外：Phase 5 验证失败后的修复循环（通过 Step 4.2 重新委托执行）
 
 **Auto-transition to Phase 5（no user gate）。**
 
