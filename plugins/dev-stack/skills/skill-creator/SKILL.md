@@ -1,5 +1,5 @@
 ---
-name: ug-skill-creator
+name: skill-creator
 description: Use when creating, designing, or implementing a new Claude Code skill from scratch, or when modifying, improving, auditing, or reviewing an existing skill.
 ---
 
