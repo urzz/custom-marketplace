@@ -1,0 +1,13 @@
+project_id: <project-name>
+version: 1
+mode: project_initialization
+foundation:
+  brief: .nuclio/project/project-brief.md
+  architecture: .nuclio/project/architecture-baseline.md
+scaffold_tasks: []
+initial_dev_docs:
+  patch: .nuclio/project/initial-dev-docs.patch.md
+  apply_after_approval: true
+global_acceptance:
+  - project has a clear architecture baseline
+  - project has initial .dev-docs after approval

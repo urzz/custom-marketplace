@@ -1,0 +1,5 @@
+{
+  "name": "nuclio",
+  "description": "Nucl.io workflow plugin for project initialization and spec-driven change delivery",
+  "version": "0.1.0"
+}
