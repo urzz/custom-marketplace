@@ -1,0 +1,16 @@
+{
+  "workflow": "project_initialization",
+  "project_id": "<project-name>",
+  "phase": "foundation",
+  "status": "waiting_human",
+  "gate": "foundation_approval",
+  "approved": {
+    "foundation": false,
+    "architecture": false,
+    "scaffold": false,
+    "initial_dev_docs": false
+  },
+  "repository_stage": "existing_app_without_foundation",
+  "blocking_reason": null,
+  "updated_at": "<iso-8601-timestamp>"
+}

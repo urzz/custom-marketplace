@@ -3,14 +3,32 @@ version: 1
 source:
   spec: .nuclio/changes/<change-id>/spec.md
   design: .nuclio/changes/<change-id>/design.md
+
 # approval-ready execution graph; populate after design, execute only after Design Approval
-# each task should make dependencies and acceptance linkage explicit
-# example task shape:
-# - id: T1
-#   title: Define boundary adapter
-#   depends_on: []
-#   acceptance: ["adapter interface agreed"]
-tasks: []
+# Build and guard rely on current_task plus allowed_paths / forbidden_paths.
+tasks:
+  - id: T1
+    title: <task title>
+    type: code # code | test | docs | config | migration | refactor | verification
+    depends_on: []
+    risk: medium # low | medium | high
+    allowed_paths:
+      - src/**
+      - tests/**
+    forbidden_paths:
+      - .dev-docs/**
+      - .nuclio/changes/<change-id>/spec.md
+      - .nuclio/changes/<change-id>/design.md
+    acceptance:
+      - task outcome is directly linked to an approved Spec acceptance criterion
+      - implementation stays within allowed_paths and avoids forbidden_paths
+    verify:
+      - run the smallest relevant test or check for this task
+    review_focus:
+      - correctness
+      - scope control
+      - security
+
 global_acceptance:
   - all Spec acceptance criteria are satisfied
   - no forbidden paths are modified

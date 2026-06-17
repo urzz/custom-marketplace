@@ -27,6 +27,9 @@ Turn an approved change spec into architecture-grounded design artifacts in `.nu
 - Do not modify application code.
 - Do not directly write `.dev-docs/`.
 - `plan.yaml` must be an approval-ready task graph with explicit dependencies, acceptance linkage, and execution ordering intent, not a loose TODO list.
+- `plan.yaml` tasks must include `type`, `risk`, `allowed_paths`, `forbidden_paths`, `acceptance`, `verify`, and `review_focus` when applicable, because Build and guard use those fields for scope control.
+- Design Approval must update canonical change state with `phase: "build"`, `approved.design: true`, and `gate: null` only after explicit user approval.
+- Append typed `design.generated` and `design.approved` events when those facts occur.
 - Keep design focused on architecture, module boundaries, interfaces, risks, and verification strategy.
 - When generating stage artifacts, prefer the matching templates under `templates/` over free-form drafting.
 
@@ -35,7 +38,7 @@ Turn an approved change spec into architecture-grounded design artifacts in `.nu
 2. Re-read the relevant code, architecture, and repository constraints for codebase-grounded design.
 3. Map current architecture, relevant modules, interfaces, and constraints that shape the change.
 4. Generate `design.md` from the design template.
-5. Generate `plan.yaml` as an architecture-grounded task graph from the plan template, using consistent terminology for tasks, dependencies, and acceptance gates.
+5. Generate `plan.yaml` from `templates/plan-template.yaml` as an architecture-grounded task graph, populating path boundaries for every task.
 6. Update the minimum change state and stop for Design Approval before any build or implementation work begins.
 
 ## Stop Condition

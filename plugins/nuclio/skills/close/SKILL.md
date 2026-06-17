@@ -25,6 +25,9 @@ Generate `.nuclio/changes/<change-id>/close.md` and `.nuclio/changes/<change-id>
 - If verify or review evidence is missing, incomplete, or failed, do not claim the change is complete.
 - `close.md` is the final workflow summary artifact; keep it grounded in the approved scope and actual evidence.
 - `memory.patch.md` is a candidate patch for Memory Approval, not a direct instruction to write `.dev-docs/`.
+- Memory Approval must be represented as canonical `approved.memory === true` in `.nuclio/changes/<change-id>/state.json` after explicit user approval.
+- Use typed events and/or `context-report.md` to identify which `.dev-docs` knowledge was loaded, skipped, stale, or missing before proposing memory updates.
+- Append typed `close.generated`, `memory_patch.generated`, and `memory_patch.approved` events when those facts occur.
 - Only capture stable, verified, reusable project knowledge in `memory.patch.md`.
 - Do not write `.dev-docs/` during close.
 - Do not reopen spec, design, or build scope during close; if evidence invalidates completion, stop and request human direction.

@@ -28,6 +28,10 @@ Execute the current change strictly from `.nuclio/changes/<change-id>/plan.yaml`
 - Execute tasks in dependency order and do not skip verification or review.
 - Load only task-local context for the active plan task instead of broad unrelated repository context.
 - Respect `allowed_paths` and `forbidden_paths` for every implementation step.
+- Before each write, set or verify `state.current_task` matches the active `plan.yaml` task so guard can enforce `allowed_paths` and `forbidden_paths`.
+- Treat guard path failures as blocking scope violations; do not work around them with broader writes.
+- Append typed `task.started`, `task.verified`, `task.reviewed`, `task.patched`, and `task.completed` events as the task progresses.
+- Patch loop maximum is 2 attempts per task before stopping for human decision.
 - Build must not modify `.dev-docs/`.
 - Build must not edit approval artifacts under `.nuclio/changes/<change-id>/spec.md` or `design.md`.
 - Use the build templates under `templates/` for `verify.md` and `review.md` instead of free-form evidence.
@@ -37,8 +41,8 @@ Execute the current change strictly from `.nuclio/changes/<change-id>/plan.yaml`
 
 ## Workflow
 1. Confirm the target change has Design Approval and inspect the latest build state.
-2. Read `plan.yaml` and select the next ready task by dependency order.
-3. Load only the task-local context required for that task and implement within allowed paths.
+2. Read `plan.yaml`, select the next ready task by dependency order, and update `state.current_task` before implementation.
+3. Load only the task-local context required for that task and implement within guard-enforced path boundaries.
 4. Record local and global checks in `.nuclio/changes/<change-id>/evidence/verify.md`.
 5. Run an independent diff review and write `.nuclio/changes/<change-id>/evidence/review.md`.
 6. If verify or review returns patchable issues, run the patch loop: implement the smallest fix, refresh `verify.md`, and re-run review.

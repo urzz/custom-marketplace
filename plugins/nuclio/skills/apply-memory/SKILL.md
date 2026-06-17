@@ -20,6 +20,10 @@ Apply only approved updates from `.nuclio/project/initial-dev-docs.patch.md` or 
 ## Rules
 - Do not write `.dev-docs/` without approval.
 - Only apply updates that were explicitly accepted or edited and then confirmed by the user.
+- Require an explicit approval decision for each proposed memory change: `accept`, `reject`, `edit`, or `defer`.
+- Apply only accepted or explicitly edited memory changes after canonical `approved.memory === true` or Project Init `approved.initial_dev_docs === true`.
+- When adding or changing leaf docs, update the relevant second-level index and frontmatter consistency in the same change.
+- Append typed `memory.applied` events to the relevant `.nuclio/project/events.jsonl` or `.nuclio/changes/<change-id>/events.jsonl`.
 - Treat patch files as proposed changes, not automatic write instructions.
 - If a proposed update is rejected, omit it instead of partially applying it.
 - If index or navigation changes are needed, update `.dev-docs/index.md` in the same step as the new document changes.

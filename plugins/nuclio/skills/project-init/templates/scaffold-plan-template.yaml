@@ -4,10 +4,36 @@ mode: project_initialization
 foundation:
   brief: .nuclio/project/project-brief.md
   architecture: .nuclio/project/architecture-baseline.md
-scaffold_tasks: []
+
+# Execute scaffold_tasks only after Scaffold Approval.
+# Guard relies on allowed_paths / forbidden_paths when approved.scaffold is true.
+scaffold_tasks:
+  - id: P1
+    title: Create baseline project structure
+    type: scaffold # scaffold | quality | vertical_slice | docs | config
+    depends_on: []
+    risk: medium # low | medium | high
+    allowed_paths:
+      - src/**
+      - tests/**
+      - package.json
+      - README.md
+    forbidden_paths:
+      - .dev-docs/**
+      - .nuclio/project/project-brief.md
+      - .nuclio/project/architecture-baseline.md
+    acceptance:
+      - project structure matches the approved architecture baseline
+      - no empty over-designed module hierarchy is created
+      - local development entrypoint is documented
+    verify:
+      - run baseline checks if available, or document why no checks exist yet
+
 initial_dev_docs:
   patch: .nuclio/project/initial-dev-docs.patch.md
   apply_after_approval: true
+
 global_acceptance:
   - project has a clear architecture baseline
-  - project has initial .dev-docs after approval
+  - scaffold writes stay within allowed_paths
+  - project has initial .dev-docs after Initial Dev Docs Approval
