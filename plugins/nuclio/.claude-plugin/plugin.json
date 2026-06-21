@@ -2,7 +2,9 @@
   "name": "nuclio",
   "description": "Nucl.io workflow plugin for spec, design, build, close, resume, and memory application flows.",
   "version": "0.1.0",
-  "author": "fooksky",
+  "author": {
+    "name": "fooksky"
+  },
   "homepage": "https://gitea.example.invalid/selfhosted/cc-marketplace",
   "repository": "https://gitea.example.invalid/selfhosted/cc-marketplace.git",
   "license": "UNLICENSED",
