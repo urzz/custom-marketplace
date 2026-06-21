@@ -1,120 +1,274 @@
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
-const filePath = process.argv[2];
+const PROJECT_PHASES = ['foundation', 'architecture', 'scaffold', 'initial_dev_docs', 'done'];
+const PROJECT_STATUSES = ['active', 'waiting_human', 'failed', 'done'];
+const PROJECT_GATES = [
+  'foundation_approval',
+  'architecture_approval',
+  'scaffold_approval',
+  'initial_dev_docs_approval',
+  'risk_approval',
+];
+const CHANGE_PHASES = ['spec', 'design', 'build', 'close'];
+const CHANGE_STATUSES = ['active', 'waiting_human', 'failed', 'done'];
+const CHANGE_GATES = [
+  'spec_approval',
+  'design_approval',
+  'risk_approval',
+  'final_acceptance',
+  'memory_approval',
+];
+const CHANGE_KINDS = ['feature', 'bugfix', 'refactor', 'docs', 'test', 'chore', 'spike'];
+const REPOSITORY_STAGES = ['new', 'existing', 'unknown', 'greenfield', 'brownfield'];
 
-function fail(message) {
-  console.error(message);
-  process.exit(1);
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-if (!filePath) {
-  fail('Usage: node validate-state.mjs <state-file.json>');
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-let state;
-try {
-  state = JSON.parse(readFileSync(filePath, 'utf8'));
-} catch (error) {
-  fail(`Invalid JSON: ${error.message}`);
+function normalizeSlashes(value) {
+  return String(value || '').replace(/\\/g, '/');
 }
 
-function requireString(key, allowed) {
+function normalizedRelativePath(value) {
+  const normalized = path.posix.normalize(normalizeSlashes(value)).replace(/^\.\//, '');
+  return normalized === '.' ? '' : normalized;
+}
+
+function isSafeRelativePath(value) {
+  const normalized = normalizedRelativePath(value);
+  return Boolean(normalized) && normalized !== '..' && !normalized.startsWith('../') && !path.posix.isAbsolute(normalizeSlashes(value));
+}
+
+function addError(errors, message) {
+  errors.push(message);
+}
+
+function requireString(state, key, allowed, errors) {
   if (typeof state[key] !== 'string') {
-    fail(`Missing or invalid string field: ${key}`);
+    addError(errors, `Missing or invalid string field: ${key}`);
+    return;
   }
 
   if (allowed && !allowed.includes(state[key])) {
-    fail(`Invalid ${key}: ${state[key]}. Expected one of: ${allowed.join(', ')}`);
+    addError(errors, `Invalid ${key}: ${state[key]}. Expected one of: ${allowed.join(', ')}`);
   }
 }
 
-function requireBooleanApproval(key) {
-  if (!state.approved || typeof state.approved !== 'object' || typeof state.approved[key] !== 'boolean') {
-    fail(`Missing approved.${key} boolean`);
+function requireBooleanApproval(state, key, errors) {
+  if (!isPlainObject(state.approved) || typeof state.approved[key] !== 'boolean') {
+    addError(errors, `Missing approved.${key} boolean`);
   }
 }
 
-function hasField(key) {
-  return Object.prototype.hasOwnProperty.call(state, key);
+function validateTargetPathScope(scope, key, errors) {
+  if (scope === undefined) {
+    return;
+  }
+
+  if (!isPlainObject(scope)) {
+    addError(errors, `Invalid approved.${key}: expected object`);
+    return;
+  }
+
+  if (!Array.isArray(scope.target_paths)) {
+    addError(errors, `Invalid approved.${key}.target_paths: expected array`);
+    return;
+  }
+
+  for (const targetPath of scope.target_paths) {
+    if (typeof targetPath !== 'string' || !isSafeRelativePath(targetPath)) {
+      addError(errors, `Invalid approved.${key}.target_paths entry: ${String(targetPath)}`);
+    }
+  }
 }
 
-function requireNullableEnum(key, allowed) {
-  if (!hasField(key)) {
-    fail(`Missing field: ${key}`);
+function requireNullableEnum(state, key, allowed, errors) {
+  if (!hasOwn(state, key)) {
+    addError(errors, `Missing field: ${key}`);
+    return;
   }
 
   if (state[key] !== null && !allowed.includes(state[key])) {
-    fail(`Invalid ${key}: ${state[key]}. Expected one of: ${allowed.join(', ')}, null`);
+    addError(errors, `Invalid ${key}: ${state[key]}. Expected one of: ${allowed.join(', ')}, null`);
   }
 }
 
-function requireNullableString(key) {
-  if (!hasField(key) || (state[key] !== null && typeof state[key] !== 'string')) {
-    fail(`Missing or invalid nullable string field: ${key}`);
+function requireNullableString(state, key, errors) {
+  if (!hasOwn(state, key) || (state[key] !== null && typeof state[key] !== 'string')) {
+    addError(errors, `Missing or invalid nullable string field: ${key}`);
   }
 }
 
-function requireCurrentTask() {
-  if (!hasField('current_task')) {
-    fail('Missing field: current_task');
+function validateOptionalString(state, key, errors) {
+  if (hasOwn(state, key) && state[key] !== null && typeof state[key] !== 'string') {
+    addError(errors, `Invalid ${key}: expected string or null`);
+  }
+}
+
+function validateOptionalEnum(state, key, allowed, errors) {
+  if (hasOwn(state, key) && state[key] !== null && !allowed.includes(state[key])) {
+    addError(errors, `Invalid ${key}: ${state[key]}. Expected one of: ${allowed.join(', ')}, null`);
+  }
+}
+
+function validateCurrentTask(state, errors) {
+  if (!hasOwn(state, 'current_task')) {
+    addError(errors, 'Missing field: current_task');
+    return;
   }
 
   if (state.current_task === null || typeof state.current_task === 'string') {
     return;
   }
 
-  if (
-    typeof state.current_task === 'object' &&
-    !Array.isArray(state.current_task) &&
-    typeof state.current_task.id === 'string'
-  ) {
+  if (isPlainObject(state.current_task) && typeof state.current_task.id === 'string') {
     return;
   }
 
-  fail('Invalid current_task: expected null, string, or object with string id');
+  addError(errors, 'Invalid current_task: expected null, string, or object with string id');
 }
 
-if (state.workflow === 'project_initialization') {
-  requireString('phase', ['foundation', 'architecture', 'scaffold', 'initial_dev_docs', 'done']);
-  requireString('status', ['active', 'waiting_human', 'failed', 'done']);
-  requireNullableEnum('gate', [
-    'foundation_approval',
-    'architecture_approval',
-    'scaffold_approval',
-    'initial_dev_docs_approval',
-    'risk_approval',
-  ]);
-  requireBooleanApproval('foundation');
-  requireBooleanApproval('architecture');
-  requireBooleanApproval('scaffold');
-  requireBooleanApproval('initial_dev_docs');
-  requireNullableString('blocking_reason');
-} else if (state.workflow === 'change') {
-  requireString('phase', ['spec', 'design', 'build', 'close']);
-  requireString('status', ['active', 'waiting_human', 'failed', 'done']);
-  requireNullableEnum('gate', [
-    'spec_approval',
-    'design_approval',
-    'risk_approval',
-    'final_acceptance',
-    'memory_approval',
-  ]);
-  requireCurrentTask();
-  requireBooleanApproval('spec');
-  requireBooleanApproval('design');
-  requireBooleanApproval('final');
-  requireBooleanApproval('memory');
-  requireNullableString('blocking_reason');
+function validateRiskApprovals(state, errors) {
+  if (!hasOwn(state, 'risk_approvals')) {
+    return;
+  }
+
+  if (!Array.isArray(state.risk_approvals)) {
+    addError(errors, 'Invalid risk_approvals: expected array');
+    return;
+  }
+
+  for (const [index, approval] of state.risk_approvals.entries()) {
+    if (!isPlainObject(approval)) {
+      addError(errors, `Invalid risk_approvals[${index}]: expected object`);
+      continue;
+    }
+
+    if (typeof approval.approved !== 'boolean') {
+      addError(errors, `Invalid risk_approvals[${index}].approved: expected boolean`);
+    }
+
+    if (approval.scope !== 'current_workflow') {
+      addError(errors, `Invalid risk_approvals[${index}].scope: expected current_workflow`);
+    }
+
+    if (typeof approval.command_pattern !== 'string' || !approval.command_pattern.trim()) {
+      addError(errors, `Invalid risk_approvals[${index}].command_pattern: expected non-empty string`);
+    }
+
+    if (hasOwn(approval, 'expires_at') && approval.expires_at !== null && typeof approval.expires_at !== 'string') {
+      addError(errors, `Invalid risk_approvals[${index}].expires_at: expected string or null`);
+    }
+
+    if (hasOwn(approval, 'reason') && approval.reason !== null && typeof approval.reason !== 'string') {
+      addError(errors, `Invalid risk_approvals[${index}].reason: expected string or null`);
+    }
+  }
+}
+
+function validateProjectState(state, errors) {
+  requireString(state, 'phase', PROJECT_PHASES, errors);
+  requireString(state, 'status', PROJECT_STATUSES, errors);
+  requireNullableEnum(state, 'gate', PROJECT_GATES, errors);
+  requireBooleanApproval(state, 'foundation', errors);
+  requireBooleanApproval(state, 'architecture', errors);
+  requireBooleanApproval(state, 'scaffold', errors);
+  requireBooleanApproval(state, 'initial_dev_docs', errors);
+  validateTargetPathScope(state.approved?.initial_dev_docs_scope, 'initial_dev_docs_scope', errors);
+  requireNullableString(state, 'blocking_reason', errors);
+  validateOptionalString(state, 'project_id', errors);
+  validateOptionalEnum(state, 'repository_stage', REPOSITORY_STAGES, errors);
+}
+
+function validateChangeState(state, errors) {
+  requireString(state, 'phase', CHANGE_PHASES, errors);
+  requireString(state, 'status', CHANGE_STATUSES, errors);
+  requireNullableEnum(state, 'gate', CHANGE_GATES, errors);
+  validateCurrentTask(state, errors);
+  requireBooleanApproval(state, 'spec', errors);
+  requireBooleanApproval(state, 'design', errors);
+  requireBooleanApproval(state, 'final', errors);
+  requireBooleanApproval(state, 'memory', errors);
+  validateTargetPathScope(state.approved?.memory_scope, 'memory_scope', errors);
+  requireNullableString(state, 'blocking_reason', errors);
+  validateOptionalString(state, 'project_id', errors);
+  validateOptionalString(state, 'change_id', errors);
+  validateOptionalEnum(state, 'change_kind', CHANGE_KINDS, errors);
 
   if (typeof state.build_iteration !== 'number') {
-    fail('Missing numeric build_iteration');
+    addError(errors, 'Missing numeric build_iteration');
   }
-} else {
-  fail('workflow must be project_initialization or change');
 }
 
-if (!state.updated_at || typeof state.updated_at !== 'string') {
-  fail('Missing updated_at string');
+export function validateStateObject(state) {
+  const errors = [];
+
+  if (!isPlainObject(state)) {
+    return { ok: false, errors: ['state must be a JSON object'] };
+  }
+
+  if (state.workflow === 'project_initialization') {
+    validateProjectState(state, errors);
+  } else if (state.workflow === 'change') {
+    validateChangeState(state, errors);
+  } else {
+    addError(errors, 'workflow must be project_initialization or change');
+  }
+
+  validateRiskApprovals(state, errors);
+
+  if (!state.updated_at || typeof state.updated_at !== 'string') {
+    addError(errors, 'Missing updated_at string');
+  }
+
+  return { ok: errors.length === 0, errors };
 }
 
-console.log(`valid state: ${filePath}`);
+export function parseStateJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return { ok: false, state: null, errors: [`Invalid JSON: ${error.message}`] };
+  }
+
+  const validation = validateStateObject(parsed);
+  return { ok: validation.ok, state: parsed, errors: validation.errors };
+}
+
+export function validateStateFile(filePath) {
+  let raw;
+  try {
+    raw = readFileSync(filePath, 'utf8');
+  } catch (error) {
+    return { ok: false, state: null, errors: [`Cannot read state file: ${error.message}`] };
+  }
+
+  return parseStateJson(raw);
+}
+
+function isDirectRun() {
+  return process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename);
+}
+
+if (isDirectRun()) {
+  const filePath = process.argv[2];
+
+  if (!filePath) {
+    console.error('Usage: node validate-state.mjs <state-file.json>');
+    process.exit(1);
+  }
+
+  const result = validateStateFile(filePath);
+  if (!result.ok) {
+    console.error(result.errors.join('\n'));
+    process.exit(1);
+  }
+
+  console.log(`valid state: ${filePath}`);
+}

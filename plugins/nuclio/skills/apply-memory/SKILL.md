@@ -21,9 +21,11 @@ Apply only approved updates from `.nuclio/project/initial-dev-docs.patch.md` or 
 - Do not write `.dev-docs/` without approval.
 - Only apply updates that were explicitly accepted or edited and then confirmed by the user.
 - Require an explicit approval decision for each proposed memory change: `accept`, `reject`, `edit`, or `defer`.
-- Apply only accepted or explicitly edited memory changes after canonical `approved.memory === true` or Project Init `approved.initial_dev_docs === true`.
+- Run Bootstrap Check first with `node plugins/nuclio/scripts/bootstrap-check.mjs` and confirm the approved source maps to a valid project init or active close workflow.
+- Validate the patch before applying it: use `node plugins/nuclio/scripts/validate-memory-patch.mjs .nuclio/changes/<change-id>/memory.patch.md` for change memory patches, and ensure Project Init patches expose accepted/edited `.dev-docs` targets.
+- Apply only accepted or explicitly edited memory changes after canonical `approved.memory === true` or Project Init `approved.initial_dev_docs === true`, with matching scoped target paths.
 - When adding or changing leaf docs, update the relevant second-level index and frontmatter consistency in the same change.
-- Append typed `memory.applied` events to the relevant `.nuclio/project/events.jsonl` or `.nuclio/changes/<change-id>/events.jsonl`.
+- Append typed `memory.applied` events to the relevant `.nuclio/project/events.jsonl` or `.nuclio/changes/<change-id>/events.jsonl` using `node plugins/nuclio/scripts/append-event.mjs <events-file> '<json>'`.
 - Treat patch files as proposed changes, not automatic write instructions.
 - If a proposed update is rejected, omit it instead of partially applying it.
 - If index or navigation changes are needed, update `.dev-docs/index.md` in the same step as the new document changes.

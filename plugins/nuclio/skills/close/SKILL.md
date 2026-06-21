@@ -25,9 +25,11 @@ Generate `.nuclio/changes/<change-id>/close.md` and `.nuclio/changes/<change-id>
 - If verify or review evidence is missing, incomplete, or failed, do not claim the change is complete.
 - `close.md` is the final workflow summary artifact; keep it grounded in the approved scope and actual evidence.
 - `memory.patch.md` is a candidate patch for Memory Approval, not a direct instruction to write `.dev-docs/`.
-- Memory Approval must be represented as canonical `approved.memory === true` in `.nuclio/changes/<change-id>/state.json` after explicit user approval.
-- Use typed events and/or `context-report.md` to identify which `.dev-docs` knowledge was loaded, skipped, stale, or missing before proposing memory updates.
-- Append typed `close.generated`, `memory_patch.generated`, and `memory_patch.approved` events when those facts occur.
+- Run Bootstrap Check first with `node plugins/nuclio/scripts/bootstrap-check.mjs` and confirm there is exactly one active valid change to close.
+- Memory Approval must be represented as canonical `approved.memory === true` plus scoped `approved.memory_scope.target_paths` or accepted/edited targets in `.nuclio/changes/<change-id>/memory.patch.md` after explicit user approval.
+- Use typed events and/or `context-report.md` to identify which `.dev-docs` knowledge was loaded, skipped, stale, or missing before proposing memory updates; validate reports with `node plugins/nuclio/scripts/validate-context-report.mjs .nuclio/changes/<change-id>/context-report.md` when present.
+- Validate `memory.patch.md` decisions with `node plugins/nuclio/scripts/validate-memory-patch.mjs .nuclio/changes/<change-id>/memory.patch.md` before asking for Memory Approval.
+- Write state through `node plugins/nuclio/scripts/write-state.mjs <state-file> '<json>'` and append typed `close.generated`, `memory_patch.generated`, and `memory_patch.approved` events with `node plugins/nuclio/scripts/append-event.mjs .nuclio/changes/<change-id>/events.jsonl '<json>'` when those facts occur.
 - Only capture stable, verified, reusable project knowledge in `memory.patch.md`.
 - Do not write `.dev-docs/` during close.
 - Do not reopen spec, design, or build scope during close; if evidence invalidates completion, stop and request human direction.

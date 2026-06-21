@@ -28,9 +28,10 @@ Execute the current change strictly from `.nuclio/changes/<change-id>/plan.yaml`
 - Execute tasks in dependency order and do not skip verification or review.
 - Load only task-local context for the active plan task instead of broad unrelated repository context.
 - Respect `allowed_paths` and `forbidden_paths` for every implementation step.
-- Before each write, set or verify `state.current_task` matches the active `plan.yaml` task so guard can enforce `allowed_paths` and `forbidden_paths`.
-- Treat guard path failures as blocking scope violations; do not work around them with broader writes.
-- Append typed `task.started`, `task.verified`, `task.reviewed`, `task.patched`, and `task.completed` events as the task progresses.
+- Run Bootstrap Check first with `node plugins/nuclio/scripts/bootstrap-check.mjs`, then validate the approved task graph with `node plugins/nuclio/scripts/validate-plan.mjs .nuclio/changes/<change-id>/plan.yaml --section tasks`.
+- Before each write, set or verify `state.current_task` matches the active `plan.yaml` task so guard can enforce `allowed_paths` and `forbidden_paths`; write state through `node plugins/nuclio/scripts/write-state.mjs <state-file> '<json>'`.
+- Treat guard path failures and ambiguous Bash blocks as blocking scope violations; use Write/Edit/MultiEdit or obtain a scoped `risk_approvals[]` entry instead of working around them.
+- Append typed `task.started`, `task.verified`, `task.reviewed`, `task.patched`, and `task.completed` events with `node plugins/nuclio/scripts/append-event.mjs .nuclio/changes/<change-id>/events.jsonl '<json>'` as the task progresses.
 - Patch loop maximum is 2 attempts per task before stopping for human decision.
 - Build must not modify `.dev-docs/`.
 - Build must not edit approval artifacts under `.nuclio/changes/<change-id>/spec.md` or `design.md`.
