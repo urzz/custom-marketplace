@@ -19,8 +19,8 @@ const CHANGE_GATES = [
   'final_acceptance',
   'memory_approval',
 ];
-const CHANGE_KINDS = ['feature', 'bugfix', 'refactor', 'docs', 'test', 'chore', 'spike'];
-const REPOSITORY_STAGES = ['new', 'existing', 'unknown', 'greenfield', 'brownfield'];
+const CHANGE_KINDS = ['feature', 'bugfix', 'refactor', 'tech_debt', 'docs', 'maintenance'];
+const REPOSITORY_STAGES = ['empty_repo', 'skeleton_repo', 'existing_app_without_foundation', 'existing_app_with_foundation'];
 
 function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value, key);

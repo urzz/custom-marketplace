@@ -14,7 +14,11 @@ skills:
 You are the read-only browser verification pass for UI-related Nucl.io build tasks.
 
 ## Goal
-- 当任务涉及 UI 或端到端用户流时，调用 `dev-browser` 收集验证证据。
+- 当任务涉及 UI 或端到端用户流时，调用 `dev-browser:dev-browser` 收集验证证据。
+
+## External Dependency
+- Requires external skill: `dev-browser:dev-browser` (or platform-provided `dev-browser`).
+- If unavailable, report `blocked` with reason `dev-browser skill unavailable`; do not invent browser verification results.
 
 ## Read-Only Boundaries
 Verify from an implementation-external, read-only perspective.

@@ -173,6 +173,77 @@ function targetPaths() {
   return [...new Set(collectPathLikeValues(parsedInput).map(safeWorkspaceRelativePath).filter(Boolean))];
 }
 
+function normalizedSecretKey(key) {
+  return String(key || '').replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+}
+
+function isSecretKey(key) {
+  const normalized = normalizedSecretKey(key);
+  return normalized === 'token'
+    || normalized === 'password'
+    || normalized === 'secret'
+    || normalized === 'authorization'
+    || normalized === 'apikey'
+    || normalized.includes('token')
+    || normalized.includes('password')
+    || normalized.includes('secret')
+    || normalized.includes('authorization')
+    || (normalized.includes('api') && normalized.includes('key'));
+}
+
+function redactedJsonValue(value) {
+  if (Array.isArray(value)) return value.map((item) => redactedJsonValue(item));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, nestedValue]) => [
+    key,
+    isSecretKey(key) ? '[REDACTED]' : redactedJsonValue(nestedValue),
+  ]));
+}
+
+function secretKeyPattern() {
+  return String.raw`[A-Za-z][A-Za-z0-9_-]*(?:api[_-]?key|token|password|secret|authorization)[A-Za-z0-9_-]*|(?:token|password|secret|authorization|api[_-]?key)|[A-Za-z][A-Za-z0-9_-]*api[A-Za-z0-9_-]*key[A-Za-z0-9_-]*`;
+}
+
+function redactSecretAssignment(match, key, separator) {
+  return `${key}${separator}[REDACTED]`;
+}
+
+function redactedText(value) {
+  const key = secretKeyPattern();
+  return String(value || '')
+    .replace(new RegExp(`\\b(${key})(\\s*[:=]\\s*)Bearer\\s+[^\\s,;]+`, 'gi'), (_match, secretKey, separator) => `${secretKey}${separator}Bearer [REDACTED]`)
+    .replace(new RegExp(`(["'])(${key})(\\1\\s*:\\s*)(["'])[^"'\\r\\n]*\\4`, 'gi'), (_match, quote, secretKey, separator) => `${quote}${secretKey}${separator}${quote}[REDACTED]${quote}`)
+    .replace(new RegExp(`\\b(${key})(\\s*[:=]\\s*)["'][^"'\\r\\n]*["']`, 'gi'), redactSecretAssignment)
+    .replace(new RegExp(`\\b(${key})(\\s*[:=]\\s*)(?!Bearer\\b)[^\\s,;]+`, 'gi'), redactSecretAssignment)
+    .replace(new RegExp(`(--(?:${key}))(=)[^\\s,;]+`, 'gi'), redactSecretAssignment)
+    .replace(new RegExp(`(--(?:${key}))(\\s+)[^\\s,;]+`, 'gi'), redactSecretAssignment);
+}
+
+function redactedDebugSnippet(value) {
+  const parsed = parseJson(value);
+  if (parsed !== undefined) return redactedText(JSON.stringify(redactedJsonValue(parsed)));
+  return redactedText(value);
+}
+
+function truncate(value, maxLength = 500) {
+  const text = String(value || '');
+  return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+}
+
+function sanitizedCommandOrNull() {
+  if (parsedInput && typeof parsedInput === 'object' && !Array.isArray(parsedInput) && typeof parsedInput.command === 'string') {
+    return truncate(redactedText(parsedInput.command), 300);
+  }
+  return null;
+}
+
+function exitCodeOrNull() {
+  const rawExitCode = process.env.CLAUDE_TOOL_EXIT_CODE ?? process.env.CLAUDE_TOOL_STATUS;
+  if (rawExitCode === undefined || rawExitCode === '') return null;
+  const parsed = Number(rawExitCode);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function currentTaskId() {
   const pathValues = candidateStrings().join('\n');
   const match = pathValues.match(/(?:^|\/)tasks?\/([^/\s]+)\//i)
@@ -190,19 +261,31 @@ function resultFromOutput() {
 
 const artifact = firstReferencedArtifact();
 const blockedMatch = output.match(/Blocked:\s*([^\n]+)/i);
+const result = blockedMatch ? 'blocked' : resultFromOutput();
+const paths = targetPaths();
 const event = {
   type: blockedMatch ? 'operation.blocked' : inferEventType(artifact),
   tool,
   artifact,
   task_id: currentTaskId(),
-  result: blockedMatch ? 'blocked' : resultFromOutput(),
-  target_paths: targetPaths(),
-  reason: blockedMatch ? `Blocked: ${blockedMatch[1].trim()}` : null,
-  debug: {
-    input: input.slice(0, 500),
-    output: output.slice(0, 500),
+  result,
+  target_paths: paths,
+  reason: blockedMatch ? redactedText(`Blocked: ${blockedMatch[1].trim()}`) : null,
+  summary: {
+    tool,
+    command: sanitizedCommandOrNull(),
+    target_paths: paths,
+    exit_code: exitCodeOrNull(),
+    result,
   },
 };
+
+if (process.env.NUCLIO_DEBUG_EVENT_LOG === '1') {
+  event.debug = {
+    input: truncate(redactedDebugSnippet(input)),
+    output: truncate(redactedDebugSnippet(output)),
+  };
+}
 
 const eventsFile = findEventsFile();
 if (eventsFile) appendEvent(eventsFile, event);

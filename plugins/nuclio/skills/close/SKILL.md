@@ -25,11 +25,13 @@ Generate `.nuclio/changes/<change-id>/close.md` and `.nuclio/changes/<change-id>
 - If verify or review evidence is missing, incomplete, or failed, do not claim the change is complete.
 - `close.md` is the final workflow summary artifact; keep it grounded in the approved scope and actual evidence.
 - `memory.patch.md` is a candidate patch for Memory Approval, not a direct instruction to write `.dev-docs/`.
-- Run Bootstrap Check first with `node plugins/nuclio/scripts/bootstrap-check.mjs` and confirm there is exactly one active valid change to close.
-- Memory Approval must be represented as canonical `approved.memory === true` plus scoped `approved.memory_scope.target_paths` or accepted/edited targets in `.nuclio/changes/<change-id>/memory.patch.md` after explicit user approval.
-- Use typed events and/or `context-report.md` to identify which `.dev-docs` knowledge was loaded, skipped, stale, or missing before proposing memory updates; validate reports with `node plugins/nuclio/scripts/validate-context-report.mjs .nuclio/changes/<change-id>/context-report.md` when present.
-- Validate `memory.patch.md` decisions with `node plugins/nuclio/scripts/validate-memory-patch.mjs .nuclio/changes/<change-id>/memory.patch.md` before asking for Memory Approval.
-- Write state through `node plugins/nuclio/scripts/write-state.mjs <state-file> '<json>'` and append typed `close.generated`, `memory_patch.generated`, and `memory_patch.approved` events with `node plugins/nuclio/scripts/append-event.mjs .nuclio/changes/<change-id>/events.jsonl '<json>'` when those facts occur.
+- Candidate patch files are proposals and must not pre-fill human decisions in proposal rows.
+- Memory Approval records `accept`, `reject`, `edit`, or `defer` decisions only after the explicit approval gate, under `## Human Approval Decisions`.
+- Run Bootstrap Check first with `node "$CLAUDE_PLUGIN_ROOT/scripts/bootstrap-check.mjs" --requested-skill close` and confirm there is exactly one active valid change to close.
+- Memory Approval must be represented as canonical `approved.memory === true` plus scoped `approved.memory_scope.target_paths` or accepted/edited decisions in `.nuclio/changes/<change-id>/memory.patch.md` after explicit user approval.
+- Use typed events and/or `context-report.md` to identify which `.dev-docs` knowledge was loaded, skipped, stale, or missing before proposing memory updates; validate reports with `node "$CLAUDE_PLUGIN_ROOT/scripts/validate-context-report.mjs" .nuclio/changes/<change-id>/context-report.md` when present.
+- Validate `memory.patch.md` proposals with `node "$CLAUDE_PLUGIN_ROOT/scripts/validate-memory-patch.mjs" .nuclio/changes/<change-id>/memory.patch.md` before asking for Memory Approval.
+- Write state through `node "$CLAUDE_PLUGIN_ROOT/scripts/write-state.mjs" <state-file> '<json>'` and append typed `close.generated`, `memory_patch.generated`, and `memory_patch.approved` events with `node "$CLAUDE_PLUGIN_ROOT/scripts/append-event.mjs" .nuclio/changes/<change-id>/events.jsonl '<json>'` when those facts occur.
 - Only capture stable, verified, reusable project knowledge in `memory.patch.md`.
 - Do not write `.dev-docs/` during close.
 - Do not reopen spec, design, or build scope during close; if evidence invalidates completion, stop and request human direction.
@@ -39,7 +41,7 @@ Generate `.nuclio/changes/<change-id>/close.md` and `.nuclio/changes/<change-id>
 1. Inspect the target change, final diff, and latest change state.
 2. Confirm verify and review evidence exists and reflects the current change state.
 3. Generate `.nuclio/changes/<change-id>/close.md` from the close template, summarizing final outcome, acceptance mapping, verification, review, and follow-up limits.
-4. Generate `.nuclio/changes/<change-id>/memory.patch.md` from the memory patch template, limited to approved-memory candidates only.
+4. Generate `.nuclio/changes/<change-id>/memory.patch.md` from the memory patch template, limited to candidate proposals only; leave `## Human Approval Decisions` empty until explicit approval.
 5. Update `.nuclio/changes/<change-id>/state.json` and `events.jsonl` to record that close artifacts are prepared and waiting for Memory Approval.
 6. Stop for Memory Approval. Close only prepares the summary and candidate patch; it does not apply memory updates.
 

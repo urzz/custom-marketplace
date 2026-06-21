@@ -5,13 +5,14 @@ source:
   design: .nuclio/changes/<change-id>/design.md
 
 # approval-ready execution graph; populate after design, execute only after Design Approval
-# Build and guard rely on current_task plus allowed_paths / forbidden_paths.
+# Build and guard rely on current_task plus type/risk/source and allowed_paths / forbidden_paths.
 tasks:
   - id: T1
     title: <task title>
-    type: code # code | test | docs | config | migration | refactor | verification
+    type: implementation # implementation | verification | documentation | migration | research
     depends_on: []
     risk: medium # low | medium | high
+    source: .nuclio/changes/<change-id>/spec.md#acceptance
     allowed_paths:
       - src/**
       - tests/**

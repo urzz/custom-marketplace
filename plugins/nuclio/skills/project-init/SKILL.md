@@ -28,9 +28,9 @@ Establish the minimum project foundation in `.nuclio/project/` before feature wo
 - Use `templates/init-state-template.json` as the canonical Project Init state shape; approvals must live under `approved.foundation`, `approved.architecture`, `approved.scaffold`, and `approved.initial_dev_docs`.
 - Scaffold writes require Scaffold Approval and must stay within `scaffold-plan.yaml` task `allowed_paths` while avoiding `forbidden_paths`.
 - Initial `.dev-docs/` writes require `approved.initial_dev_docs === true` plus a scoped `approved.initial_dev_docs_scope.target_paths` or accepted/edited targets in `.nuclio/project/initial-dev-docs.patch.md`.
-- Run Bootstrap Check first with `node plugins/nuclio/scripts/bootstrap-check.mjs` and use its JSON `ok/foundation/project_state/active_changes/next_action` result to choose the safe next step.
-- Write state through `node plugins/nuclio/scripts/write-state.mjs <state-file> '<json>'` so `validate-state.mjs` runs before the target is written.
-- Append typed `project_init.*` events with `node plugins/nuclio/scripts/append-event.mjs .nuclio/project/events.jsonl '<json>'`.
+- Run Bootstrap Check first with `node "$CLAUDE_PLUGIN_ROOT/scripts/bootstrap-check.mjs" --requested-skill project-init` and use its JSON `ok/foundation/project_state/active_changes/next_action` result to choose the safe next step.
+- Write state through `node "$CLAUDE_PLUGIN_ROOT/scripts/write-state.mjs" <state-file> '<json>'` so `validate-state.mjs` runs before the target is written.
+- Append typed `project_init.*` events with `node "$CLAUDE_PLUGIN_ROOT/scripts/append-event.mjs" .nuclio/project/events.jsonl '<json>'`.
 - When generating stage artifacts, prefer the matching template under `templates/` over free-form drafting.
 - Prefer the minimum viable architecture baseline and avoid over-scaffolding.
 

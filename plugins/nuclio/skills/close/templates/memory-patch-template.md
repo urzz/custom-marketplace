@@ -13,14 +13,49 @@
 
 ## Proposed Updates
 
-| id | target | decision |
-| --- | --- | --- |
-| U1 | .dev-docs/<target>.md | accept |
-| U2 | .dev-docs/<target-needs-edit>.md | edit |
-| U3 | .dev-docs/<target-rejected>.md | reject |
-| U4 | .dev-docs/<target-deferred>.md | defer |
+Candidate rows are proposals only. Do not fill human decisions here.
 
-Decision must be one of `accept`, `reject`, `edit`, or `defer`.
+| id | target | operation | reason | confidence |
+| --- | --- | --- | --- | --- |
+| U1 | .dev-docs/architecture/index.md | update | Add routing note from completed change | high |
+| U2 | .dev-docs/changes/<change-id>.md | create | Capture stable implementation knowledge from this change | medium |
+
+### Update U1
+
+- id: U1
+- target: .dev-docs/architecture/index.md
+- operation: update
+- reason: Add routing note from completed change
+- confidence: high
+
+```diff
+--- before
++++ after
+@@
+- Existing architecture index entry.
++ Existing architecture index entry with the stable routing note from <change-id>.
+```
+
+### Update U2
+
+- id: U2
+- target: .dev-docs/changes/<change-id>.md
+- operation: create
+- reason: Capture stable implementation knowledge from this change
+- confidence: medium
+
+```markdown
+# <change-id> Knowledge
+
+Stable, reusable project knowledge from this completed change.
+```
+
+## Human Approval Decisions
+
+Fill only after explicit Memory Approval.
+
+| id | decision | approved_content_ref | note |
+| --- | --- | --- | --- |
 
 ## Rejected Candidates
 

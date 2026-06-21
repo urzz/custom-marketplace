@@ -24,10 +24,10 @@ Turn one requested change into an approved requirement contract in `.nuclio/chan
 - Use First-Principles reasoning to separate the essential problem, minimum value, and invariants from preferences.
 - Use Codebase Grounding: inspect the repository, cite concrete files or structure, and avoid repo-agnostic speculation.
 - If `.dev-docs/index.md` exists, use it as the root index for context selection instead of scanning all `.dev-docs/` files.
-- Run Bootstrap Check first with `node plugins/nuclio/scripts/bootstrap-check.mjs` and use its JSON `ok/foundation/project_state/active_changes/next_action` result before creating or resuming a change.
-- Record SelectContext decisions in `context-report.md` using `templates/context-report-template.md`, then validate it with `node plugins/nuclio/scripts/validate-context-report.mjs .nuclio/changes/<change-id>/context-report.md`, or mirror them as typed `context.root_loaded`, `context.index_loaded`, `context.doc_loaded`, and `context.doc_skipped` events.
-- Use `templates/state-template.json` as the canonical change state shape; approvals must live under `approved.*`, and state writes must go through `node plugins/nuclio/scripts/write-state.mjs <state-file> '<json>'`.
-- Append typed events with `node plugins/nuclio/scripts/append-event.mjs .nuclio/changes/<change-id>/events.jsonl '<json>'`.
+- Run Bootstrap Check first with `node "$CLAUDE_PLUGIN_ROOT/scripts/bootstrap-check.mjs" --requested-skill spec` and use its JSON `ok/foundation/project_state/active_changes/next_action` result before creating or resuming a change.
+- Record SelectContext decisions in `context-report.md` using `templates/context-report-template.md`, then validate it with `node "$CLAUDE_PLUGIN_ROOT/scripts/validate-context-report.mjs" .nuclio/changes/<change-id>/context-report.md`, or mirror them as typed `context.root_loaded`, `context.index_loaded`, `context.doc_loaded`, and `context.doc_skipped` events.
+- Use `templates/state-template.json` as the canonical change state shape; approvals must live under `approved.*`, and state writes must go through `node "$CLAUDE_PLUGIN_ROOT/scripts/write-state.mjs" <state-file> '<json>'`.
+- Append typed events with `node "$CLAUDE_PLUGIN_ROOT/scripts/append-event.mjs" .nuclio/changes/<change-id>/events.jsonl '<json>'`.
 - If project foundation is missing, you may recommend `/nuclio:project-init`, but do not force it as a blocking prerequisite unless the user chooses to pause.
 - Only produce the spec artifact and the minimum workflow state for this change.
 - Spec Approval is a hard gate: do not start design, draft `design.md`, draft `plan.yaml`, or describe an execution task graph before the user explicitly approves the spec.

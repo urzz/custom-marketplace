@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const DECISIONS = ['accept', 'reject', 'edit', 'defer'];
-const RESULTS = ['pass', 'fail', 'blocked', 'unknown'];
+const RESULTS = ['pass', 'needs_patch', 'needs_redesign', 'blocked', 'fail', 'unknown'];
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);

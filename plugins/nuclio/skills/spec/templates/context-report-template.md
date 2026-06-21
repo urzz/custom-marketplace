@@ -2,33 +2,21 @@
 
 ## Purpose
 
-Record SelectContext decisions for this Nucl.io change so later phases can audit which project knowledge was loaded, skipped, missing, or stale.
+Record SelectContext decisions for this Nucl.io change so later phases can audit which project knowledge was loaded or skipped from `.dev-docs` routing indexes.
 
-## Loaded Root Indexes
+## SelectContext Decisions
 
-| File | Reason |
-|---|---|
-| `.dev-docs/index.md` | Root routing index for project knowledge. |
+| index | selected_path | load_mode | visible_in | load_when | decision | reason |
+|---|---|---|---|---|---|---|
+| .dev-docs/index.md | .dev-docs/index.md | index | spec, design, build, close | Root routing index for project knowledge | loaded | Always load the root routing index before selecting project context. |
+| .dev-docs/index.md | .dev-docs/<topic>.md | conditional | spec | <condition from Load When column> | skipped | Not applicable to this change; replace with a concrete reason when used. |
 
-## Loaded Second-Level Indexes
+## Notes
 
-| File | Reason |
-|---|---|
-
-## Loaded Docs
-
-| File | Reason | Last Verified / Stale Note |
-|---|---|---|
-
-## Skipped Docs
-
-| File | Reason |
-|---|---|
-
-## Missing Context
-
-| Expected File or Topic | Impact | Follow-up |
-|---|---|---|
+- Use `decision=loaded` only for context actually read into the workflow.
+- Use `decision=skipped` for candidate context considered but intentionally not loaded.
+- Keep `load_mode` aligned with `.dev-docs/index.md`: `index`, `leaf`, `always`, or `conditional`.
+- Include `.dev-docs/index.md` in at least one row for every report.
 
 ## Event Log Notes
 

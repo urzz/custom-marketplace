@@ -1,9 +1,12 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const input = process.env.CLAUDE_TOOL_INPUT || '';
 const tool = process.env.CLAUDE_TOOL_NAME || '';
 const cwd = process.cwd();
+const guardDir = path.dirname(fileURLToPath(import.meta.url));
+const pluginRootFromGuard = path.resolve(guardDir, '..');
 
 const dangerousBashPatterns = [
   /\bgit\s+push\b/i,
@@ -38,8 +41,8 @@ const CHANGE_GATES = [
   'final_acceptance',
   'memory_approval',
 ];
-const CHANGE_KINDS = ['feature', 'bugfix', 'refactor', 'docs', 'test', 'chore', 'spike'];
-const REPOSITORY_STAGES = ['new', 'existing', 'unknown', 'greenfield', 'brownfield'];
+const CHANGE_KINDS = ['feature', 'bugfix', 'refactor', 'tech_debt', 'docs', 'maintenance'];
+const REPOSITORY_STAGES = ['empty_repo', 'skeleton_repo', 'existing_app_without_foundation', 'existing_app_with_foundation'];
 
 function shellTokens(command) {
   const tokens = [];
@@ -596,28 +599,132 @@ function collectKnownCommandWriteTargets(command, paths) {
   }
 }
 
+const CONTROLLED_NUCLIO_HELPERS = new Map([
+  ['write-state.mjs', { kind: 'state', targetIsSafe: isSafeStatePath }],
+  ['append-event.mjs', { kind: 'events', targetIsSafe: isSafeEventsPath }],
+]);
+const CONTROLLED_NUCLIO_READ_ONLY_HELPERS = new Set(['bootstrap-check.mjs']);
+
+const PHASE_OWNED_ARTIFACTS = [
+  { pattern: /^\.nuclio\/changes\/[^/]+\/spec\.md$/, ownerPhase: 'spec', approval: 'spec' },
+  { pattern: /^\.nuclio\/changes\/[^/]+\/design\.md$/, ownerPhase: 'design', approval: 'design' },
+  { pattern: /^\.nuclio\/changes\/[^/]+\/plan\.ya?ml$/, ownerPhase: 'design', approval: 'design' },
+  { pattern: /^\.nuclio\/changes\/[^/]+\/close\.md$/, ownerPhase: 'close', approval: 'final' },
+  { pattern: /^\.nuclio\/changes\/[^/]+\/memory\.patch\.md$/, ownerPhase: 'close', approval: 'memory' },
+];
+
+function normalizedAbsolutePath(value) {
+  const normalized = normalizeSlashes(value).replace(/^['"]|['"]$/g, '');
+  if (!normalized || (!normalized.startsWith('/') && !isWindowsAbsolutePath(normalized))) return '';
+  return normalizeSlashes(path.resolve(normalized));
+}
+
+function nuclioHelperInfo(helperName) {
+  const writeHelper = CONTROLLED_NUCLIO_HELPERS.get(helperName);
+  if (writeHelper) return { ...writeHelper, access: 'write' };
+  if (CONTROLLED_NUCLIO_READ_ONLY_HELPERS.has(helperName)) return { kind: 'read-only', access: 'read' };
+  return null;
+}
+
+function controlledNuclioHelperFromScript(scriptPath) {
+  const normalized = normalizeSlashes(scriptPath).replace(/^['"]|['"]$/g, '');
+  if (!normalized) return null;
+
+  const helperName = path.posix.basename(normalized);
+  const helper = nuclioHelperInfo(helperName);
+  if (!helper) return null;
+
+  if (normalized === `$CLAUDE_PLUGIN_ROOT/scripts/${helperName}`) return helper;
+  if (normalized === `\${CLAUDE_PLUGIN_ROOT}/scripts/${helperName}`) return helper;
+  if (normalized === `plugins/nuclio/scripts/${helperName}`) return helper;
+
+  const absolute = normalizedAbsolutePath(normalized);
+  if (!absolute) return null;
+
+  if (process.env.CLAUDE_PLUGIN_ROOT) {
+    const envPluginRootHelper = normalizedAbsolutePath(path.join(process.env.CLAUDE_PLUGIN_ROOT, 'scripts', helperName));
+    if (absolute === envPluginRootHelper) return helper;
+  }
+
+  const inferredPluginRootHelper = normalizedAbsolutePath(path.join(pluginRootFromGuard, 'scripts', helperName));
+  if (absolute === inferredPluginRootHelper) return helper;
+
+  return null;
+}
+
+function isSideEffectfulNodeOption(token) {
+  return token === '--require'
+    || token.startsWith('--require=')
+    || token === '-r'
+    || (token.startsWith('-r') && !token.startsWith('--'))
+    || token === '--import'
+    || token.startsWith('--import=')
+    || token === '--loader'
+    || token.startsWith('--loader=')
+    || token === '--experimental-loader'
+    || token.startsWith('--experimental-loader=');
+}
+
+function nodeOptionConsumesNext(token) {
+  return token === '--require'
+    || token === '-r'
+    || token === '--import'
+    || token === '--loader'
+    || token === '--experimental-loader'
+    || token === '-e'
+    || token === '--eval'
+    || token === '-p'
+    || token === '--print';
+}
+
+function hasNodeOptionsEnvAssignment(tokens) {
+  return tokens.some((token) => /^NODE_OPTIONS=/.test(token));
+}
+
+function isShellEnvAssignment(token) {
+  return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token || '');
+}
+
+function hasClaudePluginRootAssignment(tokens, beforeIndex = tokens.length) {
+  return tokens.slice(0, beforeIndex).some((token) => /^CLAUDE_PLUGIN_ROOT=/.test(token));
+}
+
 function controlledNuclioHelperTarget(tokens) {
   const base = segmentBaseCommand(tokens);
   if (base !== 'node') return null;
 
   const commandIndex = tokens.findIndex((token) => path.basename(token) === 'node');
   if (commandIndex === -1) return null;
+
+  const assignsClaudePluginRoot = hasClaudePluginRootAssignment(tokens, commandIndex);
   let scriptIndex = commandIndex + 1;
+  let hasNodeOption = false;
+  let sideEffectfulNodeOption = null;
   while (tokens[scriptIndex] && tokens[scriptIndex].startsWith('-')) {
-    if (tokens[scriptIndex] === '-e' || tokens[scriptIndex] === '--eval' || tokens[scriptIndex] === '-p' || tokens[scriptIndex] === '--print') return null;
+    hasNodeOption = true;
+    if (isSideEffectfulNodeOption(tokens[scriptIndex])) sideEffectfulNodeOption = tokens[scriptIndex];
+    if (nodeOptionConsumesNext(tokens[scriptIndex])) {
+      scriptIndex += 2;
+      continue;
+    }
     scriptIndex += 1;
   }
 
-  const script = normalizePath(tokens[scriptIndex] || '');
+  const helper = controlledNuclioHelperFromScript(tokens[scriptIndex] || '');
+  if (!helper) return null;
   const target = tokens[scriptIndex + 1];
+  if (assignsClaudePluginRoot) {
+    return { kind: helper.kind, target: target ? normalizePath(target) : '', ok: false, reason: 'Blocked: controlled Nuclio helper commands must not assign CLAUDE_PLUGIN_ROOT in the same command segment.' };
+  }
+  if (hasNodeOptionsEnvAssignment(tokens)) {
+    return { kind: helper.kind, target: target ? normalizePath(target) : '', ok: false, reason: 'Blocked: controlled Nuclio helper commands must not set NODE_OPTIONS.' };
+  }
+  if (sideEffectfulNodeOption || hasNodeOption) {
+    return { kind: helper.kind, target: target ? normalizePath(target) : '', ok: false, reason: 'Blocked: controlled Nuclio helper commands must not use Node options.' };
+  }
+  if (helper.access === 'read') return { kind: helper.kind, target: '', ok: true, readOnly: true };
   if (!target) return null;
-  if (script === 'plugins/nuclio/scripts/write-state.mjs') {
-    return { kind: 'state', target: normalizePath(target), ok: isSafeStatePath(target) };
-  }
-  if (script === 'plugins/nuclio/scripts/append-event.mjs') {
-    return { kind: 'events', target: normalizePath(target), ok: isSafeEventsPath(target) };
-  }
-  return null;
+  return { kind: helper.kind, target: normalizePath(target), ok: helper.targetIsSafe(target) };
 }
 
 function collectControlledNuclioHelperTargets(command, paths) {
@@ -625,6 +732,15 @@ function collectControlledNuclioHelperTargets(command, paths) {
     const helper = controlledNuclioHelperTarget(shellTokens(segment));
     if (helper?.ok) paths.push(helper.target);
   }
+}
+
+function controlledNuclioHelperTargetsFromCommand(command) {
+  const targets = [];
+  for (const segment of commandSegments(command)) {
+    const helper = controlledNuclioHelperTarget(shellTokens(segment));
+    if (helper?.ok) targets.push(helper.target);
+  }
+  return [...new Set(targets)];
 }
 
 function invalidControlledNuclioHelper(command) {
@@ -653,6 +769,36 @@ function targetPathsForBashWriteTargets(rawInput) {
   const outsidePath = paths.find(isOutsideWorkspacePath);
   if (outsidePath) return { ok: false, reason: `Blocked: ${outsidePath} is outside workspace/repository.` };
   return { ok: true, paths };
+}
+
+function isControlledHelperWriteTarget(targetPath) {
+  return isSafeStatePath(targetPath) || isSafeEventsPath(targetPath);
+}
+
+function targetIsProtectedStateOrEvents(targetPath) {
+  const normalized = normalizePath(targetPath);
+  return /^\.nuclio\/changes\/[^/]+\/(?:state\.json|events\.jsonl)$/.test(normalized)
+    || normalized === '.nuclio/project/init-state.json'
+    || normalized === '.nuclio/project/events.jsonl';
+}
+
+function phaseOwnedArtifactForTarget(targetPath) {
+  const normalized = normalizePath(targetPath);
+  return PHASE_OWNED_ARTIFACTS.find((artifact) => artifact.pattern.test(normalized)) ?? null;
+}
+
+function phaseOwnedArtifactAllows(rootDir, targetPath) {
+  const artifact = phaseOwnedArtifactForTarget(targetPath);
+  if (!artifact) return { ok: true };
+  const changes = activeChanges(rootDir);
+  const normalized = normalizePath(targetPath);
+  const matchingChange = changes.find(({ changeId }) => normalized.startsWith(`.nuclio/changes/${changeId}/`));
+  if (!matchingChange) return { ok: true };
+  const approved = canonicalApproval(matchingChange.state, artifact.approval) === true;
+  if (approved) {
+    return { ok: false, reason: `Blocked: phase-owned .nuclio artifact ${normalized} belongs to ${artifact.ownerPhase} phase after ${artifact.approval} approval.` };
+  }
+  return { ok: true };
 }
 
 function readStateFileIfPresent(filePath) {
@@ -730,34 +876,165 @@ function hasActiveNuclioWorkflow(rootDir) {
   return Boolean(activeProject(rootDir)) || activeChanges(rootDir).length > 0;
 }
 
+function markdownSection(raw, headingName) {
+  const headingRegex = /^##\s+(.+?)\s*$/gim;
+  let match;
+  while ((match = headingRegex.exec(raw)) !== null) {
+    if (match[1].trim().toLowerCase() !== headingName.toLowerCase()) continue;
+    const start = headingRegex.lastIndex;
+    headingRegex.lastIndex = start;
+    const next = headingRegex.exec(raw);
+    return raw.slice(start, next ? next.index : raw.length);
+  }
+  return null;
+}
+
+function splitMarkdownTableLine(line) {
+  return line.slice(1, -1).split('|').map((cell) => cell.trim());
+}
+
+function parseFirstMarkdownTable(rawSection) {
+  if (!rawSection) return { headers: [], rows: [] };
+  const lines = rawSection.split(/\r?\n/);
+  let start = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (line.startsWith('|') && line.endsWith('|')) {
+      start = index;
+      break;
+    }
+  }
+  if (start === -1) return { headers: [], rows: [] };
+
+  const tableLines = [];
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (!line.startsWith('|') || !line.endsWith('|')) break;
+    tableLines.push(line);
+  }
+  if (tableLines.length < 2) return { headers: [], rows: [] };
+
+  const headers = splitMarkdownTableLine(tableLines[0]).map((cell) => cell.toLowerCase());
+  const rows = [];
+  for (const line of tableLines.slice(2)) {
+    const cells = splitMarkdownTableLine(line);
+    if (cells.every((cell) => /^:?-+:?$/.test(cell))) continue;
+    const row = {};
+    for (const [index, header] of headers.entries()) row[header] = cells[index] ?? '';
+    if (Object.values(row).some((cell) => String(cell).trim())) rows.push(row);
+  }
+  return { headers, rows };
+}
+
+function proposalTargetsById(raw) {
+  const table = parseFirstMarkdownTable(markdownSection(raw, 'Proposed Updates') ?? markdownSection(raw, 'Proposed Files'));
+  const targets = new Map();
+  for (const row of table.rows) {
+    const id = String(row.id || '').trim();
+    const target = row.target ?? row.path ?? row.target_path;
+    if (id && target) targets.set(id, target);
+  }
+  return targets;
+}
+
+function markdownMetadataValue(block, keyAlternatives) {
+  for (const key of keyAlternatives) {
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = block.match(new RegExp(`^\\s*(?:[-*]\\s*)?${escaped}:\\s*(.+?)\\s*$`, 'im'));
+    if (match) return match[1].trim();
+  }
+  return '';
+}
+
+function anchorsInUpdateBlock(block) {
+  const anchors = new Set();
+  const patterns = [
+    /<a\s+[^>]*(?:id|name)=["']([^"']+)["'][^>]*>/gim,
+    /\{#([A-Za-z0-9_.:-]+)\}/g,
+    /^\s*(?:[-*]\s*)?(?:anchor|content_anchor):\s*(\S+)\s*$/gim,
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(block)) !== null) anchors.add(match[1]);
+  }
+  return anchors;
+}
+
+function updateBlocksByProposalId(raw) {
+  const blocks = new Map();
+  const headingRegex = /^###\s+Update\s+(\S+)\s*$/gim;
+  const matches = [...raw.matchAll(headingRegex)];
+  for (const [index, match] of matches.entries()) {
+    const start = match.index;
+    const end = matches[index + 1]?.index ?? raw.length;
+    const block = raw.slice(start, end);
+    blocks.set(match[1], {
+      headingId: match[1],
+      id: markdownMetadataValue(block, ['id']),
+      anchors: anchorsInUpdateBlock(block),
+    });
+  }
+  return blocks;
+}
+
+function validApprovedContentRef(ref, proposalId, proposalTargets, updateBlocks) {
+  const trimmed = String(ref || '').trim();
+  if (!trimmed || !proposalId || !proposalTargets.has(proposalId)) return false;
+  const block = updateBlocks.get(proposalId);
+  if (!block) return false;
+
+  const acceptedRefs = new Set([
+    `Update ${proposalId}`,
+    `### Update ${proposalId}`,
+    `proposal:${proposalId}`,
+    `#update-${String(proposalId).toLowerCase()}`,
+  ]);
+  for (const anchor of block.anchors || []) {
+    acceptedRefs.add(anchor);
+    acceptedRefs.add(`#${anchor}`);
+  }
+
+  return acceptedRefs.has(trimmed);
+}
+
+function isSafeConcreteDevDocsPatchTarget(target) {
+  const raw = String(target || '').replace(/\\/g, '/').trim();
+  const normalized = normalizeRelativePath(raw);
+  return raw.startsWith('.dev-docs/')
+    && !raw.endsWith('/')
+    && !raw.split('/').includes('..')
+    && normalized.startsWith('.dev-docs/')
+    && normalized !== '.dev-docs/'
+    && !normalized.endsWith('/')
+    && !normalized.includes('/../')
+    && !/[*?[\]{}]/.test(raw)
+    && !/[*?[\]{}]/.test(normalized);
+}
+
 function extractAcceptedPatchTargets(filePath) {
   if (!existsSync(filePath)) return [];
   const raw = readFileSync(filePath, 'utf8');
+  const proposalTargets = proposalTargetsById(raw);
+  const updateBlocks = updateBlocksByProposalId(raw);
+  const approvalTable = parseFirstMarkdownTable(markdownSection(raw, 'Human Approval Decisions'));
   const targets = [];
 
-  const tableLines = raw.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.startsWith('|') && line.endsWith('|'));
-  if (tableLines.length >= 2) {
-    const headers = tableLines[0].slice(1, -1).split('|').map((cell) => cell.trim().toLowerCase());
-    const targetIndex = headers.findIndex((header) => ['target', 'path', 'target_path'].includes(header));
-    const decisionIndex = headers.indexOf('decision');
-    if (targetIndex !== -1 && decisionIndex !== -1) {
-      for (const line of tableLines.slice(2)) {
-        const cells = line.slice(1, -1).split('|').map((cell) => cell.trim());
-        if (cells.every((cell) => /^-+$/.test(cell))) continue;
-        const decision = String(cells[decisionIndex] || '').toLowerCase();
-        if (decision === 'accept' || decision === 'edit') targets.push(cells[targetIndex]);
-      }
-    }
-  }
-
-  const blocks = raw.split(/(?=^##+\s+Update\b)/gim);
-  for (const block of blocks) {
-    const target = block.match(/^\s*(?:[-*]\s*)?(?:target|target_path|path):\s*(\S+)/im)?.[1];
-    const decision = block.match(/^\s*(?:[-*]\s*)?decision:\s*(\S+)/im)?.[1]?.toLowerCase();
-    if (target && (decision === 'accept' || decision === 'edit')) targets.push(target);
+  for (const row of approvalTable.rows) {
+    const decision = String(row.decision || '').trim().toLowerCase();
+    if (decision !== 'accept' && decision !== 'edit') continue;
+    const id = String(row.id || '').trim();
+    const approvedContentRef = row.approved_content_ref ?? row.content_ref ?? row.approved_content ?? '';
+    if (!validApprovedContentRef(approvedContentRef, id, proposalTargets, updateBlocks)) continue;
+    const target = proposalTargets.get(id);
+    if (target && isSafeConcreteDevDocsPatchTarget(target)) targets.push(target);
   }
 
   return targets.map(normalizePath).filter(Boolean);
+}
+
+function targetEqualsAny(targetPath, allowedTargets) {
+  const normalizedTarget = normalizePath(targetPath);
+  return allowedTargets.some((allowed) => normalizePath(allowed) === normalizedTarget);
 }
 
 function targetMatchesAny(targetPath, allowedTargets) {
@@ -781,11 +1058,10 @@ function projectDevDocsApprovalAllows(rootDir, targetPath) {
     return false;
   }
 
-  const targets = [
-    ...scopedApprovalTargets(state, 'initial_dev_docs_scope'),
-    ...extractAcceptedPatchTargets(path.join(rootDir, '.nuclio/project/initial-dev-docs.patch.md')),
-  ];
-  return targets.length > 0 && targetMatchesAny(targetPath, targets);
+  const scopedTargets = scopedApprovalTargets(state, 'initial_dev_docs_scope');
+  const patchTargets = extractAcceptedPatchTargets(path.join(rootDir, '.nuclio/project/initial-dev-docs.patch.md'));
+  return (scopedTargets.length > 0 && targetMatchesAny(targetPath, scopedTargets))
+    || (patchTargets.length > 0 && targetEqualsAny(targetPath, patchTargets));
 }
 
 function changeMemoryApprovalAllows(rootDir, targetPath) {
@@ -798,11 +1074,10 @@ function changeMemoryApprovalAllows(rootDir, targetPath) {
       return false;
     }
 
-    const targets = [
-      ...scopedApprovalTargets(state, 'memory_scope'),
-      ...extractAcceptedPatchTargets(path.join(changeDir, 'memory.patch.md')),
-    ];
-    return targets.length > 0 && targetMatchesAny(targetPath, targets);
+    const scopedTargets = scopedApprovalTargets(state, 'memory_scope');
+    const patchTargets = extractAcceptedPatchTargets(path.join(changeDir, 'memory.patch.md'));
+    return (scopedTargets.length > 0 && targetMatchesAny(targetPath, scopedTargets))
+      || (patchTargets.length > 0 && targetEqualsAny(targetPath, patchTargets));
   });
 }
 
@@ -981,17 +1256,23 @@ function parsePlanTasks(filePath, allowedSection) {
       current = null;
       continue;
     }
-    const idMatch = content.match(/^-\s+id:\s*(.+?)\s*$/);
-    if (idMatch) {
-      current = { id: unquoteYamlScalar(idMatch[1]), allowed_paths: [], forbidden_paths: [] };
+    const itemKeyMatch = content.match(/^-\s+([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (itemKeyMatch) {
+      current = { allowed_paths: [], forbidden_paths: [] };
       tasks.push(current);
+      const [, key, value] = itemKeyMatch;
+      if (key === 'id') current.id = unquoteYamlScalar(value);
+      if (key === 'allowed_paths') current.allowed_paths = parseInlineYamlList(value) ?? extractYamlList(lines, index, indent);
+      if (key === 'forbidden_paths') current.forbidden_paths = parseInlineYamlList(value) ?? extractYamlList(lines, index, indent);
       continue;
     }
     if (!current) continue;
-    const allowedPathsMatch = content.match(/^allowed_paths:\s*(.*)$/);
-    if (allowedPathsMatch) current.allowed_paths = parseInlineYamlList(allowedPathsMatch[1]) ?? extractYamlList(lines, index, indent);
-    const forbiddenPathsMatch = content.match(/^forbidden_paths:\s*(.*)$/);
-    if (forbiddenPathsMatch) current.forbidden_paths = parseInlineYamlList(forbiddenPathsMatch[1]) ?? extractYamlList(lines, index, indent);
+    const keyMatch = content.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (!keyMatch) continue;
+    const [, key, value] = keyMatch;
+    if (key === 'id') current.id = unquoteYamlScalar(value);
+    if (key === 'allowed_paths') current.allowed_paths = parseInlineYamlList(value) ?? extractYamlList(lines, index, indent);
+    if (key === 'forbidden_paths') current.forbidden_paths = parseInlineYamlList(value) ?? extractYamlList(lines, index, indent);
   }
 
   return tasks;
@@ -1185,6 +1466,8 @@ if (writeLikeTools.has(tool)) {
 if (!targetPathResult.ok) block(targetPathResult.reason, []);
 
 const targetPaths = targetPathResult.paths;
+const bashCommand = tool === 'Bash' ? parseBashInput(input) : '';
+const controlledHelperWriteTargets = tool === 'Bash' ? controlledNuclioHelperTargetsFromCommand(bashCommand) : [];
 const rawMentionsDevDocs = /(^|[^\w.-])\.dev-docs\//.test(input) || input.includes('.dev-docs/');
 const useRawDevDocsFallback = !targetPaths.length;
 const touchesDevDocs = targetPaths.some(pathTargetsDevDocs) || (useRawDevDocsFallback && rawMentionsDevDocs);
@@ -1194,7 +1477,6 @@ if (invalidState && (touchesApplication || touchesDevDocs)) {
   block(`Blocked: invalid Nuclio state file ${invalidState.relativePath}.`, targetPaths);
 }
 
-const bashCommand = tool === 'Bash' ? parseBashInput(input) : '';
 const bashInputs = tool === 'Bash' ? bashInputsToCheck(input) : [];
 const isDangerousBash = tool === 'Bash' && bashInputs.some((bashInput) => dangerousBashPatterns.some((pattern) => pattern.test(bashInput)) || hasDangerousBashCommand(bashInput));
 const hasRiskApproval = tool === 'Bash' && hasScopedRiskApproval(cwd, bashCommand);
@@ -1205,11 +1487,21 @@ if (isDangerousBash && !hasRiskApproval) {
 
 const invalidHelper = tool === 'Bash' ? invalidControlledNuclioHelper(bashCommand) : null;
 if (invalidHelper) {
-  block(`Blocked: ${invalidHelper.kind} helper target must be a safe Nuclio ${invalidHelper.kind} path.`, [invalidHelper.target].filter(Boolean));
+  block(invalidHelper.reason ?? `Blocked: ${invalidHelper.kind} helper target must be a safe Nuclio ${invalidHelper.kind} path.`, [invalidHelper.target].filter(Boolean));
 }
 
 if (tool === 'Bash' && hasActiveNuclioWorkflow(cwd) && !hasRiskApproval && hasAmbiguousWriteLikeBash(bashCommand)) {
   block('Blocked: ambiguous Bash command in active Nuclio workflow; use Write/Edit/MultiEdit or a scoped risk approval.', targetPaths);
+}
+
+if (writeLikeTools.has(tool) || tool === 'Bash') {
+  for (const targetPath of targetPaths) {
+    if (targetIsProtectedStateOrEvents(targetPath) && !controlledHelperWriteTargets.some((helperTarget) => normalizePath(helperTarget) === normalizePath(targetPath))) {
+      block('Blocked: writing Nucl.io state/events requires controlled state/events helper.', [targetPath]);
+    }
+    const artifactResult = phaseOwnedArtifactAllows(cwd, targetPath);
+    if (!artifactResult.ok) block(artifactResult.reason, [targetPath]);
+  }
 }
 
 if (touchesDevDocs) {

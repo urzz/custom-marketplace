@@ -25,7 +25,7 @@ Read `.nuclio/project/init-state.json` and `.nuclio/changes/*/state.json`, summa
 - If the workflow is in `waiting_human`, explicitly name the gate and the next required skill or user action.
 - If project foundation is missing, explain the risk and recommend `/nuclio:project-init` when appropriate.
 - If there is no active change, explain the risk and recommend starting a new change with `/nuclio:spec` when appropriate.
-- Start with `node plugins/nuclio/scripts/bootstrap-check.mjs` and report its JSON `ok/foundation/project_state/active_changes/next_action`; if it reports invalid state or multiple active changes, do not guess a workflow.
+- Start with `node "$CLAUDE_PLUGIN_ROOT/scripts/bootstrap-check.mjs" --requested-skill resume` and report its JSON `ok/foundation/project_state/active_changes/next_action`; if it reports invalid state or multiple active changes, do not guess a workflow.
 - If multiple change states exist, identify the active or most recently relevant change instead of merging them into one ambiguous status.
 - Resume may recommend a next step, but it must not produce `spec.md`, `design.md`, `plan.yaml`, build evidence, close artifacts, or memory updates.
 

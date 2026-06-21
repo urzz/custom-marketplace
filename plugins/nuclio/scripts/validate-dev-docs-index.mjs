@@ -2,9 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const filePath = process.argv[2];
-const REQUIRED_HEADERS = ['index', 'selected_path', 'load_mode', 'visible_in', 'load_when', 'decision', 'reason'];
 const LOAD_MODES = ['index', 'leaf', 'always', 'conditional'];
-const DECISIONS = ['loaded', 'skipped'];
+const REQUIRED_HEADERS = ['Path', 'Load Mode', 'Visible In', 'Load When'];
 
 function fail(message) {
   console.error(message);
@@ -12,11 +11,11 @@ function fail(message) {
 }
 
 if (!filePath) {
-  fail('usage: node validate-context-report.mjs <context-report.md>');
+  fail('usage: node validate-dev-docs-index.mjs <index.md>');
 }
 
 if (!existsSync(filePath)) {
-  fail(`missing context report: ${filePath}`);
+  fail(`missing dev docs index: ${filePath}`);
 }
 
 function splitTableLine(line) {
@@ -56,10 +55,11 @@ function parseTables(raw) {
   return tables;
 }
 
-function findContextTable(raw) {
+function findIndexTable(raw) {
+  const required = REQUIRED_HEADERS.map(normalizeHeader);
   return parseTables(raw).find((table) => {
     const headers = table.headers.map(normalizeHeader);
-    return REQUIRED_HEADERS.every((required) => headers.includes(required));
+    return required.every((header) => headers.includes(header));
   }) ?? null;
 }
 
@@ -72,55 +72,38 @@ function isWindowsDriveAbsolutePath(value) {
   return /^[A-Za-z]:[\\/]/.test(String(value || '').trim());
 }
 
-function isDevDocsPath(value) {
+function isSafeRelativePath(value) {
   if (isWindowsDriveAbsolutePath(value)) return false;
   const raw = String(value || '').replace(/\\/g, '/').trim();
   if (!raw || raw.includes('\0') || path.posix.isAbsolute(raw)) return false;
+  if (raw.startsWith('~') || raw.startsWith('.nuclio/') || raw.startsWith('.dev-docs/')) return false;
   if (raw.split('/').includes('..')) return false;
   const normalized = path.posix.normalize(raw);
   if (normalized.split('/').includes('..')) return false;
-  if (normalized !== raw.replace(/^\.\//, '')) return false;
-  return normalized === '.dev-docs/index.md' || (normalized.startsWith('.dev-docs/') && !normalized.endsWith('/'));
+  return normalized === raw.replace(/^\.\//, '');
 }
 
 const raw = readFileSync(filePath, 'utf8');
-const table = findContextTable(raw);
+const table = findIndexTable(raw);
 const errors = [];
 
 if (!table) {
-  errors.push(`context report must include a table with headers: ${REQUIRED_HEADERS.join(', ')}`);
+  errors.push(`index must include a table with headers: ${REQUIRED_HEADERS.join(', ')}`);
 } else {
-  if (!table.rows.length) errors.push('context report table must include at least one decision row');
-  let hasRootIndex = false;
-  let hasLoaded = false;
-  let hasSkipped = false;
-
+  if (!table.rows.length) errors.push('index table must include at least one row');
   for (const [index, row] of table.rows.entries()) {
     const label = `row ${index + 1}`;
-    const indexPath = rowValue(row, 'index');
-    const selectedPath = rowValue(row, 'selected_path');
-    const loadMode = rowValue(row, 'load_mode').toLowerCase();
-    const visibleIn = rowValue(row, 'visible_in');
-    const loadWhen = rowValue(row, 'load_when');
-    const decision = rowValue(row, 'decision').toLowerCase();
-    const reason = rowValue(row, 'reason');
+    const docPath = rowValue(row, 'Path');
+    const loadMode = rowValue(row, 'Load Mode').toLowerCase();
+    const visibleIn = rowValue(row, 'Visible In');
+    const loadWhen = rowValue(row, 'Load When');
 
-    if (indexPath === '.dev-docs/index.md' || selectedPath === '.dev-docs/index.md') hasRootIndex = true;
-    if (!isDevDocsPath(indexPath)) errors.push(`${label} index must be a .dev-docs path`);
-    if (!isDevDocsPath(selectedPath)) errors.push(`${label} selected_path must be a .dev-docs path`);
-    if (!LOAD_MODES.includes(loadMode)) errors.push(`${label} load_mode must be one of: ${LOAD_MODES.join(', ')}`);
-    if (!visibleIn) errors.push(`${label} visible_in must be non-empty`);
-    if (!loadWhen) errors.push(`${label} load_when must be non-empty`);
-    if (!DECISIONS.includes(decision)) errors.push(`${label} decision must be one of: ${DECISIONS.join(', ')}`);
-    if (decision === 'loaded') hasLoaded = true;
-    if (decision === 'skipped') hasSkipped = true;
-    if (!reason) errors.push(`${label} reason must be non-empty`);
+    if (!isSafeRelativePath(docPath)) errors.push(`${label} Path must be a safe relative path`);
+    if (!LOAD_MODES.includes(loadMode)) errors.push(`${label} Load Mode must be one of: ${LOAD_MODES.join(', ')}`);
+    if (!visibleIn) errors.push(`${label} Visible In must be non-empty`);
+    if (!loadWhen) errors.push(`${label} Load When must be non-empty`);
   }
-
-  if (!hasRootIndex) errors.push('context report must include .dev-docs/index.md');
-  if (!hasLoaded) errors.push('context report must include at least one loaded decision');
-  if (!hasSkipped) errors.push('context report must include at least one skipped decision');
 }
 
 if (errors.length) fail(errors.join('\n'));
-console.log(`valid context report: ${filePath}`);
+console.log(`valid dev docs index: ${filePath}`);
