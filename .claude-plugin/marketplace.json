@@ -14,11 +14,6 @@
       "name": "dev-stack",
       "source": "./plugins/dev-stack",
       "description": "Dev stack plugin with dev rel skills"
-    },
-    {
-      "name": "nuclio",
-      "source": "./plugins/nuclio",
-      "description": "Nucl.io workflow plugin for project initialization and spec-driven change delivery"
     }
   ]
 }
