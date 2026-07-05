@@ -1,0 +1,163 @@
+---
+name: brief
+description: Use when the user has a vague or new change idea and wants Nucl.io to clarify requirements, write `brief.md` and `spec.md`, and stop at the Brief Gate before design.
+---
+
+# Nucl.io Brief
+
+## Critical Constraints
+
+- 以 `references/protocol.md`、`references/grill-protocol.md` 和相关 shared references 作为定位/创建 change、Grill 格式、`state.json` 更新的准则；本文件不得发明本地漂移规则。
+- 只读取 `.dev-docs/index.md` 和必要二级索引；允许为识别 active change 读取 `.dev-docs/changes/index.md` 以及候选 change 的 `state.json`，但不要默认读取整个 `.dev-docs/`。
+- `.dev-docs/` 是 project baseline 与 change artifacts 的 source-of-truth；change artifacts 必须位于 `.dev-docs/changes/<change-id>/`。
+- 创建或选择 change 前，必须确认 `.dev-docs/index.md` 和 `.dev-docs/changes/index.md` 存在；若任一缺失，STOP 并建议先运行 `/nuclio:project-init`，或在用户明确确认后只创建最小缺失索引。不得创建 orphan change。
+- `.nuclio/` 仅用于 runtime/cache/temp state；本 MVP 不实现 `.nuclio/` runtime。
+- 能从 docs/code 推断的问题不问用户。
+- Grill 每次只问一个问题，最多 5 个。
+- 每个 Grill 问题都必须符合 `references/grill-protocol.md`，包含 `**问题 N：**`、`推荐答案：`、`为什么问：`。
+- `brief.md` 记录意图和边界；`spec.md` 记录需求、验收和边界情况。
+- Brief Gate 前不得进入 design/implement。
+- 如果没有明确 active change，先创建 `.dev-docs/changes/<change-id>/`；`<change-id>` 使用 `YYYY-MM-DD-short-slug`，slug 从用户意图生成，并同步登记/更新 `.dev-docs/changes/index.md`。
+- `/nuclio:brief` 只实现 prompt/protocol layer：不实现 hooks、runtime、scripts、CLI、daemon、MCP、multi-agent platform、cross-project RAG 或 context budget automation，也不创建这些 Nucl.io runtime artifacts。若这些能力是用户产品/项目需求，应作为合法需求记录到 `brief.md`/`spec.md`（除非用户明确判定 out-of-scope）；不要因为关键词自动归入 Out of Scope，也不要在 brief 阶段实现它们。
+- 不依赖 `grill-me`；不 fork Trellis；不复制 Chorus 式全量上下文注入。
+
+## Contents
+
+1. [Workflow](#workflow)
+2. [Phase 1: Locate or Create Change](#phase-1-locate-or-create-change)
+3. [Phase 2: Load Minimal Context](#phase-2-load-minimal-context)
+4. [Phase 3: Grill Idea](#phase-3-grill-idea)
+5. [Phase 4: Write Brief and Spec](#phase-4-write-brief-and-spec)
+6. [Phase 5: Brief Gate](#phase-5-brief-gate)
+7. [Behavior Verification](#behavior-verification)
+
+## Workflow
+
+Use this skill for a vague or new change idea. Convert the idea into file-backed `brief.md`, `spec.md`, and merged `state.json` updates for the current change, then stop at the Brief Gate.
+
+Follow the shared protocols when making protocol-sensitive decisions:
+
+- Change path and state rules: `references/protocol.md`.
+- Grill question format and stop conditions: `references/grill-protocol.md`.
+- Context loading boundaries when relevant: `references/context-manifest.md`.
+
+Follow a Sequential + HITL + Grill clarification pattern:
+
+1. Locate or create the current change under `.dev-docs/changes/<change-id>/`.
+2. Load only minimal project baseline context.
+3. Clarify missing requirements with one-question-at-a-time Grill.
+4. Write or update `brief.md`, `spec.md`, and `state.json` by preserving existing fields and merging required updates.
+5. Stop and ask the user to review before `/nuclio:design`.
+
+## Phase 1: Locate or Create Change
+
+Follow `references/protocol.md` for the Change Artifact Protocol.
+
+- The change directory path must be `.dev-docs/changes/<change-id>/`.
+- `<change-id>` should use `YYYY-MM-DD-short-slug`; generate `short-slug` from the user's intent using lowercase words separated by hyphens.
+- Before creating or selecting a change, verify the baseline indexes exist: `.dev-docs/index.md` and `.dev-docs/changes/index.md`.
+  - If either index is missing, STOP. Recommend running `/nuclio:project-init` first.
+  - If the user explicitly confirms they do not want Project Init, create only the minimal missing index file(s), then continue.
+  - Do not create `.dev-docs/changes/<change-id>/` while these indexes are missing; that would create an orphan change that later skills may not discover.
+- Determine an active change only from explicit project evidence such as `.dev-docs/changes/index.md`, candidate change `state.json` files, or an unambiguous user instruction naming the change.
+- You may read `.dev-docs/changes/index.md` and candidate `.dev-docs/changes/<change-id>/state.json` files to identify active change status. This is still minimal context loading and does not permit reading the whole `.dev-docs/` tree.
+- If exactly one active change is explicitly identified, use `.dev-docs/changes/<change-id>/` for `brief.md`, `spec.md`, and `state.json`.
+- If no active change exists and the user's intent is clearly a new requirement, create `.dev-docs/changes/<change-id>/`.
+- If only old draft changes exist, do not force the user to choose one. Create a new change when the user intent is clearly new; STOP and ask which change to use only when the intent is unclear or likely continues an old draft.
+- If multiple changes look active, active markers are missing/ambiguous, or the intended change is unclear, STOP and ask the user which change to use. Do not guess or choose the newest directory by default.
+- After creating a new change, register or update it in `.dev-docs/changes/index.md` so future active change discovery can find it.
+- Do not create runtime state under `.nuclio/` for this MVP.
+- Keep the change artifacts under `.dev-docs/changes/<change-id>/` because `.dev-docs/` is the source-of-truth.
+
+## Phase 2: Load Minimal Context
+
+- Treat `references/protocol.md` as authoritative for change paths and `state.json` behavior.
+- Treat `references/grill-protocol.md` as authoritative for Grill question format and stop conditions.
+- Read `references/context-manifest.md` if context loading boundaries are unclear.
+- Read `.dev-docs/index.md` first for project baseline or change discovery.
+- Read `.dev-docs/changes/index.md` when locating an active change or preparing to create a new change.
+- Read only necessary second-level indexes referenced by `.dev-docs/index.md`.
+- Read candidate `.dev-docs/changes/<change-id>/state.json` files only as needed to distinguish active, draft, approved, completed, or archived changes.
+- Do not default to reading the full `.dev-docs/` tree.
+- Do not read every change directory, every project document, or large artifacts just to locate an active change.
+- Use existing docs/code to infer answers where possible; do not ask the user questions that the repository can answer.
+
+## Phase 3: Grill Idea
+
+Ask only for missing information that blocks a usable brief/spec.
+
+Rules:
+
+- Ask one question at a time.
+- Ask at most 5 questions total.
+- Each question must follow the exact Grill format from `references/grill-protocol.md`:
+
+```markdown
+**问题 N：** <single blocking question>
+
+推荐答案：<one concrete recommended answer>
+
+为什么问：<one sentence explaining how the answer changes the artifact>
+```
+
+- Every question must include both `推荐答案：` and `为什么问：`; the user can accept the recommendation directly.
+- Prefer questions about intent, users, success criteria, non-goals, acceptance, and edge cases.
+- Stop asking once enough information exists to write a coherent `brief.md` and `spec.md`, or when the Grill stop conditions in `references/grill-protocol.md` are met.
+
+## Phase 4: Write Brief and Spec
+
+Create new `brief.md` with these required template sections. When updating an existing `brief.md`, keep these required sections and preserve already-confirmed valuable extra sections (for example `Constraints`, `Dependencies`, `API Contract`, or `Migration Notes`) instead of deleting them for template conformity:
+
+```markdown
+# Brief: <change title>
+
+## Background
+## Goal
+## Non-Goals
+## Users / Actors
+## Success Criteria
+## Confirmed Decisions
+## Open Questions
+```
+
+Create new `spec.md` with these required template sections. When updating an existing `spec.md`, keep these required sections and preserve already-confirmed valuable extra sections (for example `Constraints`, `Dependencies`, `API Contract`, or `Migration Notes`) instead of deleting them for template conformity:
+
+```markdown
+# Spec: <change title>
+
+## Functional Requirements
+## Non-Functional Requirements
+## Acceptance Criteria
+## Edge Cases
+## Out of Scope
+```
+
+Update `state.json` for the current change according to the State Protocol in `references/protocol.md`:
+
+- Preserve existing fields, nested objects, and unknown keys; merge these updates instead of rewriting `state.json` as a minimal JSON object.
+- `phase`: `brief`
+- `status`: `draft` until user approves, then `approved`
+- `gates.brief`: `pending` until user approval
+- Current task tracking must not be broken. In the Brief stage, set `current_task` to `null` when creating a new state file, or preserve/merge any existing compatible current-task field without deleting unrelated state.
+
+Keep artifact content concise, traceable to user input or inferred project context, and explicitly mark unresolved items in `Open Questions` rather than inventing decisions. If the user's change idea involves hooks, runtime, scripts, CLI, daemon, MCP, multi-agent platform, cross-project RAG, or context budget automation, distinguish the context:
+
+- As `/nuclio:brief` implementation work, these are Nucl.io runtime artifacts and must not be implemented or created by this skill.
+- As the user's product/project requirements, they are valid requirements to record in `brief.md`/`spec.md` unless the user explicitly marks them out of scope.
+- Do not classify them into `Out of Scope` based only on keywords; classify them by user intent and confirmed project boundary.
+
+## Phase 5: Brief Gate
+
+After writing `brief.md`, `spec.md`, and the `state.json` update, stop. Do not begin design or implementation.
+
+Use this exact message:
+
+```text
+STOP. Brief Gate：请 review `brief.md` 和 `spec.md`。确认后才能进入 `/nuclio:design`；如需调整，请先修改 brief/spec。
+```
+
+## Behavior Verification
+
+- RED: baseline may jump directly to technical plan from vague idea.
+- GREEN: skill writes brief/spec and stops at Brief Gate.
+- REFACTOR: check no default full `.dev-docs` read, no implementation before gate, every question has recommendation.

@@ -14,6 +14,11 @@
       "name": "dev-stack",
       "source": "./plugins/dev-stack",
       "description": "Dev stack plugin with dev rel skills"
+    },
+    {
+      "name": "nuclio",
+      "source": "./plugins/nuclio-plugin",
+      "description": "Adds /nuclio:* skills for the Nucl.io personal AI-coding harness MVP"
     }
   ]
 }
