@@ -15,11 +15,11 @@
 - `/nuclio:design`
 - `/nuclio:implement`
 - `/nuclio:verify`
+- `/nuclio:fold`（prompt / protocol layer）
 - shared references for file protocol, Grill Protocol, context manifest, and roadmap
 
 本 MVP 未实现：
 
-- `/nuclio:fold`
 - `/nuclio:status`
 - `/nuclio:resume`
 - hooks
@@ -30,7 +30,7 @@
 - MCP
 - multi-agent platform
 - cross-project RAG
-- automatic token budget reporting
+- context budget reporting
 
 ## Deferred Capabilities
 
@@ -45,12 +45,11 @@ Deferred work 必须保留相同原则：
 
 ## Implementation Sequence
 
-1. 实现 `/nuclio:fold`，用于把 stable knowledge write-back 到长期 `.dev-docs` knowledge。
-2. 实现 `/nuclio:status`，用于 active change inspection。
-3. 实现 `/nuclio:resume`，用于不自动执行的 state recovery。
-4. 添加可选 scripts，用于 `.dev-docs` skeleton generation 和 protocol validation。
-5. 添加可选 hooks/runtime，用于 SessionStart breadcrumb 和 `.nuclio/runtime/cache/temp` state。
-6. 添加 context budget reporting 和 verify-loop enhancements。
+1. 实现 `/nuclio:status`，用于 active change inspection。
+2. 实现 `/nuclio:resume`，用于不自动执行的 state recovery。
+3. 添加可选 scripts，用于 `.dev-docs` skeleton generation 和 protocol validation。
+4. 添加可选 hooks/runtime，用于 SessionStart breadcrumb 和 `.nuclio/runtime/cache/temp` state。
+5. 添加 context budget reporting 和 verify-loop enhancements。
 
 ## Acceptance Criteria by Item
 
