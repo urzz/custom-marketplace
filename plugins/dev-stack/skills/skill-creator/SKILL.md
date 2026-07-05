@@ -134,14 +134,16 @@ Output format templates: [references/templates.md#phase-1-output](references/tem
 
 ### Step A.2 — Structural Completeness Check
 
-对变更后的完整 skill 按 [references/validation-checklist.md](references/validation-checklist.md) 的 6 个维度逐一审查：
+对变更后的完整 skill 按 [references/validation-checklist.md](references/validation-checklist.md) 的 8 个维度逐一审查：
 
 1. **Spec Conformance** — 新增路由/步骤是否与已有 Spec 一致
 2. **Pattern Consistency** — 是否引入了与主 Pattern 冲突的结构
 3. **Flow Completeness** — 新增路径是否有完整的 Gate、退出条件、错误处理
 4. **Structural Compliance** — description 是否覆盖新增触发词、body 行数、TOC 完整性
 5. **Token Efficiency** — 是否有冗余重复、过长 inline 内容
-6. **Cross-reference Integrity** — 被引用的 references/agents 文件是否存在且内容匹配
+6. **SDD 6.1.1 Handoff Compatibility** — Plan / delegation context / reviewer inputs 是否保持可交接与可审查
+7. **Skill TDD and Wording Coverage** — 是否覆盖 RED / GREEN / REFACTOR 与 wording micro-test 策略
+8. **Behavioral Correctness** — 路由、Gate、边界处理与输出行为是否符合预期
 
 ### Step A.3 — Functional Gap Analysis
 
@@ -174,7 +176,9 @@ Output format templates: [references/templates.md#phase-1-output](references/tem
 | Flow Completeness | ✅/⚠️/❌ | 具体描述 |
 | Structural Compliance | ✅/⚠️/❌ | 具体描述 |
 | Token Efficiency | ✅/⚠️/❌ | 具体描述 |
-| Cross-reference Integrity | ✅/⚠️/❌ | 具体描述 |
+| SDD 6.1.1 Handoff Compatibility | ✅/⚠️/❌ | 具体描述 |
+| Skill TDD and Wording Coverage | ✅/⚠️/❌ | 具体描述 |
+| Behavioral Correctness | ✅/⚠️/❌ | 具体描述 |
 
 ### 功能遗漏项（如有）
 1. [遗漏描述 + 建议修复方向]
@@ -205,6 +209,8 @@ Fill the template from [references/templates.md#full-spec](references/templates.
 ### Step 2.1 — Delta Spec (MODIFY)
 
 Fill the template from [references/templates.md#delta-spec](references/templates.md#delta-spec).
+
+**Skill TDD requirement:** CREATE/MODIFY Spec 必须说明如何验证 skill 行为变化：RED baseline（无 guidance/control 下的失败或当前缺口）、GREEN expected behavior、REFACTOR/loophole checks。若变更属于 behavior-shaping guidance，必须包含 wording micro-test strategy。
 
 ### Step 2.2 — Pattern Selection
 
@@ -253,10 +259,18 @@ Read the confirmed Spec. Identify files to create/modify/delete, logical groupin
 Use the format from [references/templates.md#task-format](references/templates.md#task-format).
 
 **格式要求：**
-- Steps 必须自包含（完整内容，不用 placeholder，不引用外部文件）
+- Steps 必须自包含（完整内容，不用 placeholder，不引用外部文件）；exact values 必须写入 Plan / task brief，而不是留给后续 dispatch prompt 重新补全或解释。
 - Spec 关键信息（业务意图 + Pattern 结构 + 验收标准）直接写入对应 Task 的 Acceptance Criteria（sub agent 不需要查外部文件）
 - 最后一步必须是验证步骤（implementer 自检）
 - Acceptance Criteria 供 superpowers spec reviewer 做 compliance check
+
+**SDD 6.1.1 compatibility requirements:**
+- Plan 必须包含 header：Goal / Architecture / Tech Stack / Global Constraints。
+- Global Constraints 必须复制本次 Spec 中跨 Task 生效的约束，供 reviewer 直接使用。
+- 每个 Task 必须包含 `Interfaces`：`Consumes` 和 `Produces`，说明与前后 Task 的依赖关系。
+- 每个 Task 必须使用 checkbox steps（`- [ ]`），并保持 `### Task N:` 标题格式，确保 `superpowers:subagent-driven-development` 的 `scripts/task-brief PLAN_FILE N` 可提取单个 Task。
+- 每个 Task 的 Acceptance Criteria 必须继续包含：Pattern 结构约束、业务意图、验收标准。
+- Plan 可以继续保存到 `.claude/plans/<skill-name>-<变更主题>-plan.md`；这是本 skill 的项目约定路径，覆盖 `superpowers:writing-plans` 默认路径，但不得降低 SDD 6.1.1 的格式兼容性。
 
 ### Step 3.3 — User Confirmation
 
@@ -310,7 +324,7 @@ Present in conversation (do NOT use EnterPlanMode). User confirms → proceed; a
 
 **唯一合法路径：** Phase 3 Hard Gate 通过 → Step 4.1 准备上下文 → Step 4.2 调用 superpowers → superpowers 完成后 Step 4.3 生成 Eval Prompts。
 
-**Goal:** 委托 superpowers 执行 Plan，获得 dev→spec review→code quality review→fix 循环。
+**Goal:** 委托 superpowers 执行 Plan，获得 implementer → task reviewer（spec compliance + code quality）→ fix/re-review → final whole-branch review 的 SDD 6.1.1 流程。
 
 ### Step 4.1 — 准备委托上下文
 
@@ -318,13 +332,25 @@ Present in conversation (do NOT use EnterPlanMode). User confirms → proceed; a
 1. Plan 文件路径: `.claude/plans/<skill-name>-<变更主题>-plan.md`
 2. 领域约束: 使用 [references/templates.md#delegation-context](references/templates.md#delegation-context) 模板，填入当前 skill 信息
 
+额外组装 SDD 6.1.1 执行约束：
+1. 执行 Task 1 前进行 Pre-Flight Plan Review，检查 Task 之间是否互相矛盾、是否与 Global Constraints 冲突。
+2. 每个 Task dispatch 前使用 `scripts/task-brief PLAN_FILE N` 生成 task brief，brief 是 implementer 的需求单一来源。
+3. 每个 implementer 必须写详细 report file，只在最终回复中返回短状态、commit、测试摘要、concerns、report path。
+4. 每个 Task 完成后使用 `scripts/review-package BASE HEAD` 生成 diff package，再交给 task reviewer。
+5. task reviewer 使用单个 review gate 同时判断 spec compliance 与 code quality。
+6. Critical/Important findings 必须由 fix subagent 修复并 re-review；fix report 必须追加覆盖测试命令与输出。
+7. 每个完成的 Task 必须写入 `.superpowers/sdd/progress.md` ledger，支持 compaction/resume。
+8. 全部 Task 完成后运行 final whole-branch review。
+9. 所有 subagent dispatch 必须显式指定 model；不要依赖 session 默认 model。
+
 ### Step 4.2 — 委托 superpowers:subagent-driven-development
 
 通过 Skill tool 调用 `superpowers:subagent-driven-development`，传入：
 - Plan 路径
-- 领域约束（作为 spec reviewer 的验证标准）
+- SDD 6.1.1 执行约束（pre-flight review / task brief / report file / review package / task reviewer / ledger / final review / explicit model selection）
+- 领域约束（作为 task reviewer 的 Global Constraints / spec reviewer attention lens）
 
-**Fallback:** 如果 superpowers 插件不可用，输出："⚠️ superpowers 插件未安装，无法执行 Phase 4。请安装后重试，或手动按 Plan 逐 Task 执行。"
+**Fallback:** 如果 superpowers 插件不可用，输出："⚠️ superpowers 插件未安装，无法执行 Phase 4。请安装后重试。" 然后停止并等待用户指示；禁止手动按 Plan 执行或降级为主 session 自行实现。
 
 ### Step 4.3 — 生成 Eval Prompts
 
@@ -354,13 +380,15 @@ Use the format from [references/templates.md#eval-prompts-template](references/t
 
 ### Step 5.1 — Structural Validation (Hard Gate)
 
-Read [references/validation-checklist.md](references/validation-checklist.md) and run Dimensions 1-5:
+Read [references/validation-checklist.md](references/validation-checklist.md) and run structural Dimensions 1-7:
 
 1. Spec Conformance
 2. Pattern Consistency
 3. Flow Completeness
 4. Structural Compliance
 5. Token Efficiency
+6. SDD 6.1.1 Handoff Compatibility
+7. Skill TDD / Micro-test Coverage
 
 **If any fail:**
 - List failures with evidence + fix suggestions
@@ -373,7 +401,7 @@ Read [references/validation-checklist.md](references/validation-checklist.md) an
 
 使用 Step 4.3 生成的 Eval Prompts，spawn eval agent（instructions: [agents/skill-creator-eval.md](agents/skill-creator-eval.md)）执行模拟验证。
 
-**验证维度（详见 [references/validation-checklist.md#dimension-6-behavioral-correctness](references/validation-checklist.md#dimension-6-behavioral-correctness)）：**
+**验证维度（详见 [references/validation-checklist.md#dimension-8-behavioral-correctness](references/validation-checklist.md#dimension-8-behavioral-correctness)）：**
 
 | 维度 | 通过标准 |
 |------|----------|

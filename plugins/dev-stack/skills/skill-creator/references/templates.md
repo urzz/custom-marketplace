@@ -108,36 +108,62 @@ MODIFY path:
 
 ## Task Format
 
-Phase 3 — use this format for every Task in the Plan:
+Phase 3 — Plan 必须以此 header 开头，并使用 `.claude/plans/<skill-name>-<变更主题>-plan.md` 保存：
+
+```markdown
+# <Feature Name> Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** [one sentence]
+
+**Architecture:** [2-3 sentences]
+
+**Tech Stack:** [markdown / skill files / validation commands]
+
+## Global Constraints
+
+- [constraint copied from Spec; exact values only]
+- [constraint copied from Spec; exact values only]
+
+---
+```
+
+Use this format for every Task:
 
 ```markdown
 ### Task N: [名称]
 
 **Files:**
 - Create: `exact/path/to/file.md`
-- Modify: `exact/path/to/existing.md` (which section)
+- Modify: `exact/path/to/existing.md` (section or line range)
 - Delete: `exact/path/to/remove.md`
 
-**Steps:**
-- [ ] Step N.1: [具体动作，包含完整内容，不用 placeholder]
-- [ ] Step N.2: [具体动作]
-- [ ] Step N.3 (验证): [验证条件作为可执行的检查步骤]
+**Interfaces:**
+- Consumes: [inputs from Spec or previous Tasks; exact section names / file paths]
+- Produces: [outputs later Tasks rely on; exact section names / file paths]
+
+- [ ] **Step N.1: [具体动作]**
+
+[完整动作说明；如修改文案，给出要插入或替换的准确文本。]
+
+- [ ] **Step N.2: [验证动作]**
+
+Run: `[exact command]`
+Expected: `[exact expected output shape]`
 
 **Acceptance Criteria:**
-- [criterion 1 — spec reviewer 用此判断 compliance]
-- [criterion 2]
+- Pattern 结构约束: [来自 Spec Section 3 Architecture]
+- 业务意图: [来自 First Principles / Delta Spec]
+- 验收标准: [可验证条件]
 ```
 
-**格式规则：**
-- Steps 必须自包含（不引用外部文件，不用 placeholder 如 "implement later" / "similar to Task N"）
-- 重复代码也要完整写出（sub agent 可能不按顺序读 Task）
-- 最后一步必须是验证步骤（implementer 自检）
-- Acceptance Criteria 写明通过标准，供 superpowers spec reviewer 做 compliance check
-- Acceptance Criteria 必须包含三类信息（Phase 3 输出时直接写入，不需要 implementer 去查外部文件）：
-  1. **Pattern 结构约束**（来自 Spec Section 3 Architecture — 该 Task 涉及的架构模式、文件结构、命名规范）
-  2. **业务意图**（来自 Spec Section 1 First Principles — 该 Task 解决什么问题、不可削减的核心是什么）
-  3. **验收标准**（来自 Spec Section 5 Success Criteria — 与该 Task 相关的具体可验证条件）
-- Plan 是 self-contained 的执行文档 — Acceptance Criteria 必须包含 subagent 判断完成所需的全部信息，禁止引用外部 Spec 文件
+**SDD 6.1.1 格式规则：**
+- `### Task N:` 标题和 checkbox steps 是 mandatory；`scripts/task-brief PLAN_FILE N` 依赖这个结构提取任务。
+- `Global Constraints` 是 reviewer 的 attention lens；必须包含跨 Task 的 exact constraints。
+- `Interfaces` 是 implementer 理解相邻 Task 依赖的唯一入口；即使无依赖也写 `Consumes: None` / `Produces: ...`。
+- Task brief 必须包含 exact values；dispatch prompt 不应粘贴完整历史或重复完整 plan。
+- 每个 Task 必须包含一个 focused validation step；文档任务可使用 `grep` / `wc` / markdown link scan。
 
 **CREATE 拆分参考：**
 - Task 1: 创建 SKILL.md 骨架（frontmatter + workflow overview + step 标题）
@@ -155,10 +181,23 @@ Phase 3 — use this format for every Task in the Plan:
 
 Phase 4 — 委托 superpowers:subagent-driven-development 时注入的领域约束模板。
 
-```
+```markdown
 请执行 Plan（路径: `.claude/plans/<skill-name>-<变更主题>-plan.md`）。
 
-**领域约束（spec reviewer 须验证）：**
+该路径是本 skill 的项目约定，覆盖 `superpowers:writing-plans` 的默认 `docs/superpowers/plans/...`；但 Plan 格式必须兼容 `superpowers:subagent-driven-development` 6.1.1。
+
+**SDD 6.1.1 执行约束：**
+- 执行 Task 1 前进行 Pre-Flight Plan Review；发现 Plan 内冲突或与 Global Constraints 冲突时，批量询问用户后再执行。
+- 每个 Task dispatch 前运行 `scripts/task-brief PLAN_FILE N`，将生成的 brief path 交给 implementer；不要把完整 Plan 粘贴给 implementer。
+- 每个 implementer 必须写 report file，并在短回复中返回 Status / commits / one-line test summary / concerns / report file path。
+- 每个 Task 完成后运行 `scripts/review-package BASE HEAD`，将 diff package path、task brief path、report file path、Global Constraints 交给 task reviewer。
+- task reviewer 是单个 gate，同时返回 spec compliance 与 code quality verdict。
+- Critical/Important findings 必须通过 fix subagent 修复，并在 report file 追加覆盖测试命令与输出；修复后必须 re-review。
+- 每个 Task review clean 后写入 `.superpowers/sdd/progress.md` ledger。
+- 所有 Task 完成后运行 final whole-branch review；final review 也使用 `scripts/review-package MERGE_BASE HEAD`。
+- 所有 subagent dispatch 必须显式指定 model（explicit model selection），按任务复杂度选择 cheap / standard / most capable，不依赖 session 默认 model。
+
+**领域约束（task reviewer 须验证）：**
 - description: starts with "Use when", third person, ≤ 1024 chars
 - Body (SKILL.md): < 500 lines
 - Progressive disclosure: content > 100 lines → 移入 references/
@@ -166,7 +205,9 @@ Phase 4 — 委托 superpowers:subagent-driven-development 时注入的领域约
 - Stable logic (regex, validation, shell commands) → scripts/
 - Files > 100 lines → must include `## Contents` with anchor links
 - name format: ≤ 64 chars, only letters/numbers/hyphens
-- 业务意图、Pattern 结构约束、验收标准均已编码到 Plan 每个 Task 的 Acceptance Criteria 中，subagent 无需查阅外部 Spec 文件
+- Plan 每个 Task 的 Acceptance Criteria 必须包含业务意图、Pattern 结构约束、验收标准
+- CREATE/MODIFY skill 文档变更必须包含 Skill TDD 验证策略：RED baseline / GREEN expected behavior / REFACTOR loophole checks
+- Behavior-shaping guidance 必须包含 wording micro-test strategy：no-guidance control、5+ reps、人工检查 flagged matches
 
 **MODIFY 额外约束：**
 - 只修改 Plan 中明确列出的内容

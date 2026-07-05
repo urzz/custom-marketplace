@@ -8,7 +8,9 @@ Used by Phase 5 to validate skill output before delegating to skill-creator Eval
 - Dimension 3: Flow Completeness
 - Dimension 4: Structural Compliance
 - Dimension 5: Token Efficiency
-- Dimension 6: Behavioral Correctness
+- Dimension 6: SDD 6.1.1 Handoff Compatibility
+- Dimension 7: Skill TDD and Wording Coverage
+- Dimension 8: Behavioral Correctness
 
 ---
 
@@ -22,6 +24,8 @@ Compare implementation against the confirmed Spec from Phase 2.
 | Success criteria coverage | Every assertion in Spec Section 5 is achievable by the workflow | Trace each criterion to a specific Step |
 | Boundary respect | Nothing in Spec Section 4 "明确不做的事" is present | Search for prohibited behaviors |
 | Gate coverage | Every Hard Gate in Spec Section 3 has a corresponding user confirmation point | Count gates in Spec vs implementation |
+| SDD handoff coverage | If Spec/Plan delegates to `superpowers:subagent-driven-development`, Plan and Delegation Context include task brief, report file, review package, task reviewer, ledger, final review, and explicit model selection | Trace Spec success criteria to Phase 3/4 text and templates |
+| Skill TDD coverage | CREATE/MODIFY changes include RED baseline, GREEN expected behavior, and REFACTOR/loophole checks | Read Spec/Plan validation strategy |
 
 ---
 
@@ -47,6 +51,9 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 | Gate enforcement | Hard Gates use imperative language ("Wait for user confirmation before proceeding") |
 | Error/loop handling | Any loop has a maximum iteration count |
 | Path coverage | Both CREATE and MODIFY paths are handled (if applicable) |
+| SDD execution handoff | Phase 4 delegation explains pre-flight review, `scripts/task-brief`, report file, `scripts/review-package`, task reviewer, fix/re-review, progress ledger, and final whole-branch review |
+| Model selection | Subagent dispatch guidance requires explicit model selection |
+| Micro-test path | Behavior-shaping guidance includes wording micro-test strategy with no-guidance control and 5+ reps |
 
 ---
 
@@ -58,7 +65,7 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 | description ≤ 1024 chars | Character count ≤ 1024 | `echo -n "<desc>" \| wc -c` |
 | description third person | No "I", "you", "we" in description | Manual check |
 | Body < 500 lines | Line count < 500 (excluding frontmatter) | `awk '/^---$/{n++; next} n>=2' SKILL.md \| wc -l` |
-| No nested references | Files in references/ do not link to other files in references/ | `grep -rn '\[.*\](.*\.md)' references/` |
+| No nested references | Files in references/ do not link to other files in references/ | `grep -rn --exclude=validation-checklist.md '\[.*\](.*\.md)' references/` |
 | Large file TOC | Files > 100 lines have `## Contents` section | Manual check |
 | name format | ≤ 64 chars, letters/numbers/hyphens only | Manual check |
 
@@ -75,13 +82,36 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 
 ---
 
-## Dimension 6: Behavioral Correctness
+## Dimension 6: SDD 6.1.1 Handoff Compatibility
 
-**验证时机：** Phase 5.2（前提: Dimension 1-5 全部通过）
+| Check | Pass Criteria |
+|-------|--------------|
+| Plan header | Plan template includes Goal, Architecture, Tech Stack, and Global Constraints |
+| Task extractability | Task template uses `### Task N:` headings and checkbox steps compatible with `scripts/task-brief PLAN_FILE N` |
+| Interfaces | Every Task template includes `Interfaces` with Consumes / Produces |
+| Reviewer inputs | Delegation Context names task brief path, report file path, review package path, and Global Constraints as reviewer inputs |
+| Review model | Delegation Context describes single task reviewer for spec compliance + code quality |
+| Durable progress | Delegation Context requires `.superpowers/sdd/progress.md` ledger updates |
+| Final review | Delegation Context requires final whole-branch review after all Tasks |
+| Explicit model | Delegation Context requires explicitly specified model for every subagent dispatch |
+
+## Dimension 7: Skill TDD and Wording Coverage
+
+| Check | Pass Criteria |
+|-------|--------------|
+| RED baseline | CREATE/MODIFY Spec or Plan captures current failure/gap before changing guidance |
+| GREEN expected behavior | Spec or Plan states the expected post-skill behavior |
+| REFACTOR loopholes | Validation plan includes loophole/rationalization checks where the skill enforces discipline |
+| Failure form match | Guidance form follows “Match the Form to the Failure”: discipline → prohibition/red flags, shape → positive recipe, omitted element → required slot, conditional → observable predicate |
+| Wording micro-test | Behavior-shaping guidance includes no-guidance control, 5+ reps per variant, and manual review of flagged matches |
+
+## Dimension 8: Behavioral Correctness
+
+**验证时机：** Phase 5.2（前提: Dimension 1-7 全部通过）
 
 **验证方法：** 使用 Phase 4 Step 4.3 生成的 Eval Prompts，spawn eval agent 执行模拟验证。
 
-### 6.1 路径正确性
+### 8.1 路径正确性
 
 | 检查项 | 通过标准 |
 |--------|----------|
@@ -89,7 +119,7 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 | MODIFY prompt → MODIFY path | 100% 路径匹配预期 |
 | Routing 规则与 SKILL.md Routing section 一致 | 无矛盾 |
 
-### 6.2 Gate 完整性
+### 8.2 Gate 完整性
 
 | 检查项 | 通过标准 |
 |--------|----------|
@@ -97,7 +127,7 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 | Gate 通过前不执行后续 Phase | 无跳过行为 |
 | Gate 通过后立即执行 Persist（如有） | Persist 产物存在 |
 
-### 6.3 边界处理
+### 8.3 边界处理
 
 | 检查项 | 通过标准 |
 |--------|----------|
@@ -105,7 +135,7 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 | 跨领域输入（与 skill 创建无关） | 不触发，或正确拒绝 |
 | 部分信息输入（缺少关键上下文） | 提问补充，不假设 |
 
-### 6.4 输出格式
+### 8.4 输出格式
 
 | 检查项 | 通过标准 |
 |--------|----------|
@@ -114,7 +144,7 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 | Progressive disclosure | content > 100 lines in references/ |
 | TOC presence | files > 100 lines have `## Contents` |
 
-### 6.5 一致性
+### 8.5 一致性
 
 | 检查项 | 通过标准 |
 |--------|----------|
@@ -131,9 +161,9 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 
 ## Validation Flow
 
-1. Run Dimensions 1-5
-2. If ALL pass → run Dimension 6 (Behavioral Correctness)
-3. If ALL 6 pass → proceed to Layer 2 (skill-creator Eval)
+1. Run Dimensions 1-7
+2. If ALL pass → run Dimension 8 (Behavioral Correctness)
+3. If ALL 8 pass → proceed to Layer 2 (skill-creator Eval)
 4. If ANY fail → list failures with specific evidence and fix suggestions → return to Phase 4
 5. Maximum 2 fix-and-retry cycles before stopping
 
@@ -146,4 +176,6 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 | Flow Completeness | ✓ PASS / ✗ FAIL | [specific finding] |
 | Structural Compliance | ✓ PASS / ✗ FAIL | [specific finding] |
 | Token Efficiency | ✓ PASS / ✗ FAIL | [specific finding] |
+| SDD 6.1.1 Handoff Compatibility | ✓ PASS / ✗ FAIL | [specific finding] |
+| Skill TDD and Wording Coverage | ✓ PASS / ✗ FAIL | [specific finding] |
 | Behavioral Correctness | ✓ PASS / ✗ FAIL | [specific finding] |
