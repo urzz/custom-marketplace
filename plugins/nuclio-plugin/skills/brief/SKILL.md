@@ -46,8 +46,9 @@ Follow a Sequential + HITL + Grill clarification pattern:
 1. Locate or create the current change under `.dev-docs/changes/<change-id>/`.
 2. Load only minimal project baseline context.
 3. Clarify missing requirements with one-question-at-a-time Grill.
-4. Write or update `brief.md`, `spec.md`, and `state.json` by preserving existing fields and merging required updates.
-5. Stop and ask the user to review before `/nuclio:design`.
+4. Write or update `brief.md`, `spec.md`, and `state.json` by preserving existing fields and merging required updates from `references/protocol.md`.
+5. Treat generated `brief.md` and `spec.md` as draft artifacts until `state.json.gates.brief` is `approved` or the user explicitly approves the Brief Gate in the current turn.
+6. Stop and ask the user to review before `/nuclio:design`.
 
 ## Phase 1: Locate or Create Change
 
@@ -106,6 +107,14 @@ Rules:
 
 ## Phase 4: Write Brief and Spec
 
+Before writing or updating `brief.md` and `spec.md`, update the current change `state.json` according to `references/protocol.md` Stage entry rules:
+
+- Preserve existing fields, nested objects, metadata, `current_task`, unknown keys, and existing `gates` values.
+- Merge `phase: "brief"`.
+- Merge `status: "in_progress"`.
+- Do not mark `gates.brief` as `approved` during stage entry.
+- If `state.json` is invalid JSON, STOP and report the parse problem instead of overwriting it.
+
 Create new `brief.md` with these required template sections. When updating an existing `brief.md`, keep these required sections and preserve already-confirmed valuable extra sections (for example `Constraints`, `Dependencies`, `API Contract`, or `Migration Notes`) instead of deleting them for template conformity:
 
 ```markdown
@@ -132,13 +141,16 @@ Create new `spec.md` with these required template sections. When updating an exi
 ## Out of Scope
 ```
 
-Update `state.json` for the current change according to the State Protocol in `references/protocol.md`:
+After writing or updating `brief.md` and `spec.md`, update `state.json` for the current change according to `references/protocol.md` Gate pending and State Merge rules:
 
-- Preserve existing fields, nested objects, and unknown keys; merge these updates instead of rewriting `state.json` as a minimal JSON object.
-- `phase`: `brief`
-- `status`: `draft` until user approves, then `approved`
-- `gates.brief`: `pending` until user approval
+- Preserve existing fields, nested objects, metadata, `current_task`, unknown keys, and unrelated `gates` values.
+- Merge `phase: "brief"`.
+- Merge `status: "draft"`.
+- Merge `gates.brief: "pending"` until user approval.
+- Record or preserve artifact paths for `brief.md` and `spec.md` when an `artifacts` object exists or is being created.
 - Current task tracking must not be broken. In the Brief stage, set `current_task` to `null` when creating a new state file, or preserve/merge any existing compatible current-task field without deleting unrelated state.
+- Do not set `gates.brief` to `approved` merely because `brief.md` and `spec.md` exist.
+- If the user explicitly approves the Brief Gate in the current turn, apply the Gate approval rule from `references/protocol.md`; otherwise leave `gates.brief` as `pending`.
 
 Keep artifact content concise, traceable to user input or inferred project context, and explicitly mark unresolved items in `Open Questions` rather than inventing decisions. If the user's change idea involves hooks, runtime, scripts, CLI, daemon, MCP, multi-agent platform, cross-project RAG, or context budget automation, distinguish the context:
 
@@ -150,14 +162,30 @@ Keep artifact content concise, traceable to user input or inferred project conte
 
 After writing `brief.md`, `spec.md`, and the `state.json` update, stop. Do not begin design or implementation.
 
-Use this exact message:
+The gate output must include:
+
+- Current change path: `.dev-docs/changes/<change-id>/`
+- Current state summary: `phase: brief`, `status: draft`, `gates.brief: pending`
+- Review files: `brief.md`, `spec.md`
+- Next command after approval: `/nuclio:design`
+- A warning that `spec.md` existence does not mean Design readiness until Brief Gate is approved.
+
+Use this exact message shape:
 
 ```text
-STOP. Brief Gate：请 review `brief.md` 和 `spec.md`。确认后才能进入 `/nuclio:design`；如需调整，请先修改 brief/spec。
+STOP. Brief Gate：请 review 当前 change 的 `brief.md` 和 `spec.md`。
+
+Current change: `.dev-docs/changes/<change-id>/`
+Current state: `phase=brief`, `status=draft`, `gates.brief=pending`
+Review files: `brief.md`, `spec.md`
+Next after approval: `/nuclio:design`
+
+注意：`spec.md` 已生成只表示需求草稿存在，不代表 Brief Gate 已批准；确认后才能进入 `/nuclio:design`。如需调整，请先修改 brief/spec。
 ```
 
 ## Behavior Verification
 
 - RED: baseline may jump directly to technical plan from vague idea.
-- GREEN: skill writes brief/spec and stops at Brief Gate.
+- GREEN: skill writes brief/spec, preserve/merge updates `state.json` to `phase=brief`, `status=draft`, `gates.brief=pending`, and stops at Brief Gate with current change, state summary, review files, and next `/nuclio:design` command.
 - REFACTOR: check no default full `.dev-docs` read, no implementation before gate, every question has recommendation.
+- Wording micro-test: prompts saying “brief/spec 都有了，直接 design” must not imply file existence equals approval; the skill must require Brief Gate approval or current-turn explicit authorization.
