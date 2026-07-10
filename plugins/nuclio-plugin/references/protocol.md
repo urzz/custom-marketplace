@@ -9,7 +9,7 @@
 - [State Transition Rules](#state-transition-rules)
 - [Gate Readiness Rules](#gate-readiness-rules)
 - [State Merge Rules](#state-merge-rules)
-- [Future Deterministic Helper Boundary](#future-deterministic-helper-boundary)
+- [Deterministic Helper Boundary](#deterministic-helper-boundary)
 - [Hard Rules](#hard-rules)
 
 ## Core Principle
@@ -182,14 +182,23 @@ All `state.json` updates must be preserve/merge updates:
 - Only update fields required by the current transition.
 - If JSON is invalid or cannot be parsed, STOP and report the parse problem instead of overwriting the file.
 
-## Future Deterministic Helper Boundary
+## Deterministic Helper Boundary
 
-A future script may be added only as a small deterministic validate/merge helper for `state.json`. Such a helper may validate allowed transitions and preserve/merge fields, but it must not:
+Small deterministic helper scripts are allowed for protocol safety. They may:
 
-- auto-advance gates without user confirmation;
+- inspect a current change `state.json`;
+- validate gate readiness from `state.json.gates.<stage>` plus explicit current-turn authorization flags;
+- check gate readiness before a skill proceeds past a HITL boundary;
+- perform preserve/merge updates when the caller passes an explicit patch;
+- report parse errors, missing required files, missing gates, blocked status, and artifact paths.
+
+They must not:
+
+- auto-advance or auto-approve gates without current-turn user confirmation;
+- infer workflow state from chat history;
+- read full conversation history or broad project context;
 - become a Nuclio runtime, daemon, CLI product, hook, MCP server, or background automation;
-- replace HITL review gates;
-- read full conversation history or inject broad context.
+- replace HITL review gates.
 
 ## Hard Rules
 

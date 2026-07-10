@@ -17,6 +17,7 @@
 - `/nuclio:verify`
 - `/nuclio:fold`（prompt / protocol layer）
 - shared references for file protocol, Grill Protocol, context manifest, and roadmap
+- small deterministic protocol helper scripts for state inspection, gate checks, and preserve/merge state updates
 
 本 MVP 未实现：
 
@@ -24,8 +25,8 @@
 - `/nuclio:resume`
 - hooks
 - runtime state automation
-- scripts
-- CLI
+- broad scripts beyond small deterministic protocol helpers
+- CLI product or CLI-like workflow tooling
 - daemon
 - MCP
 - multi-agent platform
@@ -43,11 +44,13 @@ Deferred work 必须保留相同原则：
 - verification happens by diff
 - only stable knowledge is folded back
 
+Small deterministic protocol helper scripts are allowed in MVP when bounded to state inspection, gate checks, and preserve/merge updates. Broader CLI/runtime capabilities remain deferred, including workflow products, skeleton-generation tooling, hooks, daemons, MCP servers, background automation, and runtime state automation.
+
 ## Implementation Sequence
 
 1. 实现 `/nuclio:status`，用于 active change inspection。
 2. 实现 `/nuclio:resume`，用于不自动执行的 state recovery。
-3. 添加可选 scripts，用于 `.dev-docs` skeleton generation 和 protocol validation。
+3. 添加未来可选 scripts，用于 `.dev-docs` skeleton generation 和 broader CLI-like tooling；small deterministic protocol helper scripts for validation are already allowed within the MVP boundary.
 4. 添加可选 hooks/runtime，用于 SessionStart breadcrumb 和 `.nuclio/runtime/cache/temp` state。
 5. 添加 context budget reporting 和 verify-loop enhancements。
 
@@ -111,19 +114,20 @@ Acceptance criteria：
 
 ### Optional scripts
 
-Goal：添加用于 skeleton generation 和 protocol validation 的 deterministic helpers。
+Goal：添加用于 `.dev-docs` skeleton generation 和 broader protocol tooling 的 optional scripts。Small deterministic protocol helper scripts for state inspection, gate checks, and preserve/merge updates are already allowed by the MVP boundary.
 
 Non-goals：
 - no full CLI product
 - no hidden automation
+- no replacement for small MVP protocol helpers that are already allowed
 
 Dependencies：
 - stable protocol after MVP usage
 
 Acceptance criteria：
-- scripts are small and deterministic
-- scripts do not replace human gates
-- skills document exactly when scripts may run
+- broader skeleton generation / CLI-like tooling remains deferred until explicitly designed
+- small deterministic protocol helper scripts remain bounded by `protocol.md` and must not replace human gates
+- skills document exactly when any optional broader scripts may run
 
 ### Hooks/runtime
 

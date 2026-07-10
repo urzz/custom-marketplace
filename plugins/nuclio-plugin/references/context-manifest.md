@@ -4,6 +4,7 @@
 - [Purpose](#purpose)
 - [Files](#files)
 - [Implement Manifest](#implement-manifest)
+  - [Task-Level Scope](#task-level-scope)
 - [Verify Manifest](#verify-manifest)
 - [Context Budget](#context-budget)
 - [Forbidden Inputs](#forbidden-inputs)
@@ -39,6 +40,22 @@ Context manifest 声明某个 stage 可以加载哪些 stable context。它防�
 
 它不得包含 full chat history、raw logs、all `.dev-docs` documents、all source files、comments 或 reviewer history。
 
+### Task-Level Scope
+
+For subagent-driven implementation, each `context/implement.jsonl` entry may include a `tasks` field:
+
+~~~json
+{"path":".dev-docs/changes/2026-07-09-example/spec.md","kind":"change","mode":"required","tasks":["*"],"reason":"All tasks need acceptance criteria"}
+~~~
+
+Rules:
+
+- `tasks: ["*"]` means the entry applies to every task.
+- `tasks: ["T1", "T2"]` means the entry applies only to listed task ids.
+- Missing `tasks` should be treated as `tasks: ["*"]` for backward compatibility.
+- A worker for task `Tn` should load matching `required` entries first and matching `jit` entries only when the task acceptance requires them.
+- A worker must not load entries for unrelated tasks merely because they are present in the manifest.
+
 ## Verify Manifest
 
 `verify.jsonl` 应小于 `implement.jsonl`，并且通常包含：
@@ -72,6 +89,7 @@ MVP 不自动化 token counting；budget 是行为约束。
 - full conversation history
 - all `.dev-docs/`
 - all source files
+- manifest entries scoped only to unrelated tasks
 - proposal/comment/reviewer history
 - raw long logs
 - session journals
