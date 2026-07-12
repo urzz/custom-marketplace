@@ -1,5 +1,9 @@
 {
   "name": "nuclio",
-  "description": "Nucl.io personal AI-coding harness skills for project init, brief, design, implement, verify, and fold workflows",
-  "version": "0.1.0"
+  "description": "Nucl.io personal AI-coding harness with explicit project init, brief, design, lightweight task implementation, change-wide verify, and approval-first fold workflows",
+  "version": "0.2.0",
+  "author": {
+    "name": "Jade Liu",
+    "email": "[redacted-email]"
+  }
 }

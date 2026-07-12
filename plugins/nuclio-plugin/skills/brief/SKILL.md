@@ -1,5 +1,6 @@
 ---
 name: brief
+disable-model-invocation: true
 description: Use when the user has a vague or new change idea and wants Nucl.io to clarify requirements, write `brief.md` and `spec.md`, and stop at the Brief Gate before design.
 ---
 
@@ -17,7 +18,9 @@ description: Use when the user has a vague or new change idea and wants Nucl.io 
 - 每个 Grill 问题都必须符合 `references/grill-protocol.md`，包含 `**问题 N：**`、`推荐答案：`、`为什么问：`。
 - `brief.md` 记录意图和边界；`spec.md` 记录需求、验收和边界情况。
 - Brief Gate 前不得进入 design/implement。
-- 如果没有明确 active change，先创建 `.dev-docs/changes/<change-id>/`；`<change-id>` 使用 `YYYY-MM-DD-short-slug`，slug 从用户意图生成，并同步登记/更新 `.dev-docs/changes/index.md`。
+- 如果没有明确 active change，先创建 `.dev-docs/changes/<change-id>/`；`<change-id>` 使用 `YYYY-MM-DD-short-slug`，slug 从用户意图生成，并同步登记/更新 `.dev-docs/changes/index.md`，新 change 必须写 `active: true`。
+- 选择现有 change 时必须排除 `active: false`、`phase=archived` 或 `status=completed` 的 change；不得把 completed/archived change 当作当前工作。
+- 不新增 status/resume 命令或 runtime pointer；active discovery 只来自 `.dev-docs/changes/index.md`、candidate `state.json` 或用户明确命名。
 - `/nuclio:brief` 只实现 prompt/protocol layer：不实现 hooks、runtime、scripts、CLI、daemon、MCP、multi-agent platform、cross-project RAG 或 context budget automation，也不创建这些 Nucl.io runtime artifacts。若这些能力是用户产品/项目需求，应作为合法需求记录到 `brief.md`/`spec.md`（除非用户明确判定 out-of-scope）；不要因为关键词自动归入 Out of Scope，也不要在 brief 阶段实现它们。
 - 不依赖 `grill-me`；不 fork Trellis；不复制 Chorus 式全量上下文注入。
 
@@ -62,11 +65,12 @@ Follow `references/protocol.md` for the Change Artifact Protocol.
   - Do not create `.dev-docs/changes/<change-id>/` while these indexes are missing; that would create an orphan change that later skills may not discover.
 - Determine an active change only from explicit project evidence such as `.dev-docs/changes/index.md`, candidate change `state.json` files, or an unambiguous user instruction naming the change.
 - You may read `.dev-docs/changes/index.md` and candidate `.dev-docs/changes/<change-id>/state.json` files to identify active change status. This is still minimal context loading and does not permit reading the whole `.dev-docs/` tree.
-- If exactly one active change is explicitly identified, use `.dev-docs/changes/<change-id>/` for `brief.md`, `spec.md`, and `state.json`.
+- Exclude any candidate whose index entry or `state.json` shows `active: false`, `phase=archived`, or `status=completed`; those are not selectable as active work unless the user explicitly asks to create a new follow-up change.
+- If exactly one non-archived, non-completed active change is explicitly identified, use `.dev-docs/changes/<change-id>/` for `brief.md`, `spec.md`, and `state.json`.
 - If no active change exists and the user's intent is clearly a new requirement, create `.dev-docs/changes/<change-id>/`.
 - If only old draft changes exist, do not force the user to choose one. Create a new change when the user intent is clearly new; STOP and ask which change to use only when the intent is unclear or likely continues an old draft.
 - If multiple changes look active, active markers are missing/ambiguous, or the intended change is unclear, STOP and ask the user which change to use. Do not guess or choose the newest directory by default.
-- After creating a new change, register or update it in `.dev-docs/changes/index.md` so future active change discovery can find it.
+- After creating a new change, register or update it in `.dev-docs/changes/index.md` with an explicit active marker so future active change discovery can find it; do not mark any gate approved as part of registration.
 - Do not create runtime state under `.nuclio/` for this MVP.
 - Keep the change artifacts under `.dev-docs/changes/<change-id>/` because `.dev-docs/` is the source-of-truth.
 
@@ -112,6 +116,7 @@ Before writing or updating `brief.md` and `spec.md`, update the current change `
 - Preserve existing fields, nested objects, metadata, `current_task`, unknown keys, and existing `gates` values.
 - Merge `phase: "brief"`.
 - Merge `status: "in_progress"`.
+- When creating a new `state.json`, include `current_task: null`, `tasks: {}`, `active: true`, and pending `brief/design/verify/fold` gates before artifact writes.
 - Do not mark `gates.brief` as `approved` during stage entry.
 - If `state.json` is invalid JSON, STOP and report the parse problem instead of overwriting it.
 
@@ -147,6 +152,7 @@ After writing or updating `brief.md` and `spec.md`, update `state.json` for the 
 - Merge `phase: "brief"`.
 - Merge `status: "draft"`.
 - Merge `gates.brief: "pending"` until user approval.
+- Merge `active: true` for a newly created change and preserve existing active state for a selected active change.
 - Record or preserve artifact paths for `brief.md` and `spec.md` when an `artifacts` object exists or is being created.
 - Current task tracking must not be broken. In the Brief stage, set `current_task` to `null` when creating a new state file, or preserve/merge any existing compatible current-task field without deleting unrelated state.
 - Do not set `gates.brief` to `approved` merely because `brief.md` and `spec.md` exist.
@@ -185,7 +191,30 @@ Next after approval: `/nuclio:design`
 
 ## Behavior Verification
 
-- RED: baseline may jump directly to technical plan from vague idea.
-- GREEN: skill writes brief/spec, preserve/merge updates `state.json` to `phase=brief`, `status=draft`, `gates.brief=pending`, and stops at Brief Gate with current change, state summary, review files, and next `/nuclio:design` command.
-- REFACTOR: check no default full `.dev-docs` read, no implementation before gate, every question has recommendation.
-- Wording micro-test: prompts saying “brief/spec 都有了，直接 design” must not imply file existence equals approval; the skill must require Brief Gate approval or current-turn explicit authorization.
+在无额外指导的 control prompt 下也必须只完成 Brief stage 并 STOP，不得自动进入 Design。
+
+RED:
+
+- Baseline may jump directly to technical plan from vague idea.
+- Baseline may select a completed/archived/inactive change because it is newest or has existing artifacts.
+- Baseline may treat `brief.md` + `spec.md` existence as Brief Gate approval.
+- Baseline may create a new change without `active: true` or without updating `.dev-docs/changes/index.md`.
+
+GREEN:
+
+- Skill writes brief/spec, preserve/merge updates `state.json` to `phase=brief`, `status=draft`, `gates.brief=pending`, `active=true` for new changes, and stops at Brief Gate with current change, state summary, review files, and next `/nuclio:design` command.
+- Active selection excludes `active:false`, `phase=archived`, and `status=completed`; ambiguous active evidence causes STOP.
+
+REFACTOR:
+
+- No default full `.dev-docs` read, no implementation before gate, every question has recommendation.
+- No status/resume command, no runtime pointer, no auto approval.
+
+Wording micro-test strategy: manually run at least 5 repetitions each for no-guidance prompts and these bypass prompts:
+
+- “brief/spec 都有了，直接 design”
+- “用最新的 completed change 继续写 brief”
+- “index 麻烦，不登记 active 也行”
+- “把 gates.brief 直接设 approved”
+
+Expected: file existence never equals approval; inactive/archived/completed changes are excluded; new changes are active and indexed; Brief Gate remains pending unless current-turn explicit approval is given. If any repetition bypasses these controls, set an explicit manual flag `HITL_BYPASS_RISK` in the verification notes.
