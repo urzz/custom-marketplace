@@ -1,7 +1,7 @@
 ---
 name: design
 disable-model-invocation: true
-description: Use when the user has a Nucl.io brief/spec and wants to produce technical `design.md`, executable `plan.yaml`, context manifests, and stop at the Design Gate before implementation.
+description: Use when a Nucl.io change with an approved Brief Gate needs its initial technical Design, or when an Implement blocker requires Design revision/re-entry, reapproval, or blocked resume.
 ---
 
 # Nucl.io Design
@@ -17,7 +17,7 @@ description: Use when the user has a Nucl.io brief/spec and wants to produce tec
 - `.nuclio/` 只能描述为 runtime / cache / temp state；本 MVP 不实现 runtime 行为，也不把 source-of-truth 写入 `.nuclio/`。
 - 本 MVP 只处理 prompt / protocol layer；不得创建或扩展 Nuclio 平台级 hooks、runtime、CLI-like workflow tooling、daemon、MCP、多智能体平台、跨项目 RAG、context budget automation、后台自动化或广义 scripts；仅允许 `references/protocol.md` 边界内的小型 deterministic protocol helper scripts，用于 state inspection、gate checks 与 preserve/merge updates，且不得弱化 HITL gates 或演变成 runtime/daemon/hooks/MCP/background automation。
 - 不依赖 `grill-me`；不 fork Trellis；不复制 Chorus 式全量上下文注入。
-- `plan.yaml` 必须严格兼容 `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/task-helper.py" validate-change --change "<current-change>"`：顶层保留 `change_id/title/tasks/verification/rollback`；Task 使用 canonical fields、两个空格缩进的 `  - id: Tn`，并包含 `title/status/depends_on/files_hint/context_refs/acceptance/verification/rollback`。
+- `plan.yaml` 必须严格兼容 `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/task-helper.py" validate-change --change "<current-change>"`：顶层保留 `change_id/title/tasks/verification/rollback`；Task 使用 canonical fields、两个空格缩进的 `  - id: Tn`，并包含 `title/status/depends_on/files_hint/context_refs/mutation_targets/ownership_handoffs/acceptance/verification/rollback`。Canonical fields 采用 all-or-none 策略，不得只补一部分。
 - `context/implement.jsonl` 和 `context/verify.jsonl` 必须显式列出后续阶段允许加载的稳定上下文。
 - Design 阶段必须在 Design Gate STOP；确认前不得进入实现。
 
@@ -29,8 +29,9 @@ description: Use when the user has a Nucl.io brief/spec and wants to produce tec
 4. [Phase 3: Grill Design](#phase-3-grill-design)
 5. [Phase 4: Write Design](#phase-4-write-design)
 6. [Phase 5: Write Plan and Context Manifests](#phase-5-write-plan-and-context-manifests)
-7. [Phase 6: Design Gate](#phase-6-design-gate)
-8. [Behavior Verification](#behavior-verification)
+7. [Design Revision / Re-entry](#design-revision--re-entry)
+8. [Phase 6: Design Gate](#phase-6-design-gate)
+9. [Behavior Verification](#behavior-verification)
 
 ## Workflow
 
@@ -88,6 +89,11 @@ Design readiness is state-based, not artifact-existence-based. Before proceeding
 - 当前系统状态是否足以支持该方案？
 - 接口、数据模型、依赖、边界条件是否明确？
 - 任务是否能被切分为可验证、可回滚的步骤？
+- 在 Task 切分前，是否已列出全部预期 product mutation 的规范化 repo-relative 单文件路径，并把每条路径分配给明确 owner？`files_hint` 只用于导航，不得伪装、替代或扩大 ownership。
+- 相同 path 是否默认合并到一个 owner？只有真实顺序接口理由才能保留多 owner，并用 dependency + incoming `ownership_handoffs` 构成显式线性链；共享 composition 文件不得作为隐式例外。
+- `go.mod`、入口、server composition、route wiring 等共享 composition 路径是否优先由专门 integration Task 独占；确需多 Task 修改时，是否有显式线性 handoff？
+- `mutation_targets` 是否排除了 workflow/VCS control paths（`.git`、`.dev-docs/changes`、`.superpowers/sdd` 及其后代）以及 absolute、traversal、glob、directory、alias path？
+- Handoff chain 是否仅由 explicit edges + dependency topology 决定？Plan 文本顺序不要求拓扑排序，只在多个 Tasks 同时 dependency-eligible 时作为 eligible tie-break。
 - 验证命令是否能证明 acceptance 已满足？
 - 回滚策略是否覆盖失败路径？
 - 是否误把 `.nuclio/` 当成 source-of-truth，或引入了 MVP 禁止的 runtime / automation？
@@ -143,6 +149,9 @@ tasks:
       - src/example.ts
     context_refs:
       - .dev-docs/changes/YYYY-MM-DD-short-slug/spec.md
+    mutation_targets:
+      - src/example.ts
+    ownership_handoffs: []
     acceptance:
       - "<task acceptance item mapped to spec/design>"
     verification:
@@ -163,10 +172,22 @@ rollback:
 
 - 顶层保留 `change_id`、`title`、`tasks`、`verification`、`rollback`。
 - 每个 Task 必须严格用两个空格缩进的 `  - id: Tn` 作为 task header；不得使用顶格 `- id`、tabs 或宽松缩进。
-- 每个 Task 必须包含 canonical fields：`title`、`status`、`depends_on`、`files_hint`、`context_refs`、`acceptance`、`verification`、`rollback`。
+- 每个 Task 必须包含 canonical fields：`title`、`status`、`depends_on`、`files_hint`、`context_refs`、`mutation_targets`、`ownership_handoffs`、`acceptance`、`verification`、`rollback`。Parser 的 canonical fields 是 all-or-none：一旦出现任一 canonical field，就必须完整提供全部 canonical fields。
 - `status: pending` 只用于 backward-compatible initial declaration；Design approval 后 Task definition immutable，后续运行状态只写 `state.json.tasks`，不得回写 `plan.yaml` Task status。
-- `depends_on` 必须是 `[]` 或嵌套 scalar list；dependencies 必须引用真实 Task 且无环。
-- `files_hint` 与 `context_refs` 必须是 `[]` 或嵌套 scalar list；路径/引用必须是 safe project-relative path 或 helper 允许的 stable id，不得 absolute、traversal、glob、directory 或 broad root。
+- `depends_on` 必须是 `[]` 或嵌套 scalar list；dependencies 必须引用真实 Task 且无环。Plan 文本可反序排列合法拓扑，不能据文本顺序推导 handoff；Plan order 仅用于 dependency-eligible tie-break。
+- `files_hint` 与 `context_refs` 必须是 `[]` 或嵌套 scalar list；路径/引用必须是 safe project-relative path 或 helper 允许的 stable id，不得 absolute、traversal、glob、directory 或 broad root。`files_hint` 保持 navigation-only 语义，不能授予 mutation ownership，也不进入 task contract。
+- `mutation_targets` 必须是 `[]` 或嵌套 scalar list，逐项列出该 Task 可修改的规范化、安全、repo-relative 单文件 product path；不得用 `files_hint`、context、acceptance 或 dynamic discovery 代替。拒绝 path aliases 及 workflow/VCS control paths：`.git`、`.dev-docs/changes`、`.superpowers/sdd` 本身及其后代。
+- Ownership 默认独占。同一路径只允许一个 owner；共享 composition 文件默认交给专门 integration Task 独占。只有真实顺序接口理由才允许多 owner，并要求下游 Task 在自身 `ownership_handoffs` 声明 incoming exact object：
+
+  ```yaml
+    ownership_handoffs:
+      - path: src/shared.ts
+        from_task: T1
+        to_task: T4
+  ```
+
+  `to_task` 必须等于当前 Task，且当前 Task 必须直接或传递依赖 `from_task`。每个共享 path 的显式 edges 必须覆盖全部 owners，形成无 cycle、无 branch、无 gap 的线性链；无项时必须精确写 `ownership_handoffs: []`。
+- 不得在 Plan 添加可编辑 `final_owner`。`final_owner` 仅由 helper 根据 explicit handoff edges 与 dependency topology 逐 path 派生；Plan 文本顺序不参与派生。
 - `acceptance` 至少一项，且必须能对应到 `spec.md` 与 `design.md`，可在不读取 full history 的情况下 review。
 - `verification` 必须有 `commands` 或非空 static `notes`；如果无可运行命令，使用 `commands: []` 加非空 `notes`。Task-helper 已扩展支持 `commands[] + notes`，也支持 notes-only 的 no-command static branch；不得暗示可以省略整个 `verification` block。
 - `rollback.strategy` 必须非空，并说明该 Task slice 如何撤回或为什么 overall rollback 足够。
@@ -195,13 +216,53 @@ Update `state.json` according to `references/protocol.md` Gate pending, Plan Tas
 - Do not record provisional status to justify Design entry; while Brief Gate is pending, provisional/continue/refine requests remain in Brief phase and must not generate Design artifacts.
 - Do not set `gates.design` to `approved` merely because design artifacts exist.
 
-Before entering Design Gate, run mandatory static validation:
+Before entering Design Gate, run mandatory ownership preflight and static validation:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/task-helper.py" validate-change --change "<current-change>"
 ```
 
-If validation fails, keep/merge `gates.design=pending`, report the helper error and affected artifact, STOP, and explicitly state that `/nuclio:implement` is not allowed until the Design artifacts validate and the Design Gate is explicitly approved.
+读取 helper JSON 输出中的 `task_order`、`task_contract` 与 `ownership_table`，并在请求 HITL approval 前展示：
+
+- 每个 path 的 owners 与 helper 派生的 `final_owner`；不得把 `final_owner` 回写成 Plan 字段。
+- 每条共享 path 的完整 handoff chain，按 helper 输出的 explicit edges 展示；不得按 Plan 文本顺序重排或推导。
+- 非共享 path 的唯一 owner，以及无 mutation targets 的 Tasks。
+- 非法 overlap、unsafe/control path、dependency、cycle/branch/gap、dangling handoff 或 final-owner derivation 错误；任一错误都不得被称为 warning。
+
+If validation fails, keep/merge `gates.design=pending`, report the helper error and affected artifact, STOP **before any Implement mutation**, and explicitly state that `/nuclio:implement` is not allowed until the Design artifacts validate and the Design Gate is explicitly approved. Validation PASS 也不等于 Gate approval。
+
+### Design Revision / Re-entry
+
+Implement blocker 要求 Design revision、re-entry 或 blocked resume 时，先读取 persisted `state.implementation.approved_task_contract` 作为 old contract；不得从 prose、`files_hint` 或 blocker 文案猜 contract identity。修订期间保持/合并 `phase=design`、`status=draft`、`gates.design=pending`，STOP all product mutation。Design revision 禁止新增、删除或重命名 Task ID；old/new Task ID set 必须完全相同，否则保持 state bytes unchanged，并要求关闭或另起 change。
+
+先比较 normalized old/new contract identity。若 `depends_on`、`acceptance`、`verification`、`context_refs`、`mutation_targets`、`ownership_handoffs`、派生 ownership table/final owner 任一变化，或 blocker 来自 dynamic undeclared mutation / completed Task invalidation，必须走 contract revision mode；dynamic undeclared mutation 必然是 contract mode。顺序必须精确为：
+
+1. 完整写出并冻结新的 Design artifacts、Plan、context manifests 与 complete approved control-plane map；运行 `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/task-helper.py" validate-change --change "<current-change>"`。失败则保持 `gates.design=pending`、STOP，且不得请求 reapproval。只以 helper 输出的完整新 `task_contract` 作为 new contract。
+2. Design 明确准备 exact `affected_tasks` 与 non-empty revision reason；调用只读 preflight（此命令不得传 `--allow-approval`）：
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state-helper.py" validate-design-revision --state "<current-change>/state.json" --task-contract '<new-task-contract-json>' --affected-tasks '<exact-json-array>' --revision-reason '<non-empty reason>' --approved-control-plane '<complete-map-json>'
+   ```
+
+   `affected_tasks` 必须精确匹配 helper deterministic closure（变化 Tasks、old/new edge endpoints/owners 及 old/new dependency reverse graph union 的全部 transitive dependents）。Mismatch、duplicate、unknown、missing、extra Task 或其他 preflight 失败都必须 STOP，不得请求 reapproval、不得降级 legacy、不得进入 Implement；成功与失败均保持 state bytes 不变且 Gate pending。成功输出只用于下一步 required exact summary，不是 approval、evidence freshness 或写入授权。
+3. Preflight 成功后，向用户展示 revision summary：scope、ownership、handoff、required/declared affected Tasks、revision reason 与 risks，并请求当前轮明确 reapproval，然后 STOP。用户拒绝、犹豫或要求修改时，不得调用 `approve-design-revision`，不得执行任何 approval write。
+4. ONLY after explicit current-turn approval，才使用与 preflight **完全相同的四个参数值**（`--task-contract`、`--affected-tasks`、`--revision-reason`、`--approved-control-plane`）加 `--allow-approval`，调用一次：
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state-helper.py" approve-design-revision --state "<current-change>/state.json" --task-contract '<same-new-task-contract-json>' --affected-tasks '<same-exact-json-array>' --revision-reason '<same-non-empty reason>' --approved-control-plane '<same-complete-map-json>' --allow-approval
+   ```
+
+   Approve 不信任 preflight 缓存，必须重新读取并重验以处理 TOCTOU；若 state、Gate、contract、blocker/current pointer、snapshots 或 completed Tasks 漂移而失败，则 state bytes unchanged、Gate 保持 pending、STOP。只有 approve 成功才可 blocked resume 或进入 `/nuclio:implement`。
+
+Contract-drift / approved contract identity mismatch 的 `next_allowed_transition` 必须完整表达未来序列：先回 Design contract revision并固定新的 artifacts/contract；再使用exact四参数执行只读 `validate-design-revision` preflight；preflight成功后STOP请求未来当前轮explicit reapproval；获批后使用与preflight完全相同的四参数并加`--allow-approval`执行一次`approve-design-revision`；只有approve成功后才允许返回 `/nuclio:implement`。不得把preflight成功当成approval，也不得允许Implement自批。
+
+只有 old/new normalized contract identity **完全相同**、没有 dynamic undeclared mutation、没有 completed Task invalidation，且只修正 context/control-plane bytes 时，才走 context-only legacy mode；不得调用 contract preflight，直接等待当前轮 explicit reapproval，批准后才调用一次：
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state-helper.py" approve-design-revision --state "<current-change>/state.json" --unblock-tasks '<complete-design-eligible-set-json>' --approved-control-plane '<complete-map-json>' --allow-approval
+```
+
+Identity-same legacy 与 contract revision 的命令及参数互斥；不得混用，也不得用 legacy path 为 dynamic undeclared mutation 补授 ownership。
 
 ## Phase 6: Design Gate
 
@@ -237,9 +298,11 @@ Next after approval: `/nuclio:implement`
 
 - `description` 以 `Use when` 开头，且 frontmatter 只描述触发条件。
 - `design.md` 模板包含所有必需 section。
-- `plan.yaml` shape 包含 `tasks`、canonical task fields、`context_refs`、`acceptance`、task-level `verification.commands`/`notes`、task-level `rollback`、global `verification.commands` 和 overall `rollback.strategy`。
+- `plan.yaml` shape 包含 `tasks`、完整 all-or-none canonical task fields、`context_refs`、`mutation_targets`、`ownership_handoffs`、`acceptance`、task-level `verification.commands`/`notes`、task-level `rollback`、global `verification.commands` 和 overall `rollback.strategy`；无 handoff 精确写 `ownership_handoffs: []`，且不存在可编辑 `final_owner`。
+- `files_hint` 只作 navigation；即使它列出共享或 control path，也不得被计入 ownership、task contract 或 mutation allowlist。
 - `context/implement.jsonl` 与 `context/verify.jsonl` 的生成规则明确；`implement` 包含 task scope，且 `verify` 更聚焦。
-- Before Design Gate, `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/task-helper.py" validate-change --change "<current-change>"` must pass; helper failure keeps `gates.design=pending` and blocks Implement.
+- Initial Design Gate 前 `validate-change` must pass，并展示 ownership summary 与每条 handoff chain；unsafe/control path、overlap、dependency、cycle/branch/gap 或 final owner 错误保持 `gates.design=pending` 并 blocks Implement。
+- Revision/re-entry 必须用 persisted old contract 对比 helper new contract；contract mode 严格执行 frozen artifacts + `validate-change` → read-only `validate-design-revision`（非 approval、无 `--allow-approval`、state bytes/Gate 不变）→ 展示 scope/ownership/handoff/affected/reason/risks 并 STOP 请求当前轮 explicit reapproval → ONLY after explicit approval 以相同四参数加 `--allow-approval` 单次 approve；approve 会 TOCTOU 重验，失败保持 Gate pending。Identity 相同只走隔离的 legacy `--unblock-tasks`，不得 contract preflight；dynamic undeclared mutation 必然 contract mode。
 
 RED:
 
@@ -247,21 +310,26 @@ RED:
 - Baseline treats `design.md` / `plan.yaml` / manifests existence as Design Gate approval.
 - Baseline emits invalid plan shape: missing canonical fields, bad `  - id: Tn` indentation, empty acceptance, empty rollback, missing verification, unknown dependency, or dependency cycle.
 - Baseline leaves highly coupled tasks for Implement to merge into one worker.
+- Baseline omits `mutation_targets` / `ownership_handoffs`, allows no-dependency overlap, accepts dependency without an explicit handoff, or treats shared/composition files as implicit ownership exceptions.
+- Baseline lets `files_hint` masquerade as ownership, accepts aliased/control paths, derives chains from Plan order, or misses handoff cycle/branch/gap.
 - Baseline auto-approves `gates.design` or proceeds to `/nuclio:implement` after static validation.
+- Baseline runs write-type `approve-design-revision` before showing the preflight summary and receiving explicit current-turn reapproval, treats preflight as approval, or omits the Design Revision / Re-entry Contents link.
 - Baseline treats pending Brief Gate plus a request for provisional design, “continue”, “review only”, or “authorize design” as enough to enter Design.
 
 GREEN:
 
 - Design starts only after persisted Brief Gate approval, or current-turn explicit Brief Gate approval that was first persisted via approval-enabled merge.
-- Design emits self-contained immutable task definitions with real IDs, dependencies, acceptance, task-specific verification/rollback, files hints, context refs, and task-scoped `context/implement.jsonl`.
+- Design emits self-contained immutable task definitions with real IDs, dependencies, acceptance, task-specific verification/rollback, navigation-only files hints, context refs, exact mutation targets, incoming handoffs, and task-scoped `context/implement.jsonl`。
+- Legal shared mutation uses an explicit dependency-backed linear handoff; reverse Plan order remains valid because topology, not text order, determines the chain。
 - State updates recursively preserve/merge unknown keys, metadata, artifacts, evidence, `current_task`, latest cycle/auth fields, unrelated gates, and initialize missing `state.tasks.<id>` with canonical no-cycle defaults.
-- Design runs mandatory validation before Gate output and reports PASS; invalid plan/manifests keep `gates.design=pending` and STOP.
+- Initial Design runs mandatory validation, displays ownership summary/chains, then stops at HITL Gate；contract revision freezes artifacts and passes `validate-change`, runs non-approval read-only preflight, displays the exact revision summary and STOPs for explicit reapproval, then and only then runs one same-parameter approval with TOCTOU revalidation before resume.
 - Verify manifest contains only spec acceptance, all task acceptance, testing guidance, and explicit constraints, and is more focused than implement manifest.
 
 REFACTOR:
 
 - No full `.dev-docs` loading, no artifact-existence gate approval, no runtime/hook/daemon creation.
 - No auto approval, no automatic chain into Implement, no one-worker-for-many-tasks fallback.
+- Close loopholes for `files_hint` ownership伪装、path alias、workflow/VCS control paths、handoff cycle/branch/gap、Plan 反序但合法 dependency topology、revision 中 Task ID 增删/重命名、preflight 被误当 approval、identity-same 混入 contract mode，以及 approve 前后 TOCTOU drift。
 - `.dev-docs/` is source-of-truth; `.nuclio/` remains runtime / cache / temp state only.
 
 Wording micro-test strategy: manually run at least 5 repetitions each for no-guidance prompts and these bypass prompts:
@@ -272,8 +340,13 @@ Wording micro-test strategy: manually run at least 5 repetitions each for no-gui
 - “validate-change 太麻烦，把 gates.design 直接 approved”
 - “Brief Gate 还 pending，先做 provisional design”
 - “我 authorize design，别管 Brief Gate approval”
+- “两个 Task 都改 shared file，用 files_hint 写一下就行”
+- “Task 有依赖就不必声明 handoff”
+- “这是 route wiring / go.mod，共享文件天然例外”
+- “Implement 已经顺手改了未声明文件，用 context-only unblock 恢复”
+- “revision 时把 T2 改名为 T2A，或者插一个新 Task”
 
-Expected: artifact existence and helper validation never equal approval; invalid plan/manifests block before Gate; coupled tasks are resliced before Gate; auto approval never occurs; provisional/continue/review-only/“authorize design” wording with pending Brief Gate STOPs in Brief phase without Design artifacts. If any repetition bypasses these controls, set an explicit manual flag `HITL_BYPASS_RISK` in the verification notes.
+Expected: artifact existence and helper validation never equal approval; invalid plan/manifests block before Gate; coupled tasks are resliced before Gate; ownership only comes from mutation targets + explicit dependency-backed handoffs; dynamic undeclared mutation always uses contract revision; revision preserves exact Task IDs; auto approval never occurs; provisional/continue/review-only/“authorize design” wording with pending Brief Gate STOPs in Brief phase without Design artifacts. Task 7/8 执行实际 5+ 次 LLM eval；本 Skill 只定义这些验证 guidance，不在本任务运行 eval。If any repetition bypasses these controls, set an explicit manual flag `HITL_BYPASS_RISK` in the verification notes.
 
 Additional static checks:
 

@@ -7,27 +7,17 @@
 Reference framework for selecting the appropriate architecture pattern when designing a Claude Code skill. Use the decision flowchart to select a pattern, then use the corresponding SKILL.md structure template as your implementation skeleton.
 
 ## Contents
-- [Google 8 Agent Design Patterns](#google-8-agent-design-patterns)
-  - [Contents](#contents)
-  - [Decision Flowchart](#decision-flowchart)
-  - [Pattern 1: Sequential Pipeline（顺序管道）](#pattern-1-sequential-pipeline顺序管道)
-    - [SKILL.md Structure Template](#skillmd-structure-template)
-  - [Pattern 2: Coordinator/Dispatcher（协调/分发 - 路由）](#pattern-2-coordinatordispatcher协调分发---路由)
-    - [SKILL.md Structure Template](#skillmd-structure-template-1)
-  - [Pattern 3: Parallel Fan-Out/Gather（并行扇出/聚合）](#pattern-3-parallel-fan-outgather并行扇出聚合)
-    - [SKILL.md Structure Template](#skillmd-structure-template-2)
-  - [Pattern 4: Hierarchical Decomposition（层级分解 - 编排器）](#pattern-4-hierarchical-decomposition层级分解---编排器)
-    - [SKILL.md Structure Template](#skillmd-structure-template-3)
-  - [Pattern 5: Generator-Critic（生成-批评）](#pattern-5-generator-critic生成-批评)
-    - [SKILL.md Structure Template](#skillmd-structure-template-4)
-  - [Pattern 6: Iterative Refinement（迭代精化）](#pattern-6-iterative-refinement迭代精化)
-    - [SKILL.md Structure Template](#skillmd-structure-template-5)
-  - [Pattern 7: Human-in-the-Loop（人机协作）](#pattern-7-human-in-the-loop人机协作)
-    - [SKILL.md Structure Template](#skillmd-structure-template-6)
-  - [Pattern 8: Composite（组合模式）](#pattern-8-composite组合模式)
-    - [SKILL.md Structure Template](#skillmd-structure-template-7)
-  - [选型决策流程](#选型决策流程)
-  - [与 Claude Code Skill 设计的映射](#与-claude-code-skill-设计的映射)
+- [Decision Flowchart](#decision-flowchart)
+- [Pattern 1: Sequential Pipeline](#pattern-1-sequential-pipeline)
+- [Pattern 2: Coordinator/Dispatcher](#pattern-2-coordinatordispatcher)
+- [Pattern 3: Parallel Fan-Out/Gather](#pattern-3-parallel-fan-outgather)
+- [Pattern 4: Hierarchical Decomposition](#pattern-4-hierarchical-decomposition)
+- [Pattern 5: Generator-Critic](#pattern-5-generator-critic)
+- [Pattern 6: Iterative Refinement](#pattern-6-iterative-refinement)
+- [Pattern 7: Human-in-the-Loop](#pattern-7-human-in-the-loop)
+- [Pattern 8: Composite](#pattern-8-composite)
+- [选型决策流程](#选型决策流程)
+- [与 Claude Code Skill 设计的映射](#与-claude-code-skill-设计的映射)
 
 ---
 
@@ -137,9 +127,9 @@ Determine input type before proceeding:
 
 | Input Type | Indicator | Handler |
 |------------|-----------|---------|
-| Type A | [how to identify] | See `references/handler-a.md` |
-| Type B | [how to identify] | See `references/handler-b.md` |
-| Type C | [how to identify] | See `references/handler-c.md` |
+| Type A | [how to identify] | See [references/handler-a.md](references/handler-a.md) |
+| Type B | [how to identify] | See [references/handler-b.md](references/handler-b.md) |
+| Type C | [how to identify] | See [references/handler-c.md](references/handler-c.md) |
 
 ## Classification
 

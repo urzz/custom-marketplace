@@ -17,12 +17,13 @@ TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 CONTEXT_REF_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 TASK_HEADER_RE = re.compile(r"^  - id: ([A-Za-z0-9][A-Za-z0-9_-]*)$")
 REQUIRED_TASK_FIELDS = ("title", "depends_on", "acceptance", "verification", "rollback")
-CANONICAL_TASK_FIELDS = ("status", "files_hint", "context_refs")
+CANONICAL_TASK_FIELDS = ("status", "files_hint", "context_refs", "mutation_targets", "ownership_handoffs")
 ALLOWED_TASK_FIELDS = set(REQUIRED_TASK_FIELDS) | set(CANONICAL_TASK_FIELDS)
 ALLOWED_TASK_STATUSES = {"pending", "in_progress", "blocked", "completed"}
 GLOB_CHARS = set("*?[")
 URI_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 BROAD_PATHS = {".", "./", ".dev-docs", ".dev-docs/", ".dev-docs\\"}
+FORBIDDEN_MUTATION_ROOTS = (".git", ".dev-docs/changes", ".superpowers/sdd")
 ALLOWED_MODES = {"required", "jit"}
 REQUIRED_MANIFEST_KEYS = {"path", "kind", "mode", "reason"}
 
@@ -113,9 +114,24 @@ def parse_task_block(block_lines):
     depends_on_nested = []
     files_hint_items = []
     context_ref_items = []
+    mutation_target_items = []
+    ownership_handoff_items = []
+    current_handoff = None
     verification_command_items = []
     verification_notes = None
     rollback_strategy = None
+
+    def append_handoff_field(key, value, line):
+        nonlocal current_handoff
+        if key not in {"path", "from_task", "to_task"}:
+            raise TaskHelperError("invalid ownership handoff", detail=line)
+        if current_handoff is None:
+            raise TaskHelperError("invalid ownership handoff", detail=line)
+        if key in current_handoff:
+            raise TaskHelperError("duplicate ownership handoff key", detail=f"{task_id}.{key}")
+        if not non_empty_text_scalar(value):
+            raise TaskHelperError("invalid ownership handoff", detail=line)
+        current_handoff[key] = value.strip()
 
     for line in block_lines[1:]:
         if not line:
@@ -132,13 +148,26 @@ def parse_task_block(block_lines):
                 raise TaskHelperError("duplicate task field", detail=f"{task_id}.{field}")
             fields[field] = raw.strip()
             current_field = field
+            current_handoff = None
             verification_commands = False
             verification_commands_seen = False
             verification_inline_commands = False
             continue
 
+        if current_field == "ownership_handoffs":
+            handoff_start = re.fullmatch(r"      - ([A-Za-z_][A-Za-z0-9_]*): (.+)", line)
+            if handoff_start is not None:
+                current_handoff = {}
+                ownership_handoff_items.append(current_handoff)
+                append_handoff_field(handoff_start.group(1), handoff_start.group(2), line)
+                continue
+            handoff_field = re.fullmatch(r"        ([A-Za-z_][A-Za-z0-9_]*): (.+)", line)
+            if handoff_field is not None:
+                append_handoff_field(handoff_field.group(1), handoff_field.group(2), line)
+                continue
+
         scalar_item = re.fullmatch(r"      - (.+)", line)
-        if scalar_item is not None and current_field in {"depends_on", "acceptance", "files_hint", "context_refs"}:
+        if scalar_item is not None and current_field in {"depends_on", "acceptance", "files_hint", "context_refs", "mutation_targets"}:
             value = scalar_item.group(1).strip()
             if not value:
                 raise TaskHelperError("invalid task block line", detail=line)
@@ -150,6 +179,10 @@ def parse_task_block(block_lines):
                 if '"' in value or "'" in value:
                     raise TaskHelperError("invalid task path", detail=value)
                 files_hint_items.append(value)
+            elif current_field == "mutation_targets":
+                if '"' in value or "'" in value:
+                    raise TaskHelperError("invalid task path", detail=value)
+                mutation_target_items.append(value)
             else:
                 if '"' in value or "'" in value:
                     raise TaskHelperError("invalid task path", detail=value)
@@ -205,15 +238,51 @@ def parse_task_block(block_lines):
     if "status" in fields and fields["status"] not in ALLOWED_TASK_STATUSES:
         raise TaskHelperError("invalid task status", detail=f"{task_id}.status")
 
+    files_hint = []
     if "files_hint" in fields:
         files_hint = parse_canonical_list(fields["files_hint"], files_hint_items)
-        for item in files_hint:
-            validate_project_path(item, "invalid task path")
+        files_hint = [validate_project_path(item, "invalid task path") for item in files_hint]
 
+    context_refs = []
     if "context_refs" in fields:
         context_refs = parse_canonical_list(fields["context_refs"], context_ref_items)
         for item in context_refs:
             validate_context_ref(item)
+
+    mutation_targets = []
+    if "mutation_targets" in fields:
+        mutation_targets = parse_canonical_list(fields["mutation_targets"], mutation_target_items)
+        normalized_targets = []
+        seen_targets = set()
+        for item in mutation_targets:
+            normalized = validate_mutation_target(item)
+            if normalized in seen_targets:
+                raise TaskHelperError("duplicate mutation target", detail=f"{task_id}:{normalized}")
+            seen_targets.add(normalized)
+            normalized_targets.append(normalized)
+        mutation_targets = normalized_targets
+
+    ownership_handoffs = []
+    if "ownership_handoffs" in fields:
+        ownership_handoffs = parse_canonical_list(fields["ownership_handoffs"], ownership_handoff_items)
+        normalized_handoffs = []
+        for handoff in ownership_handoffs:
+            keys = set(handoff)
+            required = {"path", "from_task", "to_task"}
+            if keys != required:
+                missing = sorted(required - keys)
+                unknown = sorted(keys - required)
+                detail = ", ".join(missing or unknown)
+                raise TaskHelperError("invalid ownership handoff", detail=detail)
+            path = validate_mutation_target(handoff["path"])
+            from_task = handoff["from_task"]
+            to_task = handoff["to_task"]
+            if TASK_ID_RE.fullmatch(from_task) is None or TASK_ID_RE.fullmatch(to_task) is None:
+                raise TaskHelperError("invalid ownership handoff task", detail=f"{from_task}->{to_task}")
+            if to_task != task_id:
+                raise TaskHelperError("invalid ownership handoff", detail=f"{task_id}.to_task must be {task_id}")
+            normalized_handoffs.append({"path": path, "from_task": from_task, "to_task": to_task})
+        ownership_handoffs = normalized_handoffs
 
     dep_raw = fields["depends_on"]
     if dep_raw:
@@ -222,9 +291,13 @@ def parse_task_block(block_lines):
             raise TaskHelperError("invalid task block line", detail="mixed depends_on forms")
     else:
         depends_on = depends_on_nested
+    seen_dependencies = set()
     for dep in depends_on:
         if TASK_ID_RE.fullmatch(dep) is None:
             raise TaskHelperError("invalid dependency id", detail=dep)
+        if dep in seen_dependencies:
+            raise TaskHelperError("duplicate dependency", detail=f"{task_id}:{dep}")
+        seen_dependencies.add(dep)
 
     if fields["acceptance"] or not acceptance_items:
         raise TaskHelperError("missing acceptance", detail=task_id)
@@ -233,8 +306,20 @@ def parse_task_block(block_lines):
     if fields["rollback"] or not rollback_strategy:
         raise TaskHelperError("missing rollback", detail=task_id)
 
-    return {"id": task_id, "depends_on": depends_on, "block": "\n".join(block_lines)}
+    verification = {"commands": verification_command_items}
+    if verification_notes is not None:
+        verification["notes"] = verification_notes
 
+    return {
+        "id": task_id,
+        "depends_on": depends_on,
+        "acceptance": acceptance_items,
+        "verification": verification,
+        "context_refs": context_refs,
+        "mutation_targets": mutation_targets,
+        "ownership_handoffs": ownership_handoffs,
+        "block": "\n".join(block_lines),
+    }
 
 def parse_plan(plan_path):
     raw = read_text(plan_path, "plan.yaml")
@@ -319,9 +404,15 @@ def detect_cycle(tasks):
 def validate_project_path(value, error="invalid manifest path"):
     if not isinstance(value, str) or not value:
         raise TaskHelperError(error, detail=repr(value))
+    if value.strip() != value:
+        raise TaskHelperError(error, detail=value)
     if value in BROAD_PATHS or value == "~" or value.startswith(("~/", "~\\")):
         raise TaskHelperError(error, detail=value)
     if URI_SCHEME_RE.match(value):
+        raise TaskHelperError(error, detail=value)
+    if "\\" in value or "//" in value:
+        raise TaskHelperError(error, detail=value)
+    if value.startswith("./") or "/./" in value:
         raise TaskHelperError(error, detail=value)
     path = pathlib.PurePosixPath(value)
     windows_path = pathlib.PureWindowsPath(value)
@@ -331,8 +422,21 @@ def validate_project_path(value, error="invalid manifest path"):
         raise TaskHelperError(error, detail=value)
     if any(char in value for char in GLOB_CHARS):
         raise TaskHelperError(error, detail=value)
+    raw_parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in raw_parts):
+        raise TaskHelperError(error, detail=value)
     if ".." in path.parts or ".." in windows_path.parts:
         raise TaskHelperError(error, detail=value)
+    normalized = path.as_posix()
+    if normalized != value:
+        raise TaskHelperError(error, detail=value)
+    return normalized
+
+def validate_mutation_target(value):
+    normalized = validate_project_path(value, "invalid task path")
+    if any(normalized == root or normalized.startswith(root + "/") for root in FORBIDDEN_MUTATION_ROOTS):
+        raise TaskHelperError("invalid mutation target", detail=normalized)
+    return normalized
 
 
 def validate_manifest_path(value):
@@ -364,7 +468,7 @@ def normalize_manifest_entry(entry, plan_task_ids):
     missing = sorted(REQUIRED_MANIFEST_KEYS - set(entry))
     if missing:
         raise TaskHelperError("manifest entry missing required keys", detail=", ".join(missing))
-    validate_manifest_path(entry["path"])
+    normalized_path = validate_project_path(entry["path"], "invalid manifest path")
     for field in ("kind", "reason"):
         if not isinstance(entry[field], str) or not entry[field].strip():
             raise TaskHelperError(f"invalid {field}", detail=repr(entry[field]))
@@ -381,8 +485,167 @@ def normalize_manifest_entry(entry, plan_task_ids):
             raise TaskHelperError("unknown task", detail=task)
 
     normalized = dict(entry)
+    normalized["path"] = normalized_path
     normalized["tasks"] = tasks
     return normalized
+
+def build_dependency_ancestors(tasks):
+    ancestors = {}
+    task_by_id = {task["id"]: task for task in tasks}
+
+    def collect(task_id):
+        if task_id in ancestors:
+            return ancestors[task_id]
+        result = set()
+        for dependency_id in task_by_id[task_id]["depends_on"]:
+            result.add(dependency_id)
+            result.update(collect(dependency_id))
+        ancestors[task_id] = result
+        return result
+
+    for task in tasks:
+        collect(task["id"])
+    return ancestors
+
+
+def build_ownership_table(tasks):
+    task_by_id = {task["id"]: task for task in tasks}
+    dependency_ancestors = build_dependency_ancestors(tasks)
+    owners_by_path = {}
+    declared_handoffs = []
+
+    for task in tasks:
+        for target in task["mutation_targets"]:
+            owners_by_path.setdefault(target, []).append(task["id"])
+        for handoff in task["ownership_handoffs"]:
+            declared_handoffs.append(handoff)
+
+    seen_edges = set()
+    handoffs_by_path = {}
+    outgoing = {}
+    for handoff in declared_handoffs:
+        path = handoff["path"]
+        from_task = handoff["from_task"]
+        to_task = handoff["to_task"]
+        if from_task not in task_by_id or to_task not in task_by_id:
+            raise TaskHelperError("unknown handoff task", detail=f"{from_task}->{to_task}")
+        if from_task == to_task:
+            raise TaskHelperError("self ownership handoff", detail=f"{path}:{from_task}")
+        edge = (path, from_task, to_task)
+        if edge in seen_edges:
+            raise TaskHelperError("duplicate ownership handoff", detail=f"{path}:{from_task}->{to_task}")
+        seen_edges.add(edge)
+        owners = owners_by_path.get(path)
+        if owners is None or from_task not in owners or to_task not in owners:
+            raise TaskHelperError("unknown handoff task", detail=f"{path}:{from_task}->{to_task}")
+        branch_key = (path, from_task)
+        if branch_key in outgoing and outgoing[branch_key] != to_task:
+            raise TaskHelperError("ownership branch", detail=f"{path}:{from_task}")
+        outgoing[branch_key] = to_task
+        if from_task not in dependency_ancestors[to_task]:
+            raise TaskHelperError("handoff dependency", detail=f"{to_task} does not depend on {from_task}")
+        handoffs_by_path.setdefault(path, []).append(handoff)
+
+    table = []
+    for path in sorted(owners_by_path):
+        declared_owners = owners_by_path[path]
+        path_handoffs = handoffs_by_path.get(path, [])
+        if len(declared_owners) == 1:
+            owners = declared_owners
+            ordered_handoffs = []
+        else:
+            if not path_handoffs:
+                raise TaskHelperError("ownership handoff required", detail=path)
+            incoming = {}
+            outgoing_for_path = {}
+            for handoff in path_handoffs:
+                source = handoff["from_task"]
+                target = handoff["to_task"]
+                if source in outgoing_for_path:
+                    raise TaskHelperError("ownership branch", detail=f"{path}:{source}")
+                if target in incoming:
+                    raise TaskHelperError("ownership branch", detail=f"{path}:{target}")
+                outgoing_for_path[source] = target
+                incoming[target] = source
+            heads = [owner for owner in declared_owners if owner not in incoming]
+            tails = [owner for owner in declared_owners if owner not in outgoing_for_path]
+            if not heads or not tails:
+                raise TaskHelperError("ownership handoff cycle", detail=path)
+            if len(heads) != 1 or len(tails) != 1:
+                raise TaskHelperError("ownership handoff gap", detail=path)
+            owners = []
+            ordered_handoffs = []
+            current = heads[0]
+            visited = set()
+            while True:
+                if current in visited:
+                    raise TaskHelperError("ownership handoff cycle", detail=path)
+                visited.add(current)
+                owners.append(current)
+                if current not in outgoing_for_path:
+                    break
+                next_owner = outgoing_for_path[current]
+                ordered_handoffs.append({"path": path, "from_task": current, "to_task": next_owner})
+                current = next_owner
+            if visited != set(declared_owners) or len(path_handoffs) != len(declared_owners) - 1:
+                raise TaskHelperError("ownership handoff gap", detail=path)
+        table.append(
+            {
+                "path": path,
+                "owners": owners,
+                "handoffs": ordered_handoffs,
+                "final_owner": owners[-1],
+            }
+        )
+    return table
+
+
+def build_task_contract(tasks, ownership_table):
+    return {
+        "plan_order": [task["id"] for task in tasks],
+        "tasks": [
+            {
+                "id": task["id"],
+                "depends_on": task["depends_on"],
+                "acceptance": task["acceptance"],
+                "verification": task["verification"],
+                "context_refs": task["context_refs"],
+                "mutation_targets": sorted(task["mutation_targets"]),
+                "ownership_handoffs": sorted(
+                    task["ownership_handoffs"],
+                    key=lambda item: (item["path"], item["from_task"], item["to_task"]),
+                ),
+            }
+            for task in tasks
+        ],
+        "ownership_table": ownership_table,
+    }
+
+
+def ownership_slice_for_task(task, ownership_table):
+    task_id = task["id"]
+    incoming = []
+    outgoing = []
+    final_owners = []
+    target_set = set(task["mutation_targets"])
+    for row in ownership_table:
+        related = row["path"] in target_set or task_id in row["owners"]
+        for handoff in row["handoffs"]:
+            if handoff["to_task"] == task_id:
+                incoming.append(handoff)
+                related = True
+            if handoff["from_task"] == task_id:
+                outgoing.append(handoff)
+                related = True
+        if related:
+            final_owners.append({"path": row["path"], "final_owner": row["final_owner"]})
+    return {
+        "mutation_targets": sorted(task["mutation_targets"]),
+        "incoming_handoffs": incoming,
+        "outgoing_handoffs": outgoing,
+        "final_owners": final_owners,
+        "note": "files_hint is non-authoritative and is not used for ownership.",
+    }
 
 
 def load_manifest(path, plan_task_ids):
@@ -405,11 +668,13 @@ def load_change(change_path):
     task_ids = {task["id"] for task in tasks}
     implement_entries = load_manifest(change_path / "context" / "implement.jsonl", task_ids)
     verify_entries = load_manifest(change_path / "context" / "verify.jsonl", task_ids)
-    return state, tasks, implement_entries, verify_entries
+    ownership_table = build_ownership_table(tasks)
+    return state, tasks, implement_entries, verify_entries, ownership_table
 
 
 def validate_change(args):
-    state, tasks, implement_entries, verify_entries = load_change(args.change)
+    state, tasks, implement_entries, verify_entries, ownership_table = load_change(args.change)
+    task_contract = build_task_contract(tasks, ownership_table)
     del state
     print_json(
         {
@@ -419,21 +684,24 @@ def validate_change(args):
             "task_count": len(tasks),
             "implement_manifest_entries": len(implement_entries),
             "verify_manifest_entries": len(verify_entries),
+            "ownership_table": ownership_table,
+            "task_contract": task_contract,
         }
     )
     return 0
-
 
 def matching_entries(entries, task_id):
     return [entry for entry in entries if "*" in entry["tasks"] or task_id in entry["tasks"]]
 
 
-def render_task_brief(change_path, state, task, manifest_entries):
+def render_task_brief(change_path, state, task, manifest_entries, ownership_table):
     manifest_jsonl = "\n".join(
         json.dumps(entry, ensure_ascii=False, sort_keys=True) for entry in manifest_entries
     )
     if manifest_jsonl:
         manifest_jsonl += "\n"
+    ownership_slice = ownership_slice_for_task(task, ownership_table)
+    ownership_json = json.dumps(ownership_slice, ensure_ascii=False, sort_keys=True)
     design_gate = None
     gates = state.get("gates")
     if isinstance(gates, dict):
@@ -450,6 +718,11 @@ def render_task_brief(change_path, state, task, manifest_entries):
         "```yaml\n"
         f"{task['block']}\n"
         "```\n\n"
+        "## Approved Ownership Slice\n\n"
+        "```json\n"
+        f"{ownership_json}\n"
+        "```\n\n"
+        "- files_hint is non-authoritative and is not used for ownership.\n\n"
         "## Matching Context Manifest Entries\n\n"
         "```jsonl\n"
         f"{manifest_jsonl}"
@@ -462,15 +735,14 @@ def render_task_brief(change_path, state, task, manifest_entries):
         "- Loaded context must be reported as project-relative paths.\n"
     )
 
-
 def extract_task(args):
-    state, tasks, implement_entries, verify_entries = load_change(args.change)
+    state, tasks, implement_entries, verify_entries, ownership_table = load_change(args.change)
     del verify_entries
     task_by_id = {task["id"]: task for task in tasks}
     task = task_by_id.get(args.task)
     if task is None:
         raise TaskHelperError("unknown task extraction", detail=args.task)
-    brief = render_task_brief(args.change, state, task, matching_entries(implement_entries, args.task))
+    brief = render_task_brief(args.change, state, task, matching_entries(implement_entries, args.task), ownership_table)
     try:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(brief, encoding="utf-8")
@@ -478,7 +750,6 @@ def extract_task(args):
         raise TaskHelperError("failed to write output", detail=str(exc)) from exc
     print_json({"ok": True, "change_path": path_text(args.change), "task": args.task, "output": path_text(args.output)})
     return 0
-
 
 def build_parser():
     parser = JsonArgumentParser(description="Deterministic Nuclio task helper")

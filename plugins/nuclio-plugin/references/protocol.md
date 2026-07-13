@@ -6,6 +6,11 @@
 - [.dev-docs Layout](#dev-docs-layout)
 - [Change Artifact Protocol](#change-artifact-protocol)
 - [Authority Boundaries](#authority-boundaries)
+- [Canonical Plan Ownership Contract](#canonical-plan-ownership-contract)
+- [Handoff Lineage and Snapshot Lifecycle](#handoff-lineage-and-snapshot-lifecycle)
+- [Task and Implement Completion Freshness](#task-and-implement-completion-freshness)
+- [Dynamic Undeclared Product Mutation](#dynamic-undeclared-product-mutation)
+- [Design Revision Closure](#design-revision-closure)
 - [Canonical State Protocol](#canonical-state-protocol)
 - [Generic State Transition Rules](#generic-state-transition-rules)
 - [Implement/Verify/Fold Exact State Transitions](#implementverifyfold-exact-state-transitions)
@@ -96,6 +101,10 @@ Project Init 使用以下 baseline layout：
         implementer.md
         validation.md
         review.md
+        snapshots/
+          completion-<task-id>-<path-id>-a<attempt>-r<review-cycle>.json
+          dependency-<from-task>-to-<task-id>-<path-id>-a<attempt>-r<review-cycle>.json
+          live-<task-id>-<path-id>-a<attempt>-r<review-cycle>.json
 ```
 
 `<change-id>` 应使用 `YYYY-MM-DD-short-slug`；第一个 MVP change 可以使用 `0001-mvp`。
@@ -119,13 +128,89 @@ Artifact existence is not gate approval：
 |---|---|---|
 | Task definition、依赖、acceptance、verification、rollback | `plan.yaml` | 定义计划，不保存执行进度 |
 | Mutable task state、phase、status、current task、Gates | `state.json` | 唯一可恢复 workflow 状态机 |
-| 单 Task brief、实现、验证与 reviewer 证据 | `evidence/tasks/<task-id>/` | 一组固定四文件 Task evidence |
+| 单 Task brief、实现、验证、reviewer 与 snapshot 证据 | `evidence/tasks/<task-id>/` | 固定四个 Markdown 文件加固定 `snapshots/` 结构化附件目录 |
 | Change-wide Verify verdict | `evidence/review.md` | Verify 的 change-wide 审查结论 |
 | Fold candidate | `evidence/fold-proposal.md` | 待用户选择 accept/edit/reject/no-op/defer 的候选，不是长期知识 |
 | Fold apply evidence | `evidence/fold-apply.md` + `state.json.fold_apply` | Two-phase apply attempts、errors、target reconciliation 与 hashes |
 | Long-term project knowledge | 相关 `.dev-docs/project/`、`product/`、`architecture/`、`engineering/`、`domain/` 文件 | 仅 Fold approval 后写入稳定结论 |
 
 `evidence/` 保存可审查证据，不替代 `state.json` 的状态；`state.json` 只引用 evidence 路径和 verdict，不复制长报告。
+
+本文件是 ownership、handoff lineage、snapshot freshness、dynamic mutation 与 Design revision transition 的唯一状态和证据算法 authority。其他 references 只能引用本文件并摘要行为边界，不得复制 closure、fingerprint 或 transition 算法形成第二套 authority。
+
+## Canonical Plan Ownership Contract
+
+Design 产出的每个 canonical Task 必须同时声明 `mutation_targets` 与 `ownership_handoffs`；`task-helper.py validate-change` 从这些字段和 `depends_on` 派生 `ownership_table` 与 normalized `task_contract`。`task_contract` 的顶层字段精确为 `plan_order`、`tasks`、`ownership_table`；每个 Task contract 包含 `id`、`depends_on`、`acceptance`、`verification`、`context_refs`、排序后的 `mutation_targets` 与按 `(path,from_task,to_task)` 排序的 `ownership_handoffs`，排除 mutable `status`、`files_hint`、title 与 rollback 文案。`ownership_table` 按 path 排序；每行包含 `path`、派生 `owners`、派生 `handoffs` 与派生 `final_owner`。
+
+- `mutation_targets` 是 Task 实际可修改的 product path 集。路径必须是规范化、安全、repo-relative 的单文件路径；同一 Task 内不得重复，并拒绝 `.git`、`.dev-docs/changes`、`.superpowers/sdd` 本身及其后代。默认 ownership 独占：同一路径只允许一个 owner。
+- 多 Task 修改同一路径时，每个后继 Task 在自身 `ownership_handoffs` 中声明 exact `{path,from_task,to_task}`，且 `to_task` 必须等于当前 Task。每条 edge 要求 `to_task` 直接或传递依赖 `from_task`；共享基础文件没有例外，也必须声明 ownership 和 handoff。
+- Handoff chain 只由显式 edges 与 dependency topology 决定。每个共享 path 必须形成覆盖所有声明 owners 的无 cycle、无 branch、无 gap 线性链；唯一 terminal owner 是 helper 派生的 `final_owner`，Plan 不得增加可编辑 `final_owner`。当case facts足够（例如helper row显示某path `owners=[T1,T4]` 且 `final_owner=T4`）时，Controller/trajectory必须显式报告该helper-derived ownership row；不得只报告Plan文本顺序、`files_hint`或自由文本handoff。Plan 文本顺序不决定 chain，只在多个 dependency-eligible Tasks 同时可运行时作为 eligible tie-break。
+- `files_hint`、context manifest、JIT discovery 与 read permission 都只是 navigation/read contract，不是 ownership、mutation allowlist 或 fingerprint input。Task brief 的 `Approved Ownership Slice` 只摘录当前 Task targets、incoming/outgoing handoffs 与相关 final owners，不创造新权限。
+- Design 首次获得 explicit approval 时，Controller 必须持久化 helper 产出的 normalized `task_contract` 为 `state.implementation.approved_task_contract`；后续 dispatch、review 与 revision 只消费这份 approved contract，不从 prose 或 `files_hint` 推断 ownership。
+
+## Handoff Lineage and Snapshot Lifecycle
+
+每个 canonical owned path 有三类不同 snapshot；三者不得混用。Canonical path 是通过 ownership path 安全校验并规范化后的单个 repo-relative 文件路径。对其 UTF-8 bytes 计算完整 lowercase hex SHA-256，得到无原文泄漏且无截断碰撞的 `path_id=sha256(UTF-8(canonical path))`（精确为 64 个 lowercase hex 字符）。每个 snapshot record **只表示一个** `path`、一个 `path_id`、一个 `path_hash` 和该 path 的一个派生 `final_owner`；禁止在单 record 中放置多 path map。Snapshot 文件是现有 Task evidence 的结构化附件，不是 `.nuclio/` runtime、helper 生成物或第二状态 authority：
+
+- `completion_snapshot`：某 Task 在 authoritative final validation 与 fresh reviewer clean/PASS 后，由 Controller 为每个 owned path 分别写入 `evidence/tasks/<task-id>/snapshots/completion-<task-id>-<path-id>-a<attempt>-r<review-cycle>.json`。它固定该 owner 当时该 path 的 bytes（删除使用 canonical `deleted` marker）及同一 evidence cycle；文件与 identity append-only。合法下游 handoff 后不要求历史 completion 与最终 live bytes 相等，也不得覆盖、重写或废弃旧 cycle。
+- `dependency_handoff_snapshot`：Controller 在下游 owner dispatch 前，为每条 exact incoming edge 的单个 path 写入 `evidence/tasks/<to-task>/snapshots/dependency-<from-task>-to-<to-task>-<path-id>-a<attempt>-r<review-cycle>.json`。它只固定该 path 的 exact `incoming_edge={from,to,path}` 与直接父 snapshot identity；文件与 identity append-only。Plan handoff edge schema始终是 `{path,from_task,to_task}`，snapshot `incoming_edge` schema始终是 `{path,from,to}`；二者语义关联但字段shape不同，记录、state refs、trajectory与报告均不得混用。只有当时 live bytes 的 `path_hash` 与 incoming snapshot 相等时才能开始下游 mutation。
+- `live_snapshot`：Controller 在每个 mutation/reconciliation 边界为每个 path 写入新的 current record `evidence/tasks/<current-owner>/snapshots/live-<current-owner>-<path-id>-a<attempt>-r<review-cycle>.json`，并只移动 state current ref；旧文件保留为历史。Handoff 后 current owner 更新，链完成后只能由派生 `final_owner` 的 current record 表示最终 live bytes。
+
+三类文件使用同一个 per-path canonical record contract。每个 record 的字段 key set 精确为：`schema="nuclio.snapshot"`、`version=2`、`kind=completion_snapshot|dependency_handoff_snapshot|live_snapshot`、`path`、`path_id`、`path_hash=sha256:<64 lowercase hex>|deleted`、`task`、`attempt`、`review_cycle`、`final_owner`、`incoming_edge`、`parent_snapshot`、`acceptance_preservation_refs` 与 `record_hash`；禁止缺少、增加或重命名字段。`incoming_edge` 对 dependency record 必须是且只可以是该 path 的 exact `{from,to,path}`；completion/live record 为 `null`。`parent_snapshot` 精确为 `{record_hash:<sha256:...>}` 或首个无父 record 的 `null`。`acceptance_preservation_refs` 是对象数组，每项精确标识固定 validation/review `evidence_path` 与其 ordinary-file `record_hash`；Controller 按 `(evidence_path,record_hash)` 的 UTF-8 lexicographic 顺序规范化。`record_hash` 对排除 `record_hash` 字段后的整个 record，使用 object keys UTF-8 lexicographic 排序、数组保持上述 canonical 顺序、无无意义空白的 canonical JSON 序列化为 UTF-8，再计算 `"sha256:"+SHA-256(payload bytes)`。Controller 唯一负责 canonical path/path_id、读取 bytes、构造 records、排序 refs、计算/重算 hashes 与持久化；worker/reviewer只能提供 evidence locations，绝不能计算 authoritative snapshot/fingerprint。现有 helper 尚不生成或验证这些文件；这是 Controller file protocol，不得虚构 helper capability。
+
+State 的 current refs 使用固定字段名与对象 shape：`state.tasks.<id>.completion_snapshot_refs`、`dependency_handoff_snapshot_refs`、`live_snapshot_refs` 都是对象数组，而不是 hash 数组。前两者分别按 approved ownership path、approved incoming edge `(path,from_task,to_task)` 的 canonical 顺序排列；live refs 按 approved ownership path 排列。每项至少包含 `{evidence_path,record_hash,path,path_id}`；dependency 项还必须包含 `incoming_edge:{from,to,path}`。每次 completion、handoff dispatch 或 live reconciliation，Controller 先完整写 record并重算成功，再通过现有 preserve/merge完整替换相应 current refs数组。Task complete产生该 Task所有 approved paths的 current completion refs；没有对应 kind/path的 current record时不得省略或用裸 hash代替。
+
+Task 2 contract-revision invalidation 对每个 affected Task 清空 `completion_snapshot_refs=[]`、`dependency_handoff_snapshot_refs=[]`、`live_snapshot_refs=[]`，同时清除当前 `task_scope_fingerprint`/review-clean marker；旧 attempts/cycles、旧 state audit 与所有 snapshot 历史文件都保留且不得删除。不受影响 Task 的 current refs保持不变。Verify-fix invalidation采用同样的 current-ref清理语义；普通 resume只验证，不刷新或清理 refs。
+
+Resume 只能逐项从 state ref 的 `evidence_path` 精确读取 record；禁止扫描 `snapshots/` 目录、按最新 mtime/文件名猜测或从 Markdown 自由文本重建。Controller 必须先验证 `evidence_path` 是 safe canonical repo-relative file path且位于 exact `evidence/tasks/<task-id>/snapshots/`，再验证 filename 中的 kind、task/from/to、`path_id`、attempt 与 review-cycle tuple均匹配 state/record。随后重算并核对 record `schema/version/kind/path/path_id/path_hash/task/attempt/review_cycle/final_owner/record_hash`，确认 `path_id=sha256(UTF-8(canonical path))`、当前 bytes匹配需要 current freshness 的 `path_hash`、dependency 的 `incoming_edge` 精确等于 approved contract edge、`parent_snapshot.record_hash` 可由父 state ref精确到达，以及 acceptance refs存在且适用。缺失、tuple/filename/path/path_id/hash/edge mismatch、lineage gap、stale cycle或state/file identity mismatch一律fail closed。
+
+以同一共享路径 `src/service.ts` 的 `T1 → T4 → T9` 为例：T1 review clean为该path产生 `H1=completion_snapshot(T1,src/service.ts)`；T4 dispatch前为同一path以 `H1` 建立incoming dependency record，完成后产生 `H4=completion_snapshot(T4,src/service.ts)`；T9 dispatch前为同一path以 `H4` 建立incoming record，完成后产生最终 `H9=live_snapshot(T9,src/service.ts)`。`H1`、`H4` 是append-only历史，合法downstream mutation允许 `H1.path_hash != H9.path_hash` 且 `H4.path_hash != H9.path_hash`；但该path的 `H1 → H4 → H9` incoming lineage、依赖关系、每段acceptance preservation与evidence identity必须完整。若T4开始前该path live bytes不等于incoming `H1.path_hash`，或T9开始前不等于incoming `H4.path_hash`，该差异是未归属mutation，必须阻断dispatch。
+
+文件身份不会因同 owner pair 复用而碰撞：若 approved `T1 → T4` 同时交接 `src/a.ts` 与 `src/b.ts`，Controller 必须生成两个 dependency files，分别包含两个不同完整 `path_id`，每个文件只含自身 path 的 exact incoming edge。Owner也按path独立：同一Task T2可拥有 `src/c.ts`（`final_owner=T2`）并作为 `src/d.ts` 的中间owner（该path的 `final_owner=T7`）；Controller为两条path生成不同records并分别写各自 `final_owner`，禁止用Task级单一final owner覆盖二者。
+
+## Task and Implement Completion Freshness
+
+Task complete、Implement complete 与 resume 的 freshness 按 ownership 类型分别判断：
+
+1. **非 handoff path**：唯一 owner 的 `completion_snapshot_refs` 与 `live_snapshot_refs` 中该 path 对象所指 per-path records，其 `path/path_id/path_hash/final_owner` 必须彼此一致并精确匹配当前 live bytes；该路径不得因为其他路径存在 handoff 而获得豁免。Own path、brief、dependency/output 或 cycle identity drift 均使当前 validation/review 失效。
+2. **Handoff path**：历史 owner 的 per-path `completion_snapshot` 是 append-only history，合法下游 mutation后不失效。Controller必须验证该path每条incoming edge的 `dependency_handoff_snapshot` 在下游开始前匹配当时live bytes、从首owner到`final_owner`的parent lineage完整、edge dependency成立、每段`acceptance_preservation_refs` fresh，且`final_owner`的current per-path live ref精确匹配当前live bytes及其current completion record。禁止用最终bytes重算历史owner的`own_mutations`、覆盖历史snapshot、使旧review cycle失效，或要求历史completion与final live相等；任一incoming snapshot、lineage、acceptance preservation或final-owner freshness缺口才触发重验或阻断。
+3. **Task evidence**：`task_scope_fingerprint` 的canonical input对每个非handoff own path引用按path排序的current completion/live ref对象；对每个handoff path引用当前Task的per-path completion ref、按approved edge排序的incoming dependency ref对象与parent record identities。`own_mutations`不再是从当前最终bytes独立重算的第二份map，而是这些per-path records中与该Task cycle绑定的`path_hash`引用；Controller用固定cycle/brief/dependency字段加这些refs计算fingerprint。Worker不计算authoritative fingerprint，历史owner snapshot也不得被重解释为final-live assertion。
+4. **Implement complete**：逐 Task/逐 path 应用以上规则后，才计算完整 reconciled workflow product scope 的 `global_product_fingerprint`。它独立表示最终 change-wide bytes，供 Implement/Verify/Fold freshness 使用；不编码、替代或证明 handoff lineage。
+
+## Dynamic Undeclared Product Mutation
+
+每次 worker report、Git reconciliation、authoritative validation 和 review 前都必须构造 actual product mutation map，并与 `approved_task_contract` 的 `mutation_targets`/当前 ownership slice 比较。发现实际修改了未声明 product path 时：
+
+1. 立即停止 implementer/fixer 对该 path 及当前 Task 的继续修改；reviewer 不得以“改动合理”事后放行。
+2. 在 authoritative validation/review 前，按 Task blocker evidence records 向固定 Task evidence append canonical `kind=design_revision` BLOCKED record，再执行对应 blocked transition。Blocker 至少明确未声明 `path`、当前候选 Task、候选 owner，以及必须修订的 Plan fields（`mutation_targets`、必要的 `ownership_handoffs`/`depends_on`/acceptance/context refs）。无tools/模拟trajectory不得虚构物理append/merge已经执行；但当actual mutation boundary事实已足以判定未声明path时，`actions`/`state_writes`必须把canonical BLOCKED evidence append和canonical blocked transition列为STOP前当前trajectory必须形成的transition，而非仅作为未来pending建议。`state_non_writes`只能列validation/reviewer dispatch、继续product mutation、非canonical state patch等禁止写入，不得否定canonical blocker formation。
+3. 回到 Design 修订并重新 explicit approval；动态未声明 mutation 必然改变 `mutation_targets`/ownership contract，因此必须使用 contract revision 模式，按 Design Revision Closure 先通过 `validate-design-revision` 只读 preflight、再请求用户明确 reapproval、最后在用户批准后以相同参数加 `--allow-approval` 调用一次 `approve-design-revision`。只有新的 normalized `approved_task_contract`、exact `affected_tasks`、non-empty reason 与 approved control-plane 成功持久化后才能恢复。此处绝不允许 legacy `--unblock-tasks` context-only 模式。`files_hint`、manifest entry、JIT read、worker解释或 reviewer verdict 均不能补授 mutation ownership。
+
+无法在证据 append 前唯一确定候选 owner 或修订字段时 STOP 请求 Design 澄清，不得猜测。当前未声明mutation blocker formation不要求、也不得猜测尚未存在的revised contract exact affected closure、handoff或未来owner；这些只属于后续Design revision + helper preflight。未声明 mutation 即使已发生，也不因被读取、测试通过或 review clean 而合法化。
+
+## Design Revision Closure
+
+首次 Design approval 必须把 normalized contract 持久化为 `state.implementation.approved_task_contract`。Design reapproval 有且仅有两个互斥模式，判定 authority 是 old/new normalized Task contract identity，而不是 blocker 文案：
+
+- **Contract revision mode**：任何 canonical Task contract 字段变化——`depends_on`、`acceptance`、`verification`、`context_refs`、`mutation_targets`、`ownership_handoffs` 或派生 `ownership_table/final_owner`——以及 dynamic undeclared mutation、completed Task invalidation，都必须走只读 preflight → 用户明确 reapproval → 单次 write transition 的固定顺序。禁止新增、删除或重命名 Task ID；old/new Task ID set 必须完全一致，否则 bytes unchanged 并要求关闭或另起 change。
+- **Context-only legacy mode**：仅当 old/new normalized Task contract identity 精确相同、没有 dynamic undeclared mutation、没有 completed Task invalidation，且修改只涉及 approved control-plane/context bytes 时，才可按现有 approval semantics 使用 `approve-design-revision ... --unblock-tasks <complete-design-eligible-set> --allow-approval`。CLI 名称是 legacy compatibility，不代表所有 Design revision 的通用 action；不得混用 contract preflight 参数或把 legacy mode 伪装成 contract mode。
+
+Contract revision mode 的顺序必须精确为：
+
+1. Controller 完整写出并固定新的 Design artifacts、Plan、context manifests 与 approved control-plane map，先运行 `task-helper.py validate-change --change <change-dir>` 并通过；任何 artifact/manifest/helper validation 失败都 STOP，`gates.design` 保持 `pending`，不得请求 reapproval。
+2. 调用只读 `state-helper.py validate-design-revision --task-contract <new-approved-task-contract> --affected-tasks <exact-json-array> --revision-reason <non-empty> --approved-control-plane <complete-map>`。该 preflight 只做 exact closure/candidate state validation，复用 approval 的 full validation 与 candidate serialization；它不得接受 `--allow-approval`，不得写 state，成功或失败都必须保持 state bytes 与 `gates.design=pending` 不变。
+3. Preflight 成功后，Controller 向用户展示摘要并请求当前轮明确 reapproval。Preflight 输出的 required/declared affected set、contract identities 或 approved-control-plane identity 只是候选摘要，不构成 approval，不证明 evidence freshness，也不能授权后续写入；用户拒绝、犹豫或只要求继续修改时，不得调用 approval helper，不得写 state。
+4. 只有用户当前轮明确批准该 contract revision 后，Controller 才用与 preflight **完全相同的参数值**（除新增 `--allow-approval` 外）调用一次 `state-helper.py approve-design-revision --task-contract <same-new-approved-task-contract> --affected-tasks <same-exact-json-array> --revision-reason <same-non-empty> --approved-control-plane <same-complete-map> --allow-approval` 执行 write transition。Approve 不消费或信任 preflight 缓存；它必须重新读取当前 state、重新运行同一 validation/closure/candidate construction，处理 TOCTOU。若 state、Gate、contract、blocked/current-pointer、snapshot refs、completed Tasks 或其他 guard 在 preflight 与 approve 之间漂移，approval fail closed、state bytes unchanged、Gate pending。Contract drift / approved contract identity mismatch 的 `next_allowed_transition` 必须完整描述：回Design contract revision并固定新artifacts/contract → exact四参数只读`validate-design-revision` preflight → preflight成功后STOP请求未来当前轮explicit reapproval → 获批后用相同四参数加`--allow-approval`执行一次`approve-design-revision` → approve成功后才返回Implement；不得把preflight成功当approval，也不得由Implement自批。
+
+Preflight 失败必须 STOP，保持 Gate pending，不得请求用户批准、不得降级到 legacy mode、不得手工拼 patch。Helper 已强制模式互斥：contract preflight/approval 出现任一 contract 参数时，`--task-contract`、`--affected-tasks`、`--revision-reason` 必须一起提供，并拒绝同时出现 `--unblock-tasks`；legacy context-only approval 不接受 contract 参数。Controller 在调用前必须重算 old/new contract identity；identity 变化却选择 legacy mode，identity 不变却混用两套参数，或在 legacy context-only 分支调用 contract preflight，均 STOP 且不得调用 approval helper。
+
+`affected_tasks` 的唯一算法 authority 是 helper 的 deterministic required closure：
+
+1. 对 old/new contract 做完整 defensive canonical validation，包括 fields/types、排序、dependency graph、mutation paths、ownership rows、linear handoff topology、owner/final-owner references 与 control/VCS mutation target边界；任一 malformed input 在 serialization/write 前 fail closed。
+2. 比较既有 Task 的 canonical dependency、acceptance、verification、context refs、mutation targets、handoffs，以及 ownership row/final owner。变化 Task、变化 dependency edge 的 old/new 端点、变化 handoff/ownership chain 的 old/new owners 与 edge endpoints 进入 direct affected。
+3. 在 old 与 new dependency reverse graph 的 union 上加入所有 transitive dependents，按新 `plan_order` 输出 required closure。`plan_order` 自身、title、mutable status、`files_hint` 与 rollback 文案不触发 closure。
+4. Caller 声明集合忽略输入顺序，但必须与 required closure 精确相等；duplicate、unknown、missing 或 extra ID 均返回 structured mismatch，state bytes unchanged。不得同时使用旧 `--unblock-tasks` 形成第二套集合 authority。
+
+所有 validation 与候选 state construction 必须先在内存完成；`validate-design-revision` 在序列化验证候选 state 后丢弃候选并只输出摘要，`approve-design-revision --allow-approval` 重新 read/revalidate 后才进入一次现有 write boundary，不宣称 filesystem atomic rename。成功 approval transition 完整替换 `approved_control_plane` 与 `approved_task_contract`、写 `gates.design=approved`，并 append `implementation.design_revisions[]` audit（reason、declared/required set、old/new contract identity、invalidated current evidence）。Affected completed/blocked/pending Tasks 回到 `pending`/revalidation，从 `implementation.completed_tasks` 移除 affected completed IDs，清除当前有效 fingerprint/review-clean markers；attempts、cycles、reports、旧 fingerprints 与 append-only snapshots 保留为历史但不满足新版 completion。Unaffected completed Tasks 保持有效；affected `in_progress` Task fail closed，不能静默中断。
 
 ## Canonical State Protocol
 
@@ -154,7 +239,14 @@ Canonical `state.json` 至少支持以下字段；允许扩展，但不得删除
       "review_cycle": 0,
       "manual_repair_authorization": null,
       "design_revision_authorization": null,
-      "task_scope_fingerprint": "sha256:<task-scope-snapshot>"
+      "task_scope_fingerprint": "sha256:<task-scope-snapshot>",
+      "completion_snapshot_refs": [
+        {"evidence_path":"evidence/tasks/T1/snapshots/completion-T1-<path-id>-a1-r1.json","record_hash":"sha256:<record-hash>","path":"src/example.ts","path_id":"<64-lowercase-hex>"}
+      ],
+      "dependency_handoff_snapshot_refs": [],
+      "live_snapshot_refs": [
+        {"evidence_path":"evidence/tasks/T1/snapshots/live-T1-<path-id>-a1-r1.json","record_hash":"sha256:<record-hash>","path":"src/example.ts","path_id":"<64-lowercase-hex>"}
+      ]
     }
   },
   "implementation": {
@@ -173,6 +265,11 @@ Canonical `state.json` 至少支持以下字段；允许扩展，但不得删除
     },
     "approved_control_plane": {
       ".dev-docs/changes/<change-id>/design.md": "sha256:<content-hash>"
+    },
+    "approved_task_contract": {
+      "plan_order": [],
+      "tasks": [],
+      "ownership_table": []
     }
   },
   "evidence": {
@@ -228,7 +325,7 @@ Canonical `state.json` 至少支持以下字段；允许扩展，但不得删除
 - `tasks.<id>.review_cycle`：canonical non-negative integer。无 reviewer cycle 表示为 `0`。每轮 review cycle 的开始边界必须在该轮 authoritative final validation 生成之前，而不是 reviewer dispatch 时：fresh path 在 implementer 完成产品修改后、开始 final validation 前从 `0` 递增到 `1`；fix path 在 fixer 完成产品修改后、开始 post-fix final validation 前递增到下一值。对应 state merge 成功后，final validation、fresh reviewer/re-review、Task completion 使用同一 persisted `attempt/fix_cycle/review_cycle` tuple。Task redispatch/新 attempt 重新从 `0` 开始；blocked→pending、普通 resume 与 Design reapproval 保留当前值直到下一次 dispatch 重置。
 - `tasks.<id>.manual_repair_authorization`：manual-escalation repair-attempt transition 的窄身份字段，只允许为 `null` 或 canonical `authorization_record_id=sha256:<hex>`。普通 Task dispatch、Design revision/reapproval、blocked→pending recovery、Verify fix redispatch 等路径不得写非 null；manual-escalation repair-attempt merge 成功时必须写入所应用 authorization record 的 ID。它记录最近一次 attempt 是否由 fixed authorization record 派生；不能替代 validation/review freshness，也不能单独授权再次 repair。该 ID 在该 new attempt 的后续 validation/review/fix cycles 及 Task completion 中 preserve 作为 audit；每次普通 Task dispatch、Verify fix invalidation 后的下一次 dispatch、blocked→pending recovery、blocked→pending 后的下一次 dispatch、或 Design/Plan/acceptance/scope revision 创建的新 attempt/返回 pending 时，必须清为 `null`；普通 resume 保留并核验；旧 completed/history evidence 仍 append-only 保留。未知 extra fields 继续 preserve，但不得替代此 canonical field。
 - `tasks.<id>.design_revision_authorization`：manual-escalation Design-revision transition 的窄身份字段，只允许为 `null` 或 canonical `design_revision_record_id=sha256:<hex>`。它仅记录某个 active manual escalation Task 已按固定 `MANUAL_ESCALATION_DESIGN_REVISION` record 分流到 Design draft/pending；不得替代 Design Gate approval、Plan/context 变更审查、validation/review freshness 或 Task dispatch authority。该字段与 `manual_repair_authorization` 互斥：同一 Task 上二者不得同时为 non-null，任何 status 都不例外；repair-attempt exact transition 不得写 `design_revision_authorization`，Design-revision exact transition 必须清 `manual_repair_authorization` 并写入 applied Design record ID。Controller/helper 遍历 Tasks 时只要发现两个 authorization 字段同时 non-null，必须 structured fail closed 且保持 state bytes unchanged。成功 Design reapproval helper 必须对所有恢复的 Design-eligible Tasks 清为 `null`；未恢复的 resolved/other/completed Tasks 只能保留其中一个 authorization 字段作审计，若两个字段同时存在则不是可恢复状态。下一次普通 Task dispatch 才递增 attempt 并重置 cycles，且同时保持/清理规则按 Task dispatch 执行。
-- `tasks.<id>.task_scope_fingerprint`：canonical input 是固定 JSON object，字段且来源如下：`task_id` 来自 Plan/current Task id；`attempt` 来自 `tasks.<id>.attempts`（并在 current task 时与 `current_task.attempt` 比较）；`fix_cycle` 来自 `tasks.<id>.fix_cycle`；`review_cycle` 来自 `tasks.<id>.review_cycle`；`task_brief_sha256` 来自最终 `evidence/tasks/<id>/task-brief.md` bytes；`own_mutations` 来自该 Task 自有 mutation `path→content/blob SHA-256` map（删除使用 deleted marker）；`dependency_output_fingerprints` 来自直接依赖/output 的稳定排序 fingerprints。Controller 不得从 evidence 文本推断 cycle 编号或 fingerprint 字段。该 canonical JSON 使用固定 key 顺序/无无意义空白序列化后计算 SHA-256，只证明该 Task 的 bounded scope 与当前 evidence cycle identity。Evidence cycle 中记录的 `task_id/attempt/fix_cycle/review_cycle` 必须与 `state.json` 当前 Task cycle 精确匹配；任一 cycle identity、Task 自有路径、brief、依赖或依赖 output 变化都会使旧值失效，旧 cycle 仅保留审计，不得用于 Task completion、Implement complete、Verify fix 或 resume。后续无关 Task 的 mutation 不使其自然过期。
+- `tasks.<id>.task_scope_fingerprint`：canonical input 是固定 JSON object：`task_id`、state 中的 `attempt/fix_cycle/review_cycle`、最终 `task_brief_sha256`、按 approved path 排序的 `completion_snapshot_refs`、按 approved edge 排序的 `dependency_handoff_snapshot_refs`、按 approved path 排序的 `live_snapshot_refs`（只有 current/final owner 的对应 path 有 current 项）和直接 dependency/output fingerprints。每个 ref 必须以 `evidence_path/record_hash/path/path_id` 精确指向上节 per-path canonical record；dependency ref 另含 exact `incoming_edge`。`own_mutations` 的内容身份来自对应 record 的 `path_hash`，不得另从最终 live bytes重算历史 owner map。Controller读取state/records后用固定key顺序、无无意义空白的UTF-8 canonical JSON计算SHA-256；worker/reviewer不得计算authoritative fingerprint，也不得从evidence文本推断cycle或字段。非handoff owner的completion/live refs必须共同匹配当前bytes；handoff历史owner只要求append-only completion、incoming lineage与acceptance-preservation fresh，最终live freshness由final owner refs承担。Cycle/brief/dependency或所引用snapshot identity drift才使当前值失效；合法downstream mutation不废弃历史owner cycle，后续无关Task mutation也不使其自然过期。
 - `implementation.base_sha`：Implement 首次进入、任何 Task mutation 之前的 HEAD。
 - `implementation.head_sha`：最近一次已审查状态合并时观察到的 HEAD；未产生 commit 时可与 `base_sha` 相同。
 - `implementation.completed_tasks`：按完成顺序保存 Task id，不重复。
@@ -238,6 +335,7 @@ Canonical `state.json` 至少支持以下字段；允许扩展，但不得删除
 - `implementation.preexisting_paths`：仅在当前轮 explicit authorization 下保留的、不与 change scope 重叠的既有 dirty product/other paths。
 - `implementation.preexisting_fingerprints`：每个 preexisting path 在首次 Implement entry 观察到的 Git status + content hash（删除路径使用明确 deleted/missing marker）；每个 Task/Verify/Fold mutation 边界必须复核，任何变化立即 STOP。
 - `implementation.approved_control_plane`：immutable approved control-plane（approved brief/spec/design/plan/manifests 等）path → SHA-256 content hash map；这些路径从 product diff/Verify scope 排除，只有重新 Design approval 才可更新 hash。
+- `implementation.approved_task_contract`：首次或最近一次 explicit Design approval 固定的 normalized `task_contract`，包含 canonical `plan_order/tasks/ownership_table`。它是 dispatch、ownership、handoff 与 Design revision old-contract 输入；不得从当前 Plan prose、`files_hint`、context manifest 或 worker report重建替代。
 - Workflow-owned mutable control-plane 不另混入 `changed_files`：current-change `state.json`、固定 `evidence/tasks/`、`evidence/review.md`、`evidence/fold-proposal.md`、fold apply evidence，以及仅 Fold Close 可改的 `.dev-docs/changes/index.md` current-change entry，可按固定路径、shape 和合法 transition 变化。
 - `evidence.verify_review`：`evidence/review.md` 或 `null`。
 - `evidence.fold_proposal`：`evidence/fold-proposal.md` 或 `null`。
@@ -292,7 +390,7 @@ Resume/re-entry 仅写当前 transition 所需字段（例如 `phase/status/head
 
 ### Task blocker evidence records
 
-Task-local blocked/unblock 只使用 `evidence/tasks/<task-id>/` 下既有固定四文件，不新增第五个 Task evidence 文件，不新增 helper/runtime/journal 或第二状态 authority。Canonical `blocker.evidence` 必须精确指向承载 BLOCKED/RESOLVED append records 的同一个 project-relative evidence 文件；`state.json` 只保存该文件路径和 structured blocker，不复制 record 正文。
+Task-local blocked/unblock 只使用 `evidence/tasks/<task-id>/` 下既有固定四个 Markdown 文件；`snapshots/` 只承载上文 canonical snapshot records，不能承载 BLOCKED/RESOLVED。不得新增第五个 Markdown Task evidence 文件、helper/runtime/journal 或第二状态 authority。Canonical `blocker.evidence` 必须精确指向承载 BLOCKED/RESOLVED append records 的同一个 project-relative evidence 文件；`state.json` 只保存该文件路径和 structured blocker，不复制 record 正文。
 
 触发源到 evidence 文件的唯一映射如下；BLOCKED record 与后续 RESOLVED record 必须追加到同一文件：
 
@@ -311,7 +409,7 @@ Blocker kind 必须按下表确定；无法唯一分类时 STOP，不 append、�
 
 | Cause class | `kind` | Examples | Recovery authority |
 |---|---|---|---|
-| 必须修改或重新批准 Design、Plan、context manifest、required context/target 声明或内容后才能继续 | `design_revision` | pre-dispatch required context/target 缺失且需要补充 approved control-plane；worker `NEEDS_CONTEXT` 指向 Plan/context 不足；immutable approved control-plane drift | explicit Design Gate reapproval + `approve-design-revision` exact transition |
+| 必须修改或重新批准 Design、Plan、context manifest、required context/target 声明或内容后才能继续 | `design_revision` | pre-dispatch required context/target 缺失且需要补充 approved control-plane；worker `NEEDS_CONTEXT` 指向 Plan/context 不足；immutable approved control-plane drift | explicit Design Gate reapproval；contract identity 变化时先 `validate-design-revision` 只读 preflight，再用户明确 reapproval，最后同参数 `approve-design-revision --allow-approval` exact transition；legacy context-only 仅限 identity 不变 |
 | 可由新证据证明已恢复的权限、环境、外部依赖、validation infrastructure 或 reviewer infrastructure 临时问题 | `resolved_evidence` | 权限授予、环境变量/工具安装恢复、外部服务可用、validation/reviewer infrastructure 恢复 | 同一 evidence 文件中的 matching RESOLVED record + resolved-evidence exact recovery |
 
 RESOLVED record 只有在 state 已成功引用 `kind=resolved_evidence` blocker 时才具有 blocked→pending recovery 权限；若用于下方 pending evidence reconciliation，它只是关闭“evidence 已 append 但 state 从未 blocked”的 audit record，不执行 state recovery。RESOLVED 必须追加在同一个 `blocker.evidence` 文件中且位于被恢复/关闭的 BLOCKED occurrence 之后。每条 RESOLVED record 至少包含：`record_type=RESOLVED`、`resolved_for.blocker_record_id`、完整 `resolved_for` identity fields（`task_id/attempt/fix_cycle/review_cycle/kind/code/evidence_path/blocker_occurrence`）、`resolution_facts`。选择 record 时必须使用 latest applicable 规则：先在该文件中找到最新一条 identity 精确匹配当前 canonical Task cycle、当前 state blocker 与 `blocker_record_id` 的 BLOCKED occurrence；只考虑其后续追加且 `resolved_for` 完整引用同一 `blocker_record_id` 与完整 identity 的 RESOLVED records；若多条匹配，选择最后一条；位于最新匹配 BLOCKED 之前、引用旧 occurrence、旧 cycle、旧 code、旧 evidence path、旧 reason、其他 Task、或仅自由文本声明“已解决”的 RESOLVED 均为 stale/mismatch，必须拒绝。文件内允许多个 append records；旧 occurrence 的延迟 RESOLVED 即便排在新 BLOCKED occurrence 之后，也只能引用旧 `blocker_occurrence/blocker_record_id`，永远不得恢复新的 blocker。
@@ -433,7 +531,7 @@ current_task=null
 reason=null   # only when the existing top-level reason is the manual-escalation reason for this same previous tuple
 ```
 
-该 transition 只把 active manual escalation 分流回 Design draft/pending，允许随后修改 Design artifacts 并进行 explicit Design reapproval；它不是 Task blocked、不是 repair attempt、也不是 ordinary Task dispatch。它必须 preserve `attempts`、`fix_cycle`、`review_cycle`、`task_scope_fingerprint`、implementation evidence/changed files/head/preexisting/approved control-plane、artifacts、metadata、unknown keys 与其他 Tasks/Gates 作为审计；不得递增 attempt，不得重置 cycles，不得创建 blocker，不得追加 BLOCKED，不得批准 Design Gate，不得清理无关 reason。Merge 成功后才可修改 Design artifacts；Merge 失败即 STOP，已 append 的 Design choice record 保留为审计但不得进入 Design。后续 explicit Design reapproval 成功时，由 `approve-design-revision --allow-approval` 对该 Task 清 `design_revision_authorization`；下一次普通 dispatch 才按 Task dispatch 递增 attempt 并重置 cycles，旧 exhausted evidence/fingerprint 不满足新 attempt。
+该 transition 只把 active manual escalation 分流回 Design draft/pending，允许随后修改 Design artifacts 并进行 explicit Design reapproval；它不是 Task blocked、不是 repair attempt、也不是 ordinary Task dispatch。它必须 preserve `attempts`、`fix_cycle`、`review_cycle`、`task_scope_fingerprint`、implementation evidence/changed files/head/preexisting/approved control-plane、artifacts、metadata、unknown keys 与其他 Tasks/Gates 作为审计；不得递增 attempt，不得重置 cycles，不得创建 blocker，不得追加 BLOCKED，不得批准 Design Gate，不得清理无关 reason。Merge 成功后才可修改 Design artifacts；Merge 失败即 STOP，已 append 的 Design choice record 保留为审计但不得进入 Design。后续 explicit Design reapproval 若进入 contract revision mode，必须先 `validate-design-revision` 只读 preflight、再请求用户明确 reapproval、最后同参数 `approve-design-revision --allow-approval`；若 contract identity 不变才可使用 legacy context-only approval。成功 reapproval 对该 Task 清 `design_revision_authorization`；下一次普通 dispatch 才按 Task dispatch 递增 attempt并重置 cycles，旧 exhausted evidence/fingerprint 不满足新 attempt。
 
 #### Pending manual-escalation Design-revision reconciliation before recovery/dispatch
 
@@ -541,7 +639,7 @@ Blocked Task 只阻止其 transitive dependents；Controller 可继续 dispatch 
 
 Unblock 必须保留固定 Task evidence 中的旧 blocker/history，并在下一次 dispatch 才递增 attempt。`state.tasks.<id>.blocker.kind` 是唯一恢复策略 authority：
 
-- `kind=design_revision`：Design、Plan 或 context 声明/内容变更导致的 blocker，必须重新经过 explicit Design Gate approval。Controller 先基于批准后的完整 immutable control-plane scope 计算**完整新 map**，并在调用 helper 前验证当前 `state.tasks` 中**所有** `status=blocked` Tasks 的 state 内 canonical blocker identity（`kind/code/evidence/reason/blocker_occurrence/blocker_record_id` 与顶层 Task `reason`）合法；还必须读取每个 blocked Task 的固定 `blocker.evidence` 文件，验证其中存在 matching BLOCKED record，并按 canonical identity `{task_id,attempt,fix_cycle,review_cycle,kind,code,evidence_path,blocker_occurrence}` 重新计算 `blocker_record_id` 且与 state 完全一致。任一 blocked Task 的 evidence 文件缺失、record 缺失、identity mismatch、record id mismatch 或 reason mismatch，Controller 必须 STOP，且不得调用 helper。通过后，Controller 构造 deterministic Design-eligible Task 集合：第一类为当前 `state.tasks` 中所有且仅有 `status=blocked && blocker.kind=design_revision` 的 Task ID；第二类为 manual-escalation Design-revision exact transition 已成功分流、当前为 `status=pending` 且 `design_revision_authorization` 为 canonical non-null `sha256:<hex>` 的 Task ID。第二类 Task 不是 blocked，不改变“blocked design_revision 集合”的语义；它们只是同一次 Design reapproval 后必须清理 applied Design-choice identity 的恢复集合成员。集合稳定按 `state.tasks` iteration/Plan order 传入，且不得包含 resolved_evidence、completed、普通 pending、unknown 或 malformed authorization Task。随后只调用一次 `state-helper.py approve-design-revision --state <path> --approved-control-plane <complete-map-json-object> --unblock-tasks <complete-design-eligible-task-id-json-array> --allow-approval`（CLI 名称保留为 `--unblock-tasks`，但协议语义是完整 Design-eligible 集合）。该 helper 不读取 evidence 文件；它负责校验 state 内所有 Tasks 的 canonical status shape、所有 blocked Tasks 的 canonical 字段：`kind=design_revision|resolved_evidence`、non-empty string `code/reason/evidence`、safe project-relative `evidence`、positive integer `blocker_occurrence`、严格 lowercase `sha256:` + 64 hex `blocker_record_id`、以及顶层 Task `reason` 为 non-empty string 且等于 `blocker.reason`；还校验 `manual_repair_authorization` 与 `design_revision_authorization` 只为 `null` 或 strict lowercase `sha256:<hex>`，且任何 status 下二者不得同时 non-null。请求集合必须精确等于 Design-eligible 集合；遗漏任一 design_revision blocked Task 或 pending Design-authorized Task，或包含任何 resolved_evidence、completed、普通 pending、unknown Task，均 fail closed 且 state bytes 不变。成功时 helper 在内存中完成所有 validation 与 state 构造，通过现有单次 write boundary 完整替换 `implementation.approved_control_plane`、写 `gates.design=approved`、将恢复集合内 Tasks 保持/置为 `pending` 并清理 `manual_repair_authorization` 与 `design_revision_authorization`；仅对 blocked design_revision Tasks 额外清理 `blocker/reason`。`resolved_evidence` blocked Tasks 与未恢复 completed/other Tasks 的 `status/blocker/reason` 原样保留，并只保留合法的单一 authorization 审计字段；若 `current_task` 指向恢复集合成员则清为 `null`，若指向未恢复 blocked Task 则原样保留。不得宣称 filesystem atomic。Controller 不得用 `replace-object` + `merge-state`、`merge-state` 多步 patch 或任何通用 JSON path mutation 拼装 Design reapproval transition。普通 resume 只 preserve/compare map，绝不调用 `approve-design-revision`、`replace-object` 或刷新 hash。
+- `kind=design_revision`：Design、Plan 或 context 声明/内容变更导致的 blocker，必须重新经过 explicit Design Gate approval。Controller 先验证所有 blocked evidence identities、计算完整新 approved control-plane map，并比较 old/new normalized Task contract identity。若 identity 改变、发生 dynamic undeclared mutation 或需 invalidation completed Task，必须走 Design Revision Closure 的 contract revision mode：先完成 artifacts + `validate-change`，再用完整 new contract、exact affected closure、non-empty reason 与 complete approved control-plane 调用 `validate-design-revision` 只读 preflight；preflight 成功后请求用户明确 reapproval；用户批准后才用相同参数加 `--allow-approval` 调用一次 `approve-design-revision`。Preflight 失败 STOP、Gate pending；用户拒绝不调用 approve、不写 state。只有 identity 不变、纯 context/control-plane bytes 修正且不 invalidation completed Task 时，才可走 legacy `--unblock-tasks` context-only mode；legacy 分支保持 contract identity 不变，不调用或混用 contract preflight。两种 approval mode 都至多调用一次写入型 `approve-design-revision`，不得混参；helper 不读取 evidence 文件，Controller 仍须预先验证 matching BLOCKED/Design-choice records。Contract mode 按 helper 的 affected closure invalidation语义更新；legacy mode 的请求集合必须精确等于所有 design_revision blocked Tasks 加 pending Design-authorized Tasks，并保持 resolved-evidence/other Tasks不变。任一 mismatch、malformed state 或 helper failure 都保持 bytes unchanged并 STOP。不得用 `replace-object` + `merge-state`、多步 patch 或通用 JSON path mutation拼装 reapproval；普通 resume只 preserve/compare，绝不调用 reapproval action或刷新 hashes。
 - `kind=resolved_evidence`：临时权限、环境、外部依赖或 validation/reviewer infrastructure blocker。只有 `state.tasks.<id>.blocker.evidence` 指向的同一固定 Task evidence 文件中追加了可审查且 latest applicable 的 RESOLVED record 后，才可走下方唯一 exact recovery transition；不要求也不得虚构 Design approval，不得调用 approval-only replacement、`replace-object` 或 `approve-design-revision`，并且不得因为 Design reapproval 被恢复。状态链为：`blocked(kind=resolved_evidence)` + matching `BLOCKED` record → 同文件 append latest applicable `RESOLVED` record → resolved-evidence exact recovery 写回 `pending` 并清 `blocker/reason/manual_repair_authorization/design_revision_authorization` → 重新计算 eligibility → 下一次普通 Task dispatch 才递增 attempt 并重置 cycles。
 
 #### Resolved-evidence exact recovery
@@ -571,7 +669,7 @@ current_task=null   # only when current_task points to this same task; otherwise
 
 ### Implement complete
 
-仅当 `plan.yaml` 中所有 Task 均在 `state.tasks` 中为 `completed`、`current_task` 已清空，且 Controller 对**每个** completed Task 都重算当前 `task_scope_fingerprint`，验证它与 state 及匹配当前 brief、同一 persisted tuple 的 authoritative final validation cycle、fresh reviewer PASS 精确一致时合并。后续无关 Task 不会使早期 evidence 失效，但 own path、dependency/output 或 brief drift 必须退回重验。完成逐 Task 检查后，Controller 对完整 reconciled workflow product scope 计算 `global_product_fingerprint`，并作为初始 change-wide reviewed snapshot 写入 `implementation.product_fingerprint`。缺少任一 Task 当前 evidence 或 global 计算失败都不得完成 Implement；只看 legacy/mutable status 不足以完成：
+仅当 `plan.yaml` 中所有 Task 均在 `state.tasks` 中为 `completed`、`current_task` 已清空，且 Controller 按 Task and Implement Completion Freshness 验证每个 Task 的 current `task_scope_fingerprint` 时才合并：非 handoff path重算 current completion/live identities并与当前 bytes一致；handoff path重算历史 completion records自身identity、完整 incoming lineage、acceptance-preservation refs及final-owner current live identity，绝不使用最终 bytes重算历史 owner `own_mutations`。再核对当前 brief、同一 persisted tuple的authoritative validation与fresh reviewer PASS。后续无关或合法 downstream mutation不废弃早期历史 evidence；只有其cycle/contract、incoming lineage、acceptance preservation、dependency/output或final-owner live freshness drift才退回重验。完成逐 Task检查后再计算完整 `global_product_fingerprint`。缺少任一当前 evidence或global计算失败均不得完成：
 
 ```text
 phase=implement
@@ -679,14 +777,14 @@ Close 不移动或重命名 `.dev-docs/changes/<change-id>/`。`.dev-docs/change
 
 Pre-flight 必须读取 Git repo、HEAD 与 dirty paths，并在首次 entry 和 resume 都把每条路径归入且仅归入四类：
 
-1. **Immutable approved control-plane**：Design-approved brief/spec/design/plan/manifests 等。逐项记录 path + SHA-256 hash 到 `implementation.approved_control_plane`；每个 Task dispatch 与 Fold boundary 复核。缺失/hash drift 是 change-level STOP。Design/Plan/context 修改并获得重新 explicit Design approval 后，Controller 必须计算完整新 immutable map 与完整 blocked Task ID 集合，用单次 `approve-design-revision --allow-approval` helper action 同时完成 whole-map replacement、Design approval 与相关 Tasks 的 `blocked→pending`；helper 失败即 STOP，不 dispatch。普通 resume/re-entry 只 preserve/compare，绝不调用 reapproval action、replace 或刷新。
+1. **Immutable approved control-plane**：Design-approved brief/spec/design/plan/manifests 等。逐项记录 path + SHA-256 hash 到 `implementation.approved_control_plane`；每个 Task dispatch 与 Fold boundary 复核。缺失/hash drift 是 change-level STOP。重新 explicit Design approval 前，Controller 必须计算完整新 map 并比较 old/new normalized Task contract identity：contract字段变化、dynamic undeclared mutation或completed invalidation走 contract revision mode，并严格执行 artifacts + `validate-change` → `validate-design-revision` 只读 preflight → 用户明确 reapproval → 相同参数加 `--allow-approval` 的单次 `approve-design-revision`；只有 contract identity不变且纯 context/control-plane bytes修正时，legacy `--unblock-tasks` context-only mode 才可用且不得混用 preflight contract mode。写入型 helper action 同时完成相应 whole-map replacement、Design approval与恢复/invalidation；helper失败即 STOP。普通 resume/re-entry只 preserve/compare，绝不调用 reapproval action、replace或刷新。
 2. **Workflow-owned mutable control-plane**：current-change `state.json`、固定 `evidence/tasks/<id>/` 四文件、`evidence/review.md`、`evidence/fold-proposal.md`、fold apply evidence，以及 narrowly authorized `.dev-docs/changes/index.md` current-change entry。它们只可按固定 path/shape、append-only evidence 与合法 transition 变化；不进入 product diff、`implementation.changed_files` 或 Verify product scope。Fold two-phase journal 和失败 evidence 属于此类。
 3. **Workflow-owned product mutations**：由本 change 在 `base_sha` 后产生，且可由 Task brief hash、implementer/validation/review evidence 与 changed-files snapshot 归属的产品路径。首次 entry 可为空；resume 必须重建归属，不能误判为 preexisting dirt。
 4. **Preexisting dirt**：在首次 entry 已存在且经用户当前轮 explicit authorization 保留的、与 scope 不相交的其他 dirty paths。逐项记录 path、Git status 和 content hash/deleted marker 到 `preexisting_fingerprints`；每个 Task/Verify/Fold mutation 边界复核，任一变化立即 STOP。产品 overlap 或无法归属的 dirty path 始终 STOP，授权不能覆盖。
 
 Snapshot authority 在本 File Protocol 中唯一成立。Fingerprint 分为两层：
 
-- `task_scope_fingerprint`：`task_id` + 当前 `attempt` + 当前 `fix_cycle` + 当前 `review_cycle` + task-brief hash + Task 自有 mutation `path→content/blob hashes` map + 直接 dependency/output fingerprints 的稳定排序 canonical SHA-256。用于 Task complete、Implement complete、Verify fix 与 resume 的逐 Task evidence freshness；当前 evidence cycle 的 identity 必须与 state 精确匹配，且 authoritative final validation/review evidence 只能在该 identity 成功持久化后生成。旧 cycle 只保留审计，不可满足新 cycle；无关后续 Task 不参与该 Task map。
+- `task_scope_fingerprint`：`task_id` + 当前 `attempt/fix_cycle/review_cycle` + task-brief hash + 按 approved path/edge 排序的 canonical per-path completion/dependency/live ref对象 + 直接 dependency/output fingerprints 的稳定排序 canonical SHA-256。`own_mutations`来自所引用snapshot record的单个`path_hash`，不另用当前最终bytes重算历史owner map。用于Task complete、Implement complete、Verify fix与resume；非handoff owner要求completion/live/current bytes一致，handoff历史owner要求append-only completion与完整incoming lineage，final owner承担current live freshness。旧cycle在其contract/cycle identity失效时只作审计，但合法downstream mutation本身不使历史cycle失效；无关后续Task也不参与。
 - `global_product_fingerprint`：下方完整 reconciled workflow product scope 的最终 path→content/blob hash map canonical JSON SHA-256。用于 Implement complete 的初始 change-wide snapshot，以及 Verify/Fold 审查与所有用户 decision/retry freshness。
 
 `global_product_fingerprint` 只有一个 canonical 算法：
@@ -715,7 +813,7 @@ workflow product scope =
 
 ## State Merge Rules
 
-除 Design reapproval 只能通过 `approve-design-revision --allow-approval` 对 `implementation.approved_control_plane` 做 allowlisted whole-object replacement 外，所有 `state.json` 更新必须使用 recursive preserve/merge。`replace-object --allow-approval` 只保留为低层 allowlisted replacement helper，不得用于 Design reapproval transition，也不是普通 merge 的替代品：
+除 Design reapproval 必须通过单次写入型 `approve-design-revision --allow-approval` action 外，所有 `state.json` 更新必须使用 recursive preserve/merge。Contract revision 写入前必须已按 Design Revision Closure 完成只读 `validate-design-revision` preflight、取得用户明确 reapproval，并在 approve 时使用相同参数加 `--allow-approval` 重新 read/revalidate；context-only legacy reapproval 只在 contract identity不变时使用 `--unblock-tasks` mode。两者不得混用。`replace-object --allow-approval` 只保留为低层 allowlisted replacement helper，不得用于 Design reapproval transition，也不是普通 merge 的替代品：
 
 - object 对 object 递归合并。
 - scalar、array 或 `null` patch 替换对应值。
@@ -734,7 +832,8 @@ Task 1 helper CLI 是协议安全机制，不是 runtime：
 - `state-helper.py check-gate` 只依据持久 gate 或调用者显式 `--authorized` 判断 readiness。
 - `state-helper.py merge-state` 执行 recursive preserve/merge；任何 `gates.*="approved"` patch 必须显式 `--allow-approval`。
 - `state-helper.py replace-object` 只 allowlist `implementation.approved_control_plane`，要求 `--allow-approval`；若 `state.implementation` 缺失可创建，若已存在但不是 object 必须 structured error 且不改 state bytes。它是低层 whole-object replacement helper，本身不批准 Gate，不得用于 Design reapproval transition。
-- `state-helper.py approve-design-revision` 是 Design reapproval 的唯一 helper action：要求 `--allow-approval`、`--approved-control-plane` JSON object、`--unblock-tasks` 无重复 string ID JSON array；要求 `state.gates`/`state.tasks` 为 object、`gates.design == "pending"`、所有 `state.tasks.<id>` 均为 canonical Task status shape。它在写前验证每个 blocked Task 的 state 内 canonical blocker object：`kind=design_revision|resolved_evidence`、non-empty string `code/reason`、safe project-relative string `evidence` 且拒绝 ASCII control chars（含 embedded NUL/DEL）、`blocker_occurrence` 为 positive integer（bool 不得按 int 通过）、`blocker_record_id` 严格匹配 lowercase `sha256:` + 64 hex、顶层 Task `reason` 为 non-empty string 且等于 `blocker.reason`。Helper 同时校验 `manual_repair_authorization` 与 `design_revision_authorization` 只为 `null` 或 strict lowercase `sha256:` + 64 hex，且对所有 status 的所有 Tasks 强制二者不得同时 non-null；违反时 structured fail closed 且 state bytes unchanged。两者不能替代 blocker identity。Helper 不读取 evidence 文件、不重算 record id；Controller 在调用 helper 前必须验证所有 blocked Tasks 对应固定 evidence 文件存在 matching BLOCKED record 并按 canonical identity 重算 record id，并验证所有 pending Design-authorized Tasks 的 `MANUAL_ESCALATION_DESIGN_REVISION` record identity。Helper 不要求 exact blocker key set；unknown extra fields 可保留，但不得替代必填 identity 字段。不得接受 legacy blocker 或从自由文本推断 kind。`--unblock-tasks` 的 CLI 名称保留，但必须精确等于完整 Design-eligible Task 集合：所有且仅有 `kind=design_revision` 的 blocked Task IDs，加上所有 `status=pending && design_revision_authorization` 为 non-null canonical record ID 的 Task IDs；`resolved_evidence` Tasks 保持 blocked 且其 `blocker/reason/manual_repair_authorization/design_revision_authorization` 字段不变，completed/other 未恢复 Tasks 保留合法的单一 authorization 审计字段。写前还必须验证 `current_task` 为 `null` 或 exact canonical `{id,attempt,status}` pointer，且 key set 精确等于 `{id,attempt,status}`、`id` 存在、`attempt` 为 non-negative integer、被引用 `tasks.<id>.attempts` 也是 non-negative integer、二者相等、`status` 等于 `tasks.<id>.status`；shape/type 非法、额外字段、未知 ID、attempt/status 不一致均 fail closed。成功时在同一内存 action 中构造完整 state：完整替换 `implementation.approved_control_plane`、写 `gates.design=approved`、恢复集合内 Tasks 保持/置为 `pending` 并清 `manual_repair_authorization/design_revision_authorization`；仅 blocked design_revision Tasks 额外清 `blocker/reason`；若 `current_task` 指向本次恢复 Task 则清为 `null`，若指向未恢复 blocked Task 则原样保留；只调用一次现有 `write_json_file` boundary，输出 `ok,state_path,approved_control_plane_replaced,unblocked_tasks,updated`；失败 structured JSON 且 state bytes 不变。
+- `state-helper.py validate-design-revision` 是 contract revision 的只读 preflight action，只接受 `--state`、完整 `--approved-control-plane`、`--task-contract`、`--affected-tasks` 与 `--revision-reason`，不得接受 `--allow-approval` 或 `--unblock-tasks`。它复用 approval 的 old/new canonical contract full validation、Task ID set guard、old/new reverse dependency union exact closure、affected in-progress guard、state/blocker/current-pointer/authorization/snapshot-ref/completed-tasks validation 与 candidate serialization；成功只输出 required/declared affected set、contract/control-plane identities 和 `updated=false` 摘要，不写 state、不批准 Gate、不证明 evidence freshness。失败 structured 且 bytes unchanged/Gate pending。该摘要只能用于向用户请求明确 reapproval，不能替代 approval。
+- `state-helper.py approve-design-revision` 是 Design reapproval 的唯一写入型 helper action，要求 `--allow-approval`、完整 `--approved-control-plane`，并严格二选一：(a) contract mode 同时要求 `--task-contract`、`--affected-tasks`、`--revision-reason`，拒绝 `--unblock-tasks`，且必须在同一 Controller flow 中已用相同参数完成 `validate-design-revision` preflight 并取得用户当前轮明确 reapproval；(b) legacy context-only mode 要求 `--unblock-tasks`，且不得出现任一 contract参数，也不得混用 contract preflight。Contract mode 不信任 preflight缓存；approve重新读取state并重新执行与preflight相同的 full validation、exact closure 与候选构造，处理 TOCTOU。Contract mode 使 exact affected completed/blocked/pending Tasks回 pending/revalidation、移出 completed list、清 current fingerprint markers，同时保留 attempts/cycles/reports/snapshots历史。Legacy mode只恢复完整 Design-eligible集合，不替换 `approved_task_contract`，所以 Controller只有在 contract identity精确不变、无 dynamic undeclared mutation且无completed invalidation时才能调用。两种 approval mode都完整替换 approved control-plane、批准 Design Gate并在单次现有 write boundary写 state；所有 state/blocker/current-pointer/authorization validation在写前完成，失败 structured且bytes unchanged。Helper不读取 evidence或snapshot文件、不重算这些 record ids；Controller负责预验证。
 - `task-helper.py validate-change` 验证 change、Plan 和 manifests 的声明形状。
 - `task-helper.py extract-task` 生成单 Task brief，只选择 shared 或 matching manifest entries。
 

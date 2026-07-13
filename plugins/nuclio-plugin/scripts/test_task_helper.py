@@ -1,12 +1,22 @@
+import importlib.util
+import inspect
 import json
 import pathlib
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = pathlib.Path(__file__).with_name("task-helper.py")
+
+
+def load_task_helper_module():
+    spec = importlib.util.spec_from_file_location("task_helper_under_test", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 VALID_PLAN = """tasks:
@@ -48,6 +58,9 @@ tasks:
     context_refs:
       - plugins/nuclio-plugin/references/protocol.md
       - design-task-4
+    mutation_targets:
+      - plugins/nuclio-plugin/scripts/task-helper.py
+    ownership_handoffs: []
     acceptance:
       - Accept canonical task metadata
     verification:
@@ -61,6 +74,8 @@ tasks:
     depends_on: [T4A]
     files_hint: []
     context_refs: []
+    mutation_targets: []
+    ownership_handoffs: []
     acceptance:
       - Accept inline empty canonical lists
     verification:
@@ -95,6 +110,51 @@ VERIFY_MANIFEST = [
 ]
 
 
+def render_task_block(task_id, depends_on="[]", mutation_targets=None, ownership_handoffs=None, files_hint=None):
+    mutation_targets = [] if mutation_targets is None else mutation_targets
+    ownership_handoffs = [] if ownership_handoffs is None else ownership_handoffs
+    files_hint = [] if files_hint is None else files_hint
+    lines = [
+        f"  - id: {task_id}",
+        f"    title: Task {task_id}",
+        "    status: pending",
+        f"    depends_on: {depends_on}",
+    ]
+    if files_hint:
+        lines.append("    files_hint:")
+        lines.extend(f"      - {path}" for path in files_hint)
+    else:
+        lines.append("    files_hint: []")
+    lines.append("    context_refs: []")
+    if mutation_targets:
+        lines.append("    mutation_targets:")
+        lines.extend(f"      - {path}" for path in mutation_targets)
+    else:
+        lines.append("    mutation_targets: []")
+    if ownership_handoffs:
+        lines.append("    ownership_handoffs:")
+        for handoff in ownership_handoffs:
+            lines.append(f"      - path: {handoff['path']}")
+            lines.append(f"        from_task: {handoff['from_task']}")
+            lines.append(f"        to_task: {handoff['to_task']}")
+    else:
+        lines.append("    ownership_handoffs: []")
+    lines.extend([
+        "    acceptance:",
+        f"      - Accept {task_id}",
+        "    verification:",
+        "      commands:",
+        f"        - python3 -m unittest {task_id}",
+        "    rollback:",
+        f"      strategy: Revert {task_id}",
+    ])
+    return "\n".join(lines)
+
+
+def ownership_plan(*task_blocks):
+    return "tasks:\n" + "\n".join(task_blocks) + "\n"
+
+
 class TaskHelperCliTests(unittest.TestCase):
     def run_helper(self, *args):
         return subprocess.run(
@@ -124,6 +184,14 @@ class TaskHelperCliTests(unittest.TestCase):
         self.write_jsonl(change / "context" / "implement.jsonl", IMPLEMENT_MANIFEST if implement_entries is None else implement_entries)
         self.write_jsonl(change / "context" / "verify.jsonl", VERIFY_MANIFEST if verify_entries is None else verify_entries)
         return change
+
+    def make_ownership_change(self, root, plan):
+        return self.make_change(
+            root,
+            plan=plan,
+            implement_entries=[{"path": "docs/ownership.md", "kind": "reference", "mode": "required", "reason": "ownership", "tasks": ["*"]}],
+            verify_entries=[{"path": "tests/ownership.txt", "kind": "test", "mode": "required", "reason": "ownership", "tasks": ["*"]}],
+        )
 
     def test_validate_change_accepts_valid_plan_and_reports_stable_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -192,7 +260,7 @@ class TaskHelperCliTests(unittest.TestCase):
 
     def assert_invalid_plan(self, plan, expected_fragment):
         with tempfile.TemporaryDirectory() as tmp:
-            change = self.make_change(tmp, plan=plan)
+            change = self.make_ownership_change(tmp, plan)
             result = self.run_helper("validate-change", "--change", str(change))
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             payload = self.stdout_json(result)
@@ -212,6 +280,322 @@ class TaskHelperCliTests(unittest.TestCase):
         for plan, expected in cases:
             with self.subTest(expected=expected):
                 self.assert_invalid_plan(plan, expected)
+
+    def test_validate_change_rejects_duplicate_inline_dependencies_with_structured_json(self):
+        plan = VALID_PLAN.replace("depends_on: [T1]", "depends_on: [T1, T1]", 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            change = self.make_change(tmp, plan=plan)
+            result = self.run_helper("validate-change", "--change", str(change))
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        payload = self.stdout_json(result)
+        self.assertFalse(payload["ok"])
+        self.assertIn("duplicate dependency", payload["error"])
+        self.assertIn("T2", payload["detail"])
+        self.assertIn("T1", payload["detail"])
+
+    def test_validate_change_rejects_duplicate_nested_dependencies_with_structured_json(self):
+        plan = VALID_PLAN.replace("depends_on: [T1]", "depends_on:\n      - T1\n      - T1", 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            change = self.make_change(tmp, plan=plan)
+            result = self.run_helper("validate-change", "--change", str(change))
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        payload = self.stdout_json(result)
+        self.assertFalse(payload["ok"])
+        self.assertIn("duplicate dependency", payload["error"])
+        self.assertIn("T2", payload["detail"])
+        self.assertIn("T1", payload["detail"])
+
+    def test_validate_change_rejects_same_path_multi_owner_without_handoff(self):
+        plan = ownership_plan(
+            render_task_block("T1", mutation_targets=["src/shared.py"]),
+            render_task_block("T4", depends_on="[T1]", mutation_targets=["src/shared.py"]),
+        )
+        self.assert_invalid_plan(plan, "ownership handoff")
+
+    def test_validate_change_rejects_handoff_without_dependency(self):
+        plan = ownership_plan(
+            render_task_block("T1", mutation_targets=["src/shared.py"]),
+            render_task_block(
+                "T4",
+                mutation_targets=["src/shared.py"],
+                ownership_handoffs=[{"path": "src/shared.py", "from_task": "T1", "to_task": "T4"}],
+            ),
+        )
+        self.assert_invalid_plan(plan, "handoff dependency")
+
+    def test_validate_change_accepts_linear_handoff_and_derives_single_final_owner(self):
+        plan = ownership_plan(
+            render_task_block("T1", mutation_targets=["src/shared.py"]),
+            render_task_block(
+                "T4",
+                depends_on="[T1]",
+                mutation_targets=["src/shared.py"],
+                ownership_handoffs=[{"path": "src/shared.py", "from_task": "T1", "to_task": "T4"}],
+            ),
+            render_task_block(
+                "T9",
+                depends_on="[T4]",
+                mutation_targets=["src/shared.py"],
+                ownership_handoffs=[{"path": "src/shared.py", "from_task": "T4", "to_task": "T9"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            change = self.make_ownership_change(tmp, plan)
+            result = self.run_helper("validate-change", "--change", str(change))
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = self.stdout_json(result)
+        self.assertEqual(payload["ownership_table"], [
+            {
+                "path": "src/shared.py",
+                "owners": ["T1", "T4", "T9"],
+                "handoffs": [
+                    {"path": "src/shared.py", "from_task": "T1", "to_task": "T4"},
+                    {"path": "src/shared.py", "from_task": "T4", "to_task": "T9"},
+                ],
+                "final_owner": "T9",
+            }
+        ])
+        self.assertEqual(payload["task_contract"]["ownership_table"][0]["final_owner"], "T9")
+        self.assertNotIn("files_hint", json.dumps(payload["task_contract"], sort_keys=True))
+        self.assertNotIn("status", json.dumps(payload["task_contract"], sort_keys=True))
+
+    def test_validate_change_accepts_reverse_plan_order_handoff(self):
+        plan = ownership_plan(
+            render_task_block(
+                "T4",
+                depends_on="[T1]",
+                mutation_targets=["src/shared.py"],
+                ownership_handoffs=[{"path": "src/shared.py", "from_task": "T1", "to_task": "T4"}],
+            ),
+            render_task_block("T1", mutation_targets=["src/shared.py"]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            change = self.make_ownership_change(tmp, plan)
+            result = self.run_helper("validate-change", "--change", str(change))
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        row = self.stdout_json(result)["ownership_table"][0]
+        self.assertEqual(row["owners"], ["T1", "T4"])
+        self.assertEqual(row["final_owner"], "T4")
+
+    def test_validate_change_accepts_reverse_plan_order_multi_hop_handoff(self):
+        plan = ownership_plan(
+            render_task_block(
+                "T9",
+                depends_on="[T4]",
+                mutation_targets=["src/shared.py"],
+                ownership_handoffs=[{"path": "src/shared.py", "from_task": "T4", "to_task": "T9"}],
+            ),
+            render_task_block("T1", mutation_targets=["src/shared.py"]),
+            render_task_block(
+                "T4",
+                depends_on="[T1]",
+                mutation_targets=["src/shared.py"],
+                ownership_handoffs=[{"path": "src/shared.py", "from_task": "T1", "to_task": "T4"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            change = self.make_ownership_change(tmp, plan)
+            result = self.run_helper("validate-change", "--change", str(change))
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        row = self.stdout_json(result)["ownership_table"][0]
+        self.assertEqual(row["owners"], ["T1", "T4", "T9"])
+        self.assertEqual(row["final_owner"], "T9")
+        self.assertEqual(
+            [(edge["from_task"], edge["to_task"]) for edge in row["handoffs"]],
+            [("T1", "T4"), ("T4", "T9")],
+        )
+
+    def test_validate_change_rejects_control_plane_mutation_targets_but_not_files_hints(self):
+        blocked = [
+            ".git",
+            ".git/config",
+            ".dev-docs/changes",
+            ".dev-docs/changes/change/state.json",
+            ".superpowers/sdd",
+            ".superpowers/sdd/task-1-report.md",
+        ]
+        for path in blocked:
+            with self.subTest(path=path):
+                self.assert_invalid_plan(
+                    ownership_plan(render_task_block("T1", mutation_targets=[path])),
+                    "invalid mutation target",
+                )
+
+        plan = ownership_plan(render_task_block("T1", files_hint=blocked))
+        with tempfile.TemporaryDirectory() as tmp:
+            change = self.make_ownership_change(tmp, plan)
+            result = self.run_helper("validate-change", "--change", str(change))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.stdout_json(result)["ownership_table"], [])
+
+    def test_task_contract_is_stable_across_equivalent_ownership_declaration_order(self):
+        handoffs = [
+            {"path": "src/z.py", "from_task": "T1", "to_task": "T2"},
+            {"path": "src/a.py", "from_task": "T1", "to_task": "T2"},
+        ]
+        first = ownership_plan(
+            render_task_block("T1", mutation_targets=["src/z.py", "go.mod", "src/a.py"]),
+            render_task_block("T2", depends_on="[T1]", mutation_targets=["src/z.py", "src/a.py"], ownership_handoffs=handoffs),
+        )
+        second = ownership_plan(
+            render_task_block("T1", mutation_targets=["src/a.py", "src/z.py", "go.mod"]),
+            render_task_block("T2", depends_on="[T1]", mutation_targets=["src/a.py", "src/z.py"], ownership_handoffs=list(reversed(handoffs))),
+        )
+        contracts = []
+        for plan in (first, second):
+            with tempfile.TemporaryDirectory() as tmp:
+                change = self.make_ownership_change(tmp, plan)
+                result = self.run_helper("validate-change", "--change", str(change))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                contracts.append(self.stdout_json(result)["task_contract"])
+        self.assertEqual(contracts[0], contracts[1])
+        self.assertEqual(contracts[0]["tasks"][0]["mutation_targets"], ["go.mod", "src/a.py", "src/z.py"])
+
+    def test_extract_task_does_not_build_task_contract(self):
+        helper = load_task_helper_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            change = self.make_change(tmp)
+            output = pathlib.Path(tmp) / "brief.md"
+            args = helper.argparse.Namespace(change=change, task="T1", output=output)
+            with mock.patch.object(helper, "build_task_contract", side_effect=AssertionError("extract built contract")):
+                result = helper.extract_task(args)
+        self.assertEqual(result, 0)
+
+    def test_ownership_handoffs_reuse_precomputed_dependency_ancestors(self):
+        helper = load_task_helper_module()
+        tasks = []
+        for index in range(40):
+            task_id = f"T{index}"
+            tasks.append(
+                {
+                    "id": task_id,
+                    "depends_on": [] if index == 0 else [f"T{index - 1}"],
+                    "mutation_targets": ["src/shared.py"],
+                    "ownership_handoffs": [] if index == 0 else [{"path": "src/shared.py", "from_task": f"T{index - 1}", "to_task": task_id}],
+                }
+            )
+        original = helper.build_dependency_ancestors
+        with mock.patch.object(helper, "build_dependency_ancestors", wraps=original) as cached:
+            table = helper.build_ownership_table(tasks)
+        self.assertEqual(cached.call_count, 1)
+        self.assertEqual(table[0]["final_owner"], "T39")
+
+    def test_validate_change_rejects_handoff_cycle_branch_gap_and_dangling_task(self):
+        cases = [
+            (
+                ownership_plan(
+                    render_task_block("T1", depends_on="[T4]", mutation_targets=["src/shared.py"], ownership_handoffs=[{"path": "src/shared.py", "from_task": "T4", "to_task": "T1"}]),
+                    render_task_block("T4", depends_on="[T1]", mutation_targets=["src/shared.py"], ownership_handoffs=[{"path": "src/shared.py", "from_task": "T1", "to_task": "T4"}]),
+                ),
+                "dependency cycle",
+            ),
+            (
+                ownership_plan(
+                    render_task_block("T1", mutation_targets=["src/shared.py"]),
+                    render_task_block("T4", depends_on="[T1]", mutation_targets=["src/shared.py"], ownership_handoffs=[{"path": "src/shared.py", "from_task": "T1", "to_task": "T4"}]),
+                    render_task_block("T9", depends_on="[T1]", mutation_targets=["src/shared.py"], ownership_handoffs=[{"path": "src/shared.py", "from_task": "T1", "to_task": "T9"}]),
+                ),
+                "ownership branch",
+            ),
+            (
+                ownership_plan(
+                    render_task_block("T1", mutation_targets=["src/shared.py"]),
+                    render_task_block("T4", depends_on="[T1]", mutation_targets=["src/shared.py"]),
+                    render_task_block("T9", depends_on="[T4]", mutation_targets=["src/shared.py"], ownership_handoffs=[{"path": "src/shared.py", "from_task": "T1", "to_task": "T9"}]),
+                ),
+                "ownership handoff gap",
+            ),
+            (
+                ownership_plan(
+                    render_task_block("T1", mutation_targets=["src/shared.py"]),
+                    render_task_block("T4", depends_on="[T1]", mutation_targets=["src/shared.py"], ownership_handoffs=[{"path": "src/shared.py", "from_task": "NOPE", "to_task": "T4"}]),
+                ),
+                "unknown handoff task",
+            ),
+        ]
+        for plan, expected in cases:
+            with self.subTest(expected=expected):
+                self.assert_invalid_plan(plan, expected)
+
+    def test_validate_change_rejects_unsafe_and_aliased_mutation_targets(self):
+        bad_values = [
+            "/abs.md",
+            "../up.md",
+            "safe/../up.md",
+            "safe/./same.md",
+            "docs//same.md",
+            "docs\\same.md",
+            "docs/*.md",
+            "docs/?.md",
+            "docs/[abc].md",
+            "docs/",
+            ".",
+            "./",
+            ".dev-docs",
+            "~",
+            "~/secret.md",
+            "file:secret.md",
+            "https://example.com/file.md",
+            "C:/absolute/file.md",
+            "\\\\server\\share\\file.md",
+        ]
+        for bad_value in bad_values:
+            with self.subTest(value=bad_value):
+                plan = ownership_plan(render_task_block("T1", mutation_targets=[bad_value]))
+                self.assert_invalid_plan(plan, "invalid task path")
+        duplicate_plan = ownership_plan(render_task_block("T1", mutation_targets=["src/a.py", "src/a.py"]))
+        self.assert_invalid_plan(duplicate_plan, "duplicate mutation target")
+
+    def test_validate_change_does_not_treat_files_hint_as_ownership(self):
+        plan = ownership_plan(
+            render_task_block("T1", files_hint=["src/shared.py"]),
+            render_task_block("T4", depends_on="[T1]", files_hint=["src/shared.py"]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            change = self.make_ownership_change(tmp, plan)
+            result = self.run_helper("validate-change", "--change", str(change))
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = self.stdout_json(result)
+        self.assertEqual(payload["ownership_table"], [])
+        self.assertNotIn("src/shared.py", json.dumps(payload["task_contract"].get("ownership_table", [])))
+
+    def test_extract_task_includes_only_approved_ownership_slice(self):
+        plan = ownership_plan(
+            render_task_block("T1", mutation_targets=["src/shared.py", "src/t1.py"]),
+            render_task_block(
+                "T4",
+                depends_on="[T1]",
+                mutation_targets=["src/shared.py"],
+                ownership_handoffs=[{"path": "src/shared.py", "from_task": "T1", "to_task": "T4"}],
+            ),
+            render_task_block(
+                "T9",
+                depends_on="[T4]",
+                mutation_targets=["src/shared.py"],
+                ownership_handoffs=[{"path": "src/shared.py", "from_task": "T4", "to_task": "T9"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            change = self.make_ownership_change(tmp, plan)
+            output = pathlib.Path(tmp) / "briefs" / "T4.md"
+            result = self.run_helper("extract-task", "--change", str(change), "--task", "T4", "--output", str(output))
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            brief = output.read_text(encoding="utf-8")
+
+        self.assertIn("## Approved Ownership Slice", brief)
+        self.assertIn('"mutation_targets": ["src/shared.py"]', brief)
+        self.assertIn('"incoming_handoffs": [{"from_task": "T1", "path": "src/shared.py", "to_task": "T4"}]', brief)
+        self.assertIn('"outgoing_handoffs": [{"from_task": "T4", "path": "src/shared.py", "to_task": "T9"}]', brief)
+        self.assertIn('"final_owners": [{"final_owner": "T9", "path": "src/shared.py"}]', brief)
+        self.assertIn("files_hint is non-authoritative", brief)
+        self.assertNotIn('"path": "src/t1.py"', brief)
 
     def test_extract_task_rejects_unknown_task(self):
         with tempfile.TemporaryDirectory() as tmp:

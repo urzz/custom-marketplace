@@ -14,7 +14,7 @@
 
 Context manifest 声明某个 stage 可以加载哪些 stable context。它防止 implementation 和 verification 继承完整 conversation history、全量项目文档或与当前 Task 无关的源文件。
 
-Manifest 是只读 stable project/change context 的声明，不是内容缓存，也不授予任何写权限。读取某路径不等于允许修改该路径；实际 mutation scope 由 Task acceptance 与 reviewer scope verdict 约束。Task-local source discovery 使用后文单一规则，不要求把每个源文件预先列入 manifest。Snapshot、fingerprint、state lifecycle、Design reapproval replacement 与 Verify/Fold freshness 的唯一 authority 是 `protocol.md`；本文件只定义 context 声明和加载边界。
+Manifest 是只读 stable project/change context 的声明，不是内容缓存，也不授予 mutation ownership、写权限或 mutation allowlist。读取某路径不等于允许修改该路径；实际 product mutation scope 只来自 `protocol.md` 定义并由 approved `mutation_targets`、`ownership_handoffs` 与逐 path 派生的 `final_owner` 约束，不能由 Task acceptance、reviewer verdict 或 context entry 补授。Task-local source discovery 使用后文单一规则，不要求把每个源文件预先列入 manifest。Ownership/handoff、per-path canonical snapshot、带 `evidence_path` 的 state current refs、resume freshness、state lifecycle、Design revision closure 与 Verify/Fold freshness 的唯一算法 authority 是 `protocol.md`；本文件只摘要边界并定义 context 声明和加载规则，不复制 snapshot schema、文件名、hash 或 transition 算法。
 
 ## Files and JSONL Shape
 
@@ -56,7 +56,9 @@ reason
 - engineering testing guidance。
 - 当前 change 的 focused spec/design/plan context。
 - focused research notes。
-- 作为只读 navigation hints 的关键 contract/schema/interface files；它们不构成 mutation allowlist。
+- 作为只读 navigation hints 的关键 contract/schema/interface files；它们不构成 mutation allowlist，也不授予 mutation ownership。
+
+`tasks` scope、`mode=required|jit`、entry `path` 与 `reason` 都只控制谁可以在何时读取什么；它们不进入 ownership table、`approved_task_contract` 或 product fingerprint。
 
 ### Task-Level Scope
 
@@ -99,7 +101,7 @@ Helper **只验证声明**。它不打开、读取或验证 `path` 指向的 tar
 - 仅匹配当前 Task 的 required target 缺失/不可读：在 dispatch 和 attempt 递增之前追加 blocker evidence，执行精确 pre-dispatch Task-local blocked transition。`tasks.<id>.status=blocked`；`current_task` 可记录 `{id,attempt:<当前已持久 attempts，首次未 dispatch 时为 0>,status:blocked}`；不得递增 attempt。随后跳过其 transitive dependents并继续独立 eligible Tasks。
 - `tasks:["*"]` shared/change-wide required target 缺失/不可读、manifest invalid，或 immutable approved control-plane hash drift：change-level STOP，不得把它伪装成单 Task blocker。
 
-Task-local target 经 Design/Plan/context 修正后必须重新 explicit Design approval，再按 File Protocol 的 Design reapproval transition 完整替换 immutable control-plane map 并回 pending；本文件不复制 replacement/state patch。临时读取权限问题若 target 声明/内容均未变，可在 resolved evidence 后按 File Protocol 的临时 blocker unblock。
+Task-local target 经 Design/Plan/context 修正后必须重新 explicit Design approval，再按 File Protocol 的 Design reapproval transition 回 pending；本文件不复制 snapshot、contract closure、replacement或state patch算法。若 normalized Task contract identity改变（包括 dependency/acceptance/verification/context refs/mutation targets/handoffs/ownership table）、发生dynamic undeclared mutation或需invalidated completed Tasks，必须走 `protocol.md` 的 contract revision mode：artifacts 与 `validate-change` 先通过，再运行只读 `validate-design-revision` exact closure/candidate preflight，preflight 成功后请求用户明确 reapproval，用户批准后才用相同参数加 `--allow-approval` 调用一次 `approve-design-revision`；approve 仍重新读取/校验以处理 TOCTOU。Preflight 失败 STOP 且 Gate 保持 pending；preflight 摘要不是 approval 或 evidence freshness。只有contract identity不变的纯context/control-plane bytes修正才可使用legacy `--unblock-tasks` context-only mode，且两种CLI参数/contract preflight不得混用。临时读取权限问题若 target 声明/内容均未变，可在resolved evidence后按File Protocol的临时blocker recovery。
 
 ## Worker Loading Contract
 
@@ -108,14 +110,15 @@ Task-local target 经 Design/Plan/context 修正后必须重新 explicit Design 
 1. 先读取 task brief。
 2. 载入所有 matching `mode=required` entries。
 3. `mode=jit` 只在具体 acceptance、verification 或 blocker 需要时加载；不得预加载全部 jit entries。
-4. Task-local source discovery 只允许从 acceptance、`files_hint`、已知 symbol/import 或 direct caller chain 出发，读取满足 Task 所需的最小源码集合；禁止 repository root、module-wide 或 broad sibling scan。读取的每条源码路径必须在 `Loaded Context` 标明来源（acceptance/files_hint/symbol/import/direct caller）与理由。
-5. 需要未声明的 stable Design/project knowledge、跨 Task/architecture boundary 源码，或必须 broad discovery 才能继续时，worker 返回 `NEEDS_CONTEXT`，由 Design 收紧 manifest/Task；不得自行扩大。
-6. 不得读取 unrelated manifest entries。
-7. 在 `evidence/tasks/<task-id>/implementer.md` 写 `Loaded Context`：
+4. Task-local source discovery 只允许从 acceptance、`files_hint`、已知 symbol/import 或 direct caller chain 出发，读取满足 Task 所需的最小源码集合；禁止 repository root、module-wide 或 broad sibling scan。读取的每条源码路径必须在 `Loaded Context` 标明来源（acceptance/files_hint/symbol/import/direct caller）与理由。`files_hint` 只提供起始导航，不是 ownership authority、mutation allowlist 或 fingerprint input。
+5. JIT discovery 或最小 caller/import traversal 发现新依赖时，可以继续读取证明当前 acceptance 所需的最小链；read permission 仍不授予 mutation ownership。若继续工作需要修改未包含在当前 approved `mutation_targets`/ownership slice 的 product path，worker 必须立即停止该 mutation，返回 `NEEDS_CONTEXT`/`BLOCKED`，并按 `protocol.md` 的 Dynamic Undeclared Product Mutation 规则创建 `design_revision` blocker、回到 Design。不得先修改后解释，也不得交由 reviewer 判断是否可放行。
+6. 需要未声明的 stable Design/project knowledge、跨 Task/architecture boundary 源码，或必须 broad discovery 才能继续时，worker 返回 `NEEDS_CONTEXT`，由 Design 收紧 manifest/Task；不得自行扩大。
+7. 不得读取 unrelated manifest entries。
+8. 在 `evidence/tasks/<task-id>/implementer.md` 写 `Loaded Context`：
    - 所有 manifest 与 task-local discovery 实际载入文件的 project-relative path、来源与理由。
    - 每个 matching 但未载入的 jit entry 及 skip reason。
    - 对缺失或无法读取的 required path，记录 blocker，不得静默跳过。
-8. Fixer 必须基于 reviewer package 与仍匹配的最小 context 工作，不继承完整先前 transcript。
+9. Fixer 必须基于 reviewer package 与仍匹配的最小 context 工作，不继承完整先前 transcript。
 
 `Loaded Context` 记录路径和原因，不复制文件全文。
 
