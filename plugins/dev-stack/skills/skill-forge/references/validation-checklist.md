@@ -58,7 +58,7 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 | description ≤ 1024 chars | Character count ≤ 1024 | `echo -n "<desc>" \| wc -c` |
 | description third person | No "I", "you", "we" in description | Manual check |
 | Body < 500 lines | Line count < 500 (excluding frontmatter) | `awk '/^---$/{n++; next} n>=2' SKILL.md \| wc -l` |
-| No nested references | Files in references/ do not link to other files in references/ | `target="$(printf '.%s' md)"; grep -rn -F "$target" references/ | grep -F ']('` |
+| No nested references | Files in references/ do not link to other files in references/ | `python3 -c "import pathlib,re,sys; s='.'+'md'; rx=re.compile(r'\[[^\]]+\]\([^)]*'+re.escape(s)+r'[^)]*\)'); hits=[]; [hits.append((p,i,line)) for p in pathlib.Path('references').rglob('*'+s) for i,line in enumerate(p.read_text(encoding='utf-8').splitlines(),1) if rx.search(line)]; [print(f'{p}:{i}:{line}') for p,i,line in hits]; sys.exit(1 if hits else 0)"` |
 | Large file TOC | Files > 100 lines have `## Contents` section | Manual check |
 | name format | ≤ 64 chars, letters/numbers/hyphens only | Manual check |
 
