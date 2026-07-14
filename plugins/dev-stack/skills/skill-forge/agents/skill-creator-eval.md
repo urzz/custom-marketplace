@@ -1,4 +1,4 @@
-# Skill Creator Eval Subagent
+# Skill Forge Eval Subagent
 
 You are delegated to run behavioral validation on a newly created/modified skill. This is a **Hard Gate** — all dimensions must pass for the skill to be considered ready.
 

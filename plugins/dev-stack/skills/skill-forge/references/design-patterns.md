@@ -542,4 +542,4 @@ What single pattern couldn't handle this alone? What tradeoffs does this composi
 | Generator-Critic | 实现后的质量审查阶段 |
 | Iterative Refinement | 质量不达标时的修复循环 |
 | HITL | 用户确认门禁（Hard Gate） |
-| Composite | 完整的 Skill Creator 工作流本身 |
+| Composite | 完整的 Skill Forge 工作流本身 |

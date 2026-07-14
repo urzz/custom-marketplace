@@ -1,9 +1,9 @@
 ---
-name: skill-creator
+name: skill-forge
 description: Use when creating, designing, or implementing a new Claude Code skill from scratch, or when modifying, improving, auditing, or reviewing an existing skill.
 ---
 
-# UG Skill Creator
+# Skill Forge
 
 End-to-end workflow for creating and iterating Claude Code skills. Enforces Anthropic best practices and Google 8 Agent Design Patterns.
 
@@ -53,7 +53,7 @@ End-to-end workflow for creating and iterating Claude Code skills. Enforces Anth
 ## 中间文档目录命名规则
 
 本 skill 在 Phase 2/3/4 产生的中间产物（Spec / Plan / Task 报告 / Eval Prompts）统一存放到
-`.skill-creator/<skill-name>-<变更主题>/` 子目录，目录内平铺，无子目录嵌套：
+`.skill-forge/<skill-name>-<变更主题>/` 子目录，目录内平铺，无子目录嵌套：
 
 | 产物 | 文件名 |
 |------|--------|
@@ -65,7 +65,7 @@ End-to-end workflow for creating and iterating Claude Code skills. Enforces Anth
 **规则：**
 - `<变更主题>` ≤ 3 个单词，kebab-case，沿用 Phase 2/3 Spec 保存时确定的 slug（同一次变更全程使用同一 slug，不可中途改名）。
 - 工作目录内自带 `.gitignore`（内容 `*`），该 `.gitignore` 自身也不入库（git 读取未跟踪的 `.gitignore` 作忽略规则，`*` 忽略同目录所有产物含自身），跨项目通用，不污染所在仓库根 `.gitignore`（对标 superpowers `.superpowers/sdd/.gitignore` 机制）。
-- **首次创建 `.skill-creator/` 工作目录时，skill 必须检查 `.skill-creator/.gitignore` 是否存在，不存在则写入内容 `*`。** 此机制确保忽略规则自动建立，无需手动配置，跨项目通用。
+- **首次创建 `.skill-forge/` 工作目录时，skill 必须检查 `.skill-forge/.gitignore` 是否存在，不存在则写入内容 `*`。** 此机制确保忽略规则自动建立，无需手动配置，跨项目通用。
 - 旧版本曾使用共享 plans 目录下的扁平命名（`<skill-name>-<变更主题>-*.md`），已废弃；新变更一律使用上述新路径。
 
 ---
@@ -249,11 +249,11 @@ Reference: [references/design-patterns.md](references/design-patterns.md) for pa
 
 ⚠️ **Direct Write + Review Gate 模式：**
 
-1. **前置：建立忽略规则** — 保存 spec 前，若 `.skill-creator/.gitignore` 不存在，先写入内容 `*`（首次创建工作目录时自动建立忽略规则）
-2. **直接保存** — 使用 Write 工具将 Spec 写入 `.skill-creator/<skill-name>-<变更主题>/spec.md`（已存在则覆盖，目录不存在则创建）
+1. **前置：建立忽略规则** — 保存 spec 前，若 `.skill-forge/.gitignore` 不存在，先写入内容 `*`（首次创建工作目录时自动建立忽略规则）
+2. **直接保存** — 使用 Write 工具将 Spec 写入 `.skill-forge/<skill-name>-<变更主题>/spec.md`（已存在则覆盖，目录不存在则创建）
 3. **输出摘要** — 使用以下固定模板：
    ```
-   ✅ Spec 已保存到 `.skill-creator/<skill-name>-<变更主题>/spec.md`
+   ✅ Spec 已保存到 `.skill-forge/<skill-name>-<变更主题>/spec.md`
 
    **摘要：** [3-5 行核心要点]
 
@@ -264,7 +264,7 @@ Reference: [references/design-patterns.md](references/design-patterns.md) for pa
 **文件命名规则：** `<变更主题>` ≤ 3 个单词，kebab-case，概括本次变更核心。
 
 自检清单（进入 Phase 3 前必须全部为 YES）：
-- [ ] 已确认 `.skill-creator/.gitignore` 存在（内容 `*`）？
+- [ ] 已确认 `.skill-forge/.gitignore` 存在（内容 `*`）？
 - [ ] 已执行 Write 工具保存 Spec 文件？
 - [ ] 已输出保存确认模板（含摘要 + review 提示）？
 - [ ] 用户说了肯定词？
@@ -275,7 +275,7 @@ Reference: [references/design-patterns.md](references/design-patterns.md) for pa
 
 ## Phase 3: Plan
 
-**Goal:** Translate Spec into an executable YAML Task list — bite-sized, directly dispatchable to sub agents. Plan 输出为 YAML 格式（路径 `.skill-creator/<skill-name>-<变更主题>/plan.yaml`）。
+**Goal:** Translate Spec into an executable YAML Task list — bite-sized, directly dispatchable to sub agents. Plan 输出为 YAML 格式（路径 `.skill-forge/<skill-name>-<变更主题>/plan.yaml`）。
 
 ### Step 3.1 — Analyze and Decompose
 
@@ -327,10 +327,10 @@ Present in conversation (do NOT use EnterPlanMode). YAML 本身可读，直接�
 
 ⚠️ **Direct Write + Review Gate 模式：**
 
-1. **直接保存** — 使用 Write 工具将 Plan 写入 `.skill-creator/<skill-name>-<变更主题>/plan.yaml`（已存在则覆盖，目录不存在则创建；Phase 2 已建立 `.gitignore`，此处沿用，无需重复写入）
+1. **直接保存** — 使用 Write 工具将 Plan 写入 `.skill-forge/<skill-name>-<变更主题>/plan.yaml`（已存在则覆盖，目录不存在则创建；Phase 2 已建立 `.gitignore`，此处沿用，无需重复写入）
 2. **输出摘要** — 使用以下固定模板：
    ```
-   ✅ Plan 已保存到 `.skill-creator/<skill-name>-<变更主题>/plan.yaml`
+   ✅ Plan 已保存到 `.skill-forge/<skill-name>-<变更主题>/plan.yaml`
 
    **摘要：** [3-5 行核心要点]
 
@@ -373,9 +373,9 @@ INITIAL_BASE=$(git rev-parse HEAD)，记录用于 Task 1 的 diff 基准和最�
 ### Step 4.1 — 逐 Task 循环
 对 Plan YAML 中每个 tasks[] 项，按 id 顺序执行：
 1. dispatch agents/skill-file-implementer.md（model 取自该 Task 的 meta.model，值直接作为 Agent tool 的 model 参数），
-   prompt 含 Plan YAML 绝对路径 + Task ID + 上一 Task 产生的接口信息 + scripts/plan-task-query.py 绝对路径 + 报告输出路径 `.skill-creator/<skill-name>-<变更主题>/task<N>-report.md`。
+   prompt 含 Plan YAML 绝对路径 + Task ID + 上一 Task 产生的接口信息 + scripts/plan-task-query.py 绝对路径 + 报告输出路径 `.skill-forge/<skill-name>-<变更主题>/task<N>-report.md`。
    **dispatch prompt 必须显式包含 `scope` 与 `ticket` 两个字段**：
-   - `scope` = 被改 skill 名(如 `skill-creator`)
+   - `scope` = 被改 skill 名(如 `skill-forge`)
    - `ticket` 由主 session 从当前分支名提取后传入（如 `feature/UG-883685-xxx` → `UG-883685`）
    - implementer 直接使用这两个字段，**不得自行解析分支名或硬编码**
    implementer 自行调用该脚本取 brief（脚本路径由主 session 解析为绝对路径注入，不依赖 subagent CWD），完成后将报告写到指定的报告路径。

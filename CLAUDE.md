@@ -17,7 +17,7 @@ Some plugins may also include shared references, subagent definitions, and helpe
 The marketplace currently registers three plugins:
 
 - `openclaw-plugin`: provides `/openclaw-skill-creator`.
-- `dev-stack`: provides `/skill-creator`.
+- `dev-stack`: provides `/skill-forge`.
 - `nuclio`: provides `/nuclio:project-init`, `/nuclio:brief`, `/nuclio:design`, `/nuclio:implement`, `/nuclio:verify`, and `/nuclio:fold`.
 
 ## Key Files

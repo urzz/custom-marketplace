@@ -1,6 +1,6 @@
 # Internal Validation Checklist
 
-Used by Phase 5 to validate skill output before delegating to skill-creator Eval.
+Used by Phase 5 to validate skill output before delegating to skill-forge Eval.
 
 ## Contents
 - Dimension 1: Spec Conformance
@@ -141,7 +141,7 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 
 1. Run Dimensions 1-5
 2. If ALL pass → run Dimension 6 (Behavioral Correctness)
-3. If ALL 6 pass → proceed to Layer 2 (skill-creator Eval)
+3. If ALL 6 pass → proceed to Layer 2 (skill-forge Eval)
 4. If ANY fail → list failures with specific evidence and fix suggestions → return to Phase 4
 5. Maximum 2 fix-and-retry cycles before stopping
 

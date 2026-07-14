@@ -5,7 +5,7 @@
 当前仓库包含：
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator` 技能，用于帮助用户起草 OpenClaw skill。
-- `dev-stack`：提供 `/skill-creator` 技能，用于创建、设计和改进 Claude Code skill。
+- `dev-stack`：提供 `/skill-forge` 技能，用于创建、设计和改进 Claude Code skill。
 - `nuclio`：提供 Nucl.io 文件驱动生命周期技能：`/nuclio:project-init`、`/nuclio:brief`、`/nuclio:design`、`/nuclio:implement`、`/nuclio:verify`、`/nuclio:fold`。
 
 ## 仓库结构

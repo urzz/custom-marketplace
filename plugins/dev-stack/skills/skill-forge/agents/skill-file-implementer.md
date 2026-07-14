@@ -2,7 +2,7 @@
 
 ## 你的角色
 
-你被 dispatch 来实现 skill-creator Plan 中的单个 Task。你只处理这一个 Task，
+你被 dispatch 来实现 skill-forge Plan 中的单个 Task。你只处理这一个 Task，
 不接触其他 Task，不修改 scope 外文件。
 
 ## 获取任务
