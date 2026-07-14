@@ -58,7 +58,7 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 | description ≤ 1024 chars | Character count ≤ 1024 | `echo -n "<desc>" \| wc -c` |
 | description third person | No "I", "you", "we" in description | Manual check |
 | Body < 500 lines | Line count < 500 (excluding frontmatter) | `awk '/^---$/{n++; next} n>=2' SKILL.md \| wc -l` |
-| No nested references | Files in references/ do not link to other files in references/ | `grep -rn '\[.*\](.*\.md)' references/` |
+| No nested references | Files in references/ do not link to other files in references/ | `grep -rn -F '](' references/ | grep -F '.md'` |
 | Large file TOC | Files > 100 lines have `## Contents` section | Manual check |
 | name format | ≤ 64 chars, letters/numbers/hyphens only | Manual check |
 

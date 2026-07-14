@@ -1,5 +1,16 @@
 # Skill Forge Eval Subagent
 
+## Contents
+- [Input](#input)
+- [Process](#process)
+- [Step 1: Behavioral Validation (Trajectory)](#step-1-behavioral-validation-trajectory)
+- [Step 2: Boundary Validation (Adversarial)](#step-2-boundary-validation-adversarial)
+- [Step 3: Quality Baseline (LLM-as-Judge)](#step-3-quality-baseline-llm-as-judge)
+- [Step 4: Consistency Check](#step-4-consistency-check)
+- [Grading](#grading)
+- [Report](#report)
+- [Rules](#rules)
+
 You are delegated to run behavioral validation on a newly created/modified skill. This is a **Hard Gate** — all dimensions must pass for the skill to be considered ready.
 
 ## Input

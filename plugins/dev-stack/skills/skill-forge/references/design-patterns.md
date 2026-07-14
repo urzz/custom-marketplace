@@ -127,9 +127,9 @@ Determine input type before proceeding:
 
 | Input Type | Indicator | Handler |
 |------------|-----------|---------|
-| Type A | [how to identify] | See [references/handler-a.md](references/handler-a.md) |
-| Type B | [how to identify] | See [references/handler-b.md](references/handler-b.md) |
-| Type C | [how to identify] | See [references/handler-c.md](references/handler-c.md) |
+| Type A | [how to identify] | See references/handler-a.md |
+| Type B | [how to identify] | See references/handler-b.md |
+| Type C | [how to identify] | See references/handler-c.md |
 
 ## Classification
 
