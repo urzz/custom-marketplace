@@ -13,9 +13,11 @@
 - `.claude-plugin/marketplace.json`：市场清单，声明当前 marketplace 暴露的插件。
 - `plugins/<plugin-name>/.claude-plugin/plugin.json`：插件元数据。
 - `plugins/<plugin-name>/skills/<skill-name>/SKILL.md`：技能定义。
+- `plugins/<plugin-name>/skills/<skill-name>/references/`：skill 级协议、设计约束或参考资料（如 dev-stack/skill-forge 的 review-state 协议与模板）。
+- `plugins/<plugin-name>/skills/<skill-name>/scripts/`：skill 级确定性辅助脚本与测试（如 dev-stack/skill-forge 的 `review-state-helper.py`、`plan-task-query.py` 与 unittest）。
 - `plugins/<plugin-name>/references/`：插件级共享协议、设计约束或参考资料（如 Nuclio）。
-- `plugins/<plugin-name>/agents/`：插件随附的子代理定义（如 Nuclio implementer/reviewer/fixer）。
-- `plugins/<plugin-name>/scripts/`：插件随附的确定性辅助脚本与测试（如 Nuclio state/task helper）。
+- `plugins/<plugin-name>/agents/`：插件级有界子代理定义（如 dev-stack/skill-forge 的 bounded implementer/reviewer/fixer/final reviewer，以及 Nuclio agents）。
+- `plugins/<plugin-name>/scripts/`：插件级确定性辅助脚本与测试（如 Nuclio state/task helper）。
 
 ## 维护方式
 
@@ -50,9 +52,11 @@ python3 -m json.tool plugins/dev-stack/.claude-plugin/plugin.json >/dev/null
 python3 -m json.tool plugins/nuclio-plugin/.claude-plugin/plugin.json >/dev/null
 ```
 
-Nuclio helper 与插件严格校验：
+Dev-stack / Nuclio helper 与插件严格校验：
 
 ```bash
+python3 -m unittest discover -s plugins/dev-stack/skills/skill-forge/scripts -p 'test_*.py'
+claude plugin validate plugins/dev-stack --strict
 python3 -m unittest discover -s plugins/nuclio-plugin/scripts -p 'test_*.py'
 claude plugin validate plugins/nuclio-plugin --strict
 ```

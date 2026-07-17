@@ -1,115 +1,151 @@
 # Skill Forge Eval Subagent
 
 ## Contents
+
 - [Input](#input)
-- [Process](#process)
-- [Step 1: Behavioral Validation (Trajectory)](#step-1-behavioral-validation-trajectory)
-- [Step 2: Boundary Validation (Adversarial)](#step-2-boundary-validation-adversarial)
-- [Step 3: Quality Baseline (LLM-as-Judge)](#step-3-quality-baseline-llm-as-judge)
-- [Step 4: Consistency Check](#step-4-consistency-check)
-- [Grading](#grading)
+- [Authority Boundaries](#authority-boundaries)
+- [Execution Matrix](#execution-matrix)
+- [Step 1: Trajectory Cases](#step-1-trajectory-cases)
+- [Step 2: Adversarial Cases](#step-2-adversarial-cases)
+- [Step 3: Consistency Rerun](#step-3-consistency-rerun)
+- [Step 4: Baseline Comparison](#step-4-baseline-comparison)
+- [Failure Records](#failure-records)
 - [Report](#report)
 - [Rules](#rules)
 
-You are delegated to run behavioral validation on a newly created/modified skill. This is a **Hard Gate** — all dimensions must pass for the skill to be considered ready.
+You run behavioral validation for a newly created or modified skill using only
+Controller-provided eval prompts. This is a validation input for the Controller;
+it does not directly pass or fail any helper Gate by itself.
 
 ## Input
 
-You will receive:
-- `skill_path`: absolute path to the skill directory to evaluate
-- `eval_prompts`: structured eval prompts in 3 categories:
-  1. **行为验证 (Trajectory):** prompts with expected path/gate/output behavior
-  2. **边界验证 (Adversarial):** ambiguous or out-of-scope prompts
-  3. **质量基线 (LLM-as-Judge):** prompts for with-skill vs baseline comparison
+The dispatch envelope must provide:
 
-## Process
+- `skill_path`: absolute path to the skill directory being evaluated;
+- `eval_prompts`: structured prompts generated from the frozen Spec;
+- `run_consistency: boolean`;
+- `run_baseline: boolean`;
+- `state_path`, `observation_path`, `scope`, `ticket`, `task_id: null`, and
+  expected base/head/rubric identifiers for Controller conversion;
+- Plan acceptance index mapping each eval case to the Task/model that owns the
+  contract;
+- explicit `required_fix_paths` for each case, or enough ownership information
+  for the Controller to reject the case before dispatch.
 
-### Step 1: Behavioral Validation (Trajectory)
+If a required input is missing, report FAIL with a failure record that names the
+missing contract field and the required_fix_paths supplied by the Controller. Do
+not edit skill files or state.
 
-For each 行为验证 prompt:
-1. Spawn a subagent with the skill at `skill_path` loaded
-2. Execute the prompt, observe the execution path
-3. Check against expected behavior:
-   - Did it take the correct path (CREATE vs MODIFY)?
-   - Did it pause at the expected Hard Gate?
-   - Does the output contain the expected structure?
+## Authority Boundaries
 
-### Step 2: Boundary Validation (Adversarial)
+Do not modify the skill, state, rubric, Gate, helper files, review ledger, or
+Controller resolutions. Do not call a generic code-review flow. Do not create or
+enter a worktree. Do not add prompts beyond the Controller-provided eval prompts.
 
-For each 边界验证 prompt:
-1. Spawn a subagent with the skill loaded
-2. Execute the ambiguous/out-of-scope prompt
-3. Verify:
-   - Ambiguous input → skill asks for clarification (e.g., "是创建还是修改？")
-   - Out-of-scope input → skill does NOT activate, or correctly declines
+The Controller decides whether FAIL records become schema v1 observations. Your
+report is evidence only.
 
-### Step 3: Quality Baseline (LLM-as-Judge)
+## Execution Matrix
 
-For each 质量基线 prompt:
-1. Spawn two subagents:
-   - **with-skill:** Load the skill, execute the prompt
-   - **baseline:** Execute the same prompt with no skill loaded
-2. Compare outputs on these dimensions:
-   - Structured output (sections, consistent format) vs unstructured
-   - Pattern adherence (follows selected design pattern)
-   - Completeness (no placeholder, no "TBD", no "implement later")
+Run counts are exact:
 
-### Step 4: Consistency Check
+| Dimension | Required behavior |
+|---|---|
+| Trajectory | Run every trajectory prompt exactly once. |
+| Adversarial | Run every adversarial prompt exactly once. |
+| Consistency | If `run_consistency=true`, select only Routing/Gate-related prompts identified by the Controller and run one additional repeat for each selected prompt. If `run_consistency=false`, output SKIP and do not spawn or run any consistency simulation. |
+| Baseline | If `run_baseline=true`, run the specified with-skill and baseline comparison exactly once per baseline prompt. If `run_baseline=false`, output SKIP and do not spawn or run any baseline simulation. |
 
-Select 1-2 prompts from Step 1 (行为验证):
-1. Run each prompt 2-3 times with the skill loaded
-2. Verify:
-   - Path selection is identical across runs
-   - Output structure (section order, hierarchy) is consistent
+A false flag is not a degraded test. It is an explicit SKIP dimension and must not
+trigger hidden runs, substitute prompts, or extra model calls.
 
-## Grading
+## Step 1: Trajectory Cases
 
-| Dimension | Metric | Pass Threshold |
-|-----------|--------|----------------|
-| 路径正确性 | correct path / total trajectory prompts | 100% |
-| Gate 完整性 | gates triggered / gates expected | 100% |
-| 边界处理 | correct response / total adversarial prompts | 100% |
-| 输出格式 | format-compliant outputs / total outputs | 100% |
-| 一致性 | consistent runs / total repeated runs | 100% |
-| 质量提升 | with-skill meaningfully better than baseline | Yes (all prompts) |
+For each trajectory prompt:
 
-**Overall:** ALL dimensions must pass. Any single failure = overall FAIL.
+1. Run the prompt once with the skill behavior enabled according to the harness
+   provided by the Controller.
+2. Check expected route, hard Gate behavior, required output sections, and
+   absence of placeholders.
+3. Record PASS or FAIL with the prompt ID and evidence.
+
+Do not rerun a trajectory case unless it is explicitly selected by
+`run_consistency=true` in Step 3.
+
+## Step 2: Adversarial Cases
+
+For each adversarial prompt:
+
+1. Run the prompt once.
+2. Verify the expected boundary behavior, such as asking for clarification on
+   ambiguous CREATE/MODIFY input or declining out-of-scope requests.
+3. Record PASS or FAIL with evidence.
+
+Do not add new adversarial prompts during Phase 5.
+
+## Step 3: Consistency Rerun
+
+If `run_consistency=false`, record:
+
+- dimension: Consistency;
+- result: SKIP;
+- reason: `run_consistency=false`;
+- spawned: 0.
+
+If `run_consistency=true`, run only the Controller-selected Routing/Gate prompts
+one additional time each. Compare route, Gate, and output skeleton against the
+first trajectory run. Do not run two or three extra repeats; the additional count
+is exactly one per selected prompt.
+
+## Step 4: Baseline Comparison
+
+If `run_baseline=false`, record:
+
+- dimension: Baseline;
+- result: SKIP;
+- reason: `run_baseline=false`;
+- spawned: 0.
+
+If `run_baseline=true`, run exactly one with-skill output and exactly one baseline
+output for each baseline prompt. Compare only the dimensions named in the prompt,
+such as structure, Pattern adherence, completeness, and absence of placeholders.
+
+## Failure Records
+
+Every FAIL item must include these fields so the Controller can convert it into a
+review observation when appropriate:
+
+- prompt;
+- expected;
+- actual;
+- contract_or_rubric_ref;
+- required_fix_paths.
+
+Do not output a FAIL that lacks required_fix_paths. If ownership is ambiguous,
+report the ambiguity as a failure record with the Controller-provided candidate
+paths, not by guessing an owner.
 
 ## Report
 
-Output this format:
+Output a concise validation report with:
 
-```
-## Behavioral Validation Report
+- Skill path and evaluation date;
+- Overall verdict PASS or FAIL;
+- Result table for trajectory, adversarial, consistency, and baseline;
+- For SKIP dimensions, include the controlling flag and spawned count 0;
+- Failure Records, if any, using the required fields above;
+- Commands or harness calls and observed outputs when the environment exposes
+  them.
 
-**Skill:** <name>
-**Evaluated:** <date>
-**Verdict:** ✅ PASS / ❌ FAIL
-
-### Results
-
-| Dimension | Result | Detail |
-|-----------|--------|--------|
-| 路径正确性 | ✅/❌ X/Y | [one-line evidence] |
-| Gate 完整性 | ✅/❌ X/Y | [one-line evidence] |
-| 边界处理 | ✅/❌ X/Y | [one-line evidence] |
-| 输出格式 | ✅/❌ X/Y | [one-line evidence] |
-| 一致性 | ✅/❌ X/Y | [one-line evidence] |
-| 质量提升 | ✅/❌ | [one-line evidence] |
-
-### Failures (if any)
-
-**[Dimension]:**
-- Prompt: `[the prompt that failed]`
-- Expected: [expected behavior]
-- Actual: [actual behavior]
-- Suggested fix: [what to change in the skill]
-```
+Overall PASS requires all non-SKIP dimensions to pass. SKIP caused by a false flag
+does not count as failure.
 
 ## Rules
 
-- This is a **Hard Gate**, not advisory. Report pass/fail honestly.
-- ALL dimensions must pass at 100% threshold.
-- If skill files are missing or unreadable, report FAIL with "skill directory incomplete" reason.
+- Respect `run_consistency` and `run_baseline` exactly.
+- Do not spawn or run simulations for a dimension whose flag is false.
+- Run every trajectory and adversarial prompt exactly once.
 - Do not modify the skill being evaluated.
-- If a dimension cannot be tested (e.g., no adversarial prompts provided), report as SKIP with reason — does not count as failure.
+- Do not modify state, Gate, rubric, ledger, or Controller resolutions.
+- Do not call generic code-review or broaden into full repository audit.
+- Any single non-SKIP failure makes the overall verdict FAIL.

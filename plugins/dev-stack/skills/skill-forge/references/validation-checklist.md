@@ -45,7 +45,7 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 |-------|--------------|---------------|
 | Exit conditions | Every Step has an explicit, verifiable exit condition | Manual check (semantic) |
 | Gate enforcement | Hard Gates use imperative language ("Wait for user confirmation before proceeding") | `grep -n 'Hard Gate\|等待用户\|Gate' SKILL.md` |
-| Error/loop handling | Any loop has a maximum iteration count | `grep -n 'Maximum\|maximum\|≤.*问\|安全阀' SKILL.md` |
+| Error/loop handling | Question loops have explicit safety valves; review/fix loops use one per-Task shared maximum=2 budget plus deterministic no-progress/budget HALT | `grep -n 'maximum=2\|HALTED_NO_PROGRESS\|HALTED_BUDGET_EXHAUSTED\|≤.*问\|安全阀' SKILL.md references/review-state-protocol.md` |
 | Path coverage | Both CREATE and MODIFY paths are handled (if applicable) | `grep -n 'CREATE\|MODIFY\|AUDIT' SKILL.md` |
 
 ---
@@ -59,7 +59,9 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 | description third person | No "I", "you", "we" in description | Manual check |
 | Body < 500 lines | Line count < 500 (excluding frontmatter) | `awk '/^---$/{n++; next} n>=2' SKILL.md \| wc -l` |
 | No nested references | Files in references/ do not link to other files in references/ | `python3 -c "import pathlib,re,sys; s='.'+'md'; rx=re.compile(r'\[[^\]]+\]\([^)]*'+re.escape(s)+r'[^)]*\)'); hits=[]; [hits.append((p,i,line)) for p in pathlib.Path('references').rglob('*'+s) for i,line in enumerate(p.read_text(encoding='utf-8').splitlines(),1) if rx.search(line)]; [print(f'{p}:{i}:{line}') for p,i,line in hits]; sys.exit(1 if hits else 0)"` |
-| Large file TOC | Files > 100 lines have `## Contents` section | Manual check |
+| Large file TOC | Files > 100 lines have `## Contents` with valid anchors | Python heading/anchor check over changed Markdown |
+| Bounded reviewer tools | Plugin-level reviewer/final reviewer frontmatter excludes Agent/Skill/Workflow/Edit/Write/Task/EnterWorktree | Parse frontmatter and assert forbidden-set intersection is empty |
+| Controller wording | SKILL has no unbounded review phrase; Phase 5 has no implementer repair dispatch | `grep -n '直至通过\|重新 dispatch implementer' SKILL.md` returns no output |
 | name format | ≤ 64 chars, letters/numbers/hyphens only | Manual check |
 
 ---
@@ -131,19 +133,26 @@ Verify the implementation structurally matches the selected Google 8 Pattern.
 
 ### 失败处理
 
-- 任一子维度失败 → 列出失败项 + 具体 prompt + 实际行为 vs 预期行为
-- 回 Phase 4 修复（通过 Phase 4 Step 4.1 重新 dispatch implementer 执行相关 Task）
-- Maximum 2 fix cycles；2 次后仍失败 → 停止，报告用户，等待指令
+1. 任一子维度失败都生成与 reviewer 相同 schema 的 observation，包含具体 prompt、
+   expected/actual、base/head evidence、contract/rubric ref 与 exact `required_fix_paths`。
+2. Controller 保存原始 JSON 后调用 helper `import-review`；不得直接改文件或调用 implementer。
+3. Helper 对每条 finding 做唯一 owner mapping。同 Gate/同 owner findings 合并；同一
+   observation 出现多个 owner 时保留逐 finding owner/evidence，所有 owner budget 不消费，
+   确定性 `HALTED_NEEDS_DECISION`。用户裁定后回 Phase 3 修订 Plan，在新 run 重新 init。
+4. 只有 helper `authorize-fix` 后才 dispatch bounded fixer。Task review、final review、
+   structural validation、behavioral validation 共用 owner Task 的 maximum=2 budget；
+   unchanged blocker set、regression 或预算耗尽分别确定性 HALT。
+5. BASELINE、MINOR、suggestion、OUT_OF_CONTRACT、非法 observation 与 API failure 不消费 budget。
 
 ---
 
 ## Validation Flow
 
-1. Run Dimensions 1-5
-2. If ALL pass → run Dimension 6 (Behavioral Correctness)
-3. If ALL 6 pass → proceed to Layer 2 (skill-forge Eval)
-4. If ANY fail → list failures with specific evidence and fix suggestions → return to Phase 4
-5. Maximum 2 fix-and-retry cycles before stopping
+1. Helper 返回 `RUN_STRUCTURAL_VALIDATION` → 对 initial/base 与 current/head 跑相同适用检查。
+2. 保存 STRUCTURAL_VALIDATION observation → helper import；PASS 才进入 behavioral。
+3. Helper 返回 `RUN_BEHAVIORAL_VALIDATION` → 按显式 flags 执行 eval；false 维度 `SKIP`。
+4. 保存 BEHAVIORAL_VALIDATION observation → helper import；FAIL 走 owner mapping/shared budget。
+5. 两个 Gate 均 PASS 后，仅 helper `REQUEST_SQUASH_APPROVAL` 可触发用户完成 Gate。
 
 ## Report Format
 

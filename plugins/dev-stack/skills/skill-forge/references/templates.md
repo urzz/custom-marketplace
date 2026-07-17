@@ -8,6 +8,11 @@ Output format templates referenced by SKILL.md. Each section is an anchor target
 - [Delta Spec](#delta-spec)
 - [Plan Document Header](#plan-document-header)
 - [Task Format](#task-format)
+- [Review Observation JSON](#review-observation-json)
+- [Finding JSON](#finding-json)
+- [Fix Report JSON](#fix-report-json)
+- [Controller Resolution JSON](#controller-resolution-json)
+- [Intermediate Artifacts](#intermediate-artifacts)
 - [Eval Prompts Template](#eval-prompts-template)
 
 ---
@@ -174,6 +179,206 @@ Phase 3 — 每个 Plan 中的 Task 使用以下 YAML 结构：
 **MODIFY 拆分参考：**
 - 按 Delta Spec 的 Changed/Added/Removed 逐项拆分
 - 相关联的变更合并为一个 Task
+
+---
+
+## Review Observation JSON
+
+Reviewer、final reviewer 与 Phase 5 validation 都输出单个 schema v1 JSON object，
+无 Markdown 前后文。示例中的 SHA 为 40 位，实际值必须与 state 精确一致：
+
+```json
+{
+  "schema_version": 1,
+  "gate": "TASK_REVIEW",
+  "verdict": "FAIL",
+  "task_id": 2,
+  "base_sha": "1111111111111111111111111111111111111111",
+  "head_sha": "2222222222222222222222222222222222222222",
+  "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "attempt": 1,
+  "findings": [
+    {
+      "id": "T2-RULE-ANCHOR",
+      "owner_task_id": 2,
+      "source_gate": "TASK_REVIEW",
+      "attempt": 1,
+      "rule_id": "large-file-toc",
+      "contract_ref": "Task 2 acceptance: all large Markdown has Contents",
+      "failure_key": "missing-contents-anchor",
+      "severity": "IMPORTANT",
+      "blocking": true,
+      "origin": "NEW",
+      "status": "OPEN",
+      "summary": "新增协议超过 100 行但缺少 Contents 锚点",
+      "path": "plugins/dev-stack/skills/skill-forge/references/review-state-protocol.md",
+      "required_fix_paths": [
+        "plugins/dev-stack/skills/skill-forge/references/review-state-protocol.md"
+      ],
+      "base_evidence": {
+        "command": "git cat-file -e 1111111111111111111111111111111111111111:plugins/dev-stack/skills/skill-forge/references/review-state-protocol.md",
+        "exit_code": 128,
+        "output": "path does not exist in base"
+      },
+      "head_evidence": {
+        "command": "python3 check_toc.py",
+        "exit_code": 1,
+        "output": "missing ## Contents"
+      },
+      "closure_test": {
+        "expected": {
+          "command": "python3 check_toc.py",
+          "exit_code": 0,
+          "output": "all anchors valid"
+        },
+        "actual": null
+      },
+      "observations": [
+        {
+          "risk": "读者无法从目录定位协议章节",
+          "check": "检查所有二级标题都有 Contents 锚点"
+        }
+      ],
+      "resolution": null
+    }
+  ],
+  "cannot_verify": [],
+  "controller_resolutions": []
+}
+```
+
+Final/validation observation 的 `task_id` 和 finding 初始 `owner_task_id` 使用 `null`；
+helper 根据 `required_fix_paths` 求唯一 owner。PASS 使用空 actionable findings；
+`cannot_verify` 必须在 import 前由 Controller resolution、完整 finding 或 HALT 处理。
+
+## Finding JSON
+
+独立 finding 模板如下。`contract_ref` 与 `rubric_ref` 恰好保留一个；本示例用 rubric：
+
+```json
+{
+  "id": "FINAL-TOOLS-001",
+  "owner_task_id": null,
+  "source_gate": "FINAL_REVIEW",
+  "attempt": 1,
+  "rule_id": "reviewer-read-only-tools",
+  "rubric_ref": "Frozen rubric: reviewer tool boundary",
+  "failure_key": "reviewer-has-write-tool",
+  "severity": "CRITICAL",
+  "blocking": true,
+  "origin": "NEW",
+  "status": "OPEN",
+  "summary": "Task reviewer frontmatter 包含 Write",
+  "path": "plugins/dev-stack/agents/skill-file-reviewer.md",
+  "required_fix_paths": [
+    "plugins/dev-stack/agents/skill-file-reviewer.md"
+  ],
+  "base_evidence": {
+    "command": "git cat-file -e 1111111111111111111111111111111111111111:plugins/dev-stack/agents/skill-file-reviewer.md",
+    "exit_code": 128,
+    "output": "path does not exist in base"
+  },
+  "head_evidence": {
+    "command": "python3 check_agent_tools.py",
+    "exit_code": 1,
+    "output": "unexpected tool: Write"
+  },
+  "closure_test": {
+    "expected": {
+      "command": "python3 check_agent_tools.py",
+      "exit_code": 0,
+      "output": "reviewer tools are read-only"
+    },
+    "actual": null
+  },
+  "observations": [
+    {
+      "risk": "Reviewer 可修改被审对象，破坏 Generator-Critic 独立性",
+      "check": "解析 frontmatter tools 的精确集合"
+    }
+  ],
+  "resolution": null
+}
+```
+
+RESOLVED 复审必须保持 canonical `id`，将 `status` 改为 `RESOLVED`，并把实际执行的
+`{command,exit_code,output}` 写入 `closure_test.actual`。Agent 不提供 fingerprint；helper 重算。
+
+## Fix Report JSON
+
+Fixer 只能报告 helper 已授权的完整 finding 集。FIXED 示例：
+
+```json
+{
+  "status": "FIXED",
+  "attempt": 1,
+  "base_head_sha": "2222222222222222222222222222222222222222",
+  "new_head_sha": "3333333333333333333333333333333333333333",
+  "findings": [
+    {
+      "id": "T2-RULE-ANCHOR",
+      "action": "增加 Contents 并修正所有 anchor",
+      "changed_paths": [
+        "plugins/dev-stack/skills/skill-forge/references/review-state-protocol.md"
+      ],
+      "closure_test": {
+        "command": "python3 check_toc.py",
+        "exit_code": 0,
+        "output": "all anchors valid"
+      }
+    }
+  ]
+}
+```
+
+`status` 只允许 `FIXED`、`BLOCKED`、`NO_PROGRESS`、`NEEDS_CONTEXT`。只有 FIXED
+使用上面的 attempt/head/findings 合同；后三者的 helper 合同只含具体 status，例如：
+
+```json
+{
+  "status": "BLOCKED"
+}
+```
+
+Agent 的自然语言解释属于 claim，不是自由 `additional` 协议字段，不能替代 state transition。
+
+## Controller Resolution JSON
+
+`cannot_verify` item 使用稳定 ID；Controller 只有取得独立 evidence 后才能在 observation
+的 `controller_resolutions` 中加入：
+
+```json
+{
+  "id": "CV-T2-001",
+  "action": "ACCEPT",
+  "reason": "Controller 运行 python3 -m json.tool，exit 0，确认该 JSON 合法"
+}
+```
+
+Resolution 必须含非空 `id/action/reason`，ID 必须属于同一 observation 的
+`cannot_verify` 且未在 state 中使用。若不能 resolution，Controller 要求 reviewer 转成
+完整 finding，或保留该项让 helper 确定性 `HALTED_NEEDS_DECISION`；不得静默删除。
+
+## Intermediate Artifacts
+
+同一 run 的中间产物全部平铺在 `.skill-forge/<skill-name>-<change-topic>/`：
+
+| Artifact | Filename |
+|---|---|
+| State | `review-state.json` |
+| Frozen rubric | `rubric-snapshot.md` |
+| Stable task briefs | `task<N>-brief.md`, `task<N>-brief.json` |
+| Task implementation report | `task<N>-report.md` |
+| Task observation | `task<N>-review-attempt<M>.json` |
+| Fix report | `task<N>-fix-attempt<M>-report.json` |
+| Final observation | `final-review-attempt<M>.json` |
+| Validation observation | `validation-<gate>-attempt<M>.json` |
+| Review package | `review-<base7>..<head7>-attempt<M>.diff` |
+| Eval input | `eval-prompts.md` |
+
+Attempt artifact 不覆盖。只有 helper 推进后的新 review/fix attempt 才增加 `<M>`；无合法
+handoff 的 API/transport retry 保持相同 schema `attempt` 与 `<M>`，仅将原始 artifact 另存为
+带 `-retry<N>` 的新文件且不得覆盖旧文件。不得创建 artifact 子目录。
 
 ---
 

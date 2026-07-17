@@ -57,9 +57,13 @@ End-to-end workflow for creating and iterating Claude Code skills. Enforces Anth
 
 | 产物 | 文件名 |
 |------|--------|
-| Spec | `spec.md` |
-| Plan | `plan.yaml` |
-| 每个 Task 的实现报告 | `task<N>-report.md` |
+| Spec / Plan | `spec.md` / `plan.yaml` |
+| Review state / frozen rubric | `review-state.json` / `rubric-snapshot.md` |
+| Stable Task brief | `task<N>-brief.md` / `task<N>-brief.json` |
+| Task report / observation | `task<N>-report.md` / `task<N>-review-attempt<M>.json` |
+| Fix report | `task<N>-fix-attempt<M>-report.json` |
+| Final / validation observation | `final-review-attempt<M>.json` / `validation-<gate>-attempt<M>.json` |
+| Review package | `review-<base7>..<head7>-attempt<M>.diff` |
 | Eval Prompts | `eval-prompts.md` |
 
 **规则：**
@@ -351,112 +355,91 @@ Present in conversation (do NOT use EnterPlanMode). YAML 本身可读，直接�
 
 ## Phase 4: Implement
 
-⚠️ MANDATORY: 本 Phase 通过本 skill 自建的轻量 implement→review 闭环执行，
-不委托外部 skill。审查环节（per-task review + final review）不可跳过。
+**Goal:** 保留 Sequential + Generator-Critic，由主 Session 作为唯一 Controller，严格按
+`review-state-helper.py next-action` 推进。完整 schema、CLI、恢复、ownership、预算与完成合同见
+[references/review-state-protocol.md](references/review-state-protocol.md)。不得委托外部 skill，
+per-task review 与 mandatory final review 均不可跳过。
 
-**Red Flags — 以下想法出现时立即停止，你正在绕过流程：**
+### Step 4.0 — Initial Base 与 Pre-Flight
 
-| 你的想法 | 现实 |
-|---------|------|
-| "这只是改一行，不值得 spawn agent" | 无论变更大小，Phase 4 唯一路径是 dispatch 自建 agent |
-| "任务太简单了，直接改更快" | 简单 ≠ 可以绕过流程；流程保证一致性 |
-| "这个 Task 很简单，review 环节可以跳过" | 无论大小，per-task review 是硬性环节，不可跳过 |
-| "各 Task 都过了，最后 diff 应该没问题，不用 final review" | Final review 检查跨 Task 一致性，是 per-task review 覆盖不到的维度，不可省略 |
-| "sub agent 已经完成了，我补充一点小修改" | 追加修改 → 必须重新进入 Phase 4 Step 4.1 |
-| "我先预处理一下文件再 dispatch 自建 agent" | 预处理 = 违规修改，禁止 |
+1. 记录 `INITIAL_BASE=$(git rev-parse HEAD)`。
+2. 对已确认 Plan 只做一次 bounded Pre-Flight Contract Review：仅扫描 Task 互相矛盾、
+   Global Constraints 与将冻结 rubric 冲突、Task ownership 无法覆盖 acceptance。
+3. 冲突一次性提交用户；用户修改 Plan 时回 Phase 3 保存并确认。无冲突不打断，禁止扩张为全仓 audit。
+4. 解析已存在且只读的 rubric source 绝对路径，确认 run 内目标 `rubric-snapshot.md` 不存在；
+   仅调用 helper `init`，由 helper 同时创建 rubric snapshot 与 `review-state.json`，并冻结
+   Spec/Plan/rubric identities 与 ownership。Controller 不得预创建 snapshot 或 state。
 
-**Goal:** 自建 Sequential + Generator-Critic 组合执行 Plan，获得 implement→review→fix 循环。
+### Step 4.1 — Next-Action Controller
 
-### Step 4.0 — 记录基准
-INITIAL_BASE=$(git rev-parse HEAD)，记录用于 Task 1 的 diff 基准和最终 rebase 基准。
+每轮必须：调用 `next-action` → 只执行返回动作 → 保存 agent 原始 JSON/report → 调用
+helper `record-*`/`import-review` → 再调用 `next-action`。禁止按 agent summary、todo 或记忆跳转。
 
-### Step 4.1 — 逐 Task 循环
-对 Plan YAML 中每个 tasks[] 项，按 id 顺序执行：
-1. dispatch agents/skill-file-implementer.md（model 取自该 Task 的 meta.model，值直接作为 Agent tool 的 model 参数），
-   prompt 含 Plan YAML 绝对路径 + Task ID + 上一 Task 产生的接口信息 + scripts/plan-task-query.py 绝对路径 + 报告输出路径 `.skill-forge/<skill-name>-<变更主题>/task<N>-report.md`。
-   **dispatch prompt 必须显式包含 `scope` 与 `ticket` 两个字段**：
-   - `scope` = 被改 skill 名(如 `skill-forge`)
-   - `ticket` 由主 session 从当前分支名提取后传入（如 `feature/UG-883685-xxx` → `UG-883685`）
-   - implementer 直接使用这两个字段，**不得自行解析分支名或硬编码**
-   implementer 自行调用该脚本取 brief（脚本路径由主 session 解析为绝对路径注入，不依赖 subagent CWD），完成后将报告写到指定的报告路径。
-2. implementer 完成后在当前分支执行一次 commit，commit message 格式为
-   `feat(<scope>): [Task N] <name>`（scope/ticket 取自 dispatch prompt），
-   记录 TASK_N_HEAD。`[Task N]` 保留为 subject 前缀，维持任务边界可追溯。
-   Task 1 对比基准 = INITIAL_BASE；Task N>1 对比基准 = TASK_(N-1)_HEAD。
-3. dispatch agents/skill-file-reviewer.md，对比 TASK_(N-1)_HEAD..TASK_N_HEAD 的 diff，
-   做 spec compliance + structural compliance 审查（无 TDD/Tests 维度；
-   meta.requires_execution_check 为 true 时额外检查执行证据）。
-4. reviewer 报告问题 → dispatch fix subagent → 追加 commit → 重新审查，直至通过。
-5. 标记 Task 完成，进入下一 Task。
+- `DISPATCH_IMPLEMENTER`：READY 时先 `start-task`；为当前 Task 生成稳定 brief，dispatch 一个
+  fresh `dev-stack:skill-file-implementer`，再以 `record-implementation` 记录恰好一个
+  `feat(<scope>): [Task N] <name>` commit。
+- `DISPATCH_REVIEWER`：helper 生成累计 `task_base..task_head` review package，dispatch 一个 fresh
+  `dev-stack:skill-file-reviewer`；只有 `import-review` PASS 才完成 Task。
+- `DISPATCH_FIXER`：FIX_REQUIRED 时先 `needs-fix`，再对完整同 Gate/同 owner OPEN 集调用
+  `authorize-fix`；成功后才 dispatch `dev-stack:skill-file-fixer`。所有 Gate 共用 owner Task 的
+  maximum=2 budget。跨 owner observation 保留逐 finding 唯一映射和证据、所有预算不消费并
+  `HALTED_NEEDS_DECISION`；用户裁定后回 Phase 3 修订 Plan，在新 run 重新 init，当前 state
+  不选 owner group、无恢复命令。
+- `RUN_FINAL_REVIEW`：所有 Task PASS 后先生成 eval prompts，再由 helper 生成
+  `initial_base..current_head` package，以最后一个 Task 的 `meta.model` dispatch fresh
+  `dev-stack:skill-file-final-reviewer` 做 mandatory whole-change review。
 
-### Step 4.2 — Final Review
-全部 Task 通过后，dispatch agents/skill-file-final-reviewer.md，对比
-git diff INITIAL_BASE..HEAD 的完整 diff，做跨 Task 一致性 + Spec Section 2/5 覆盖度检查。
+每次 dispatch 显式传绝对 state、brief、report、review-package、observation 路径，及 `scope`、
+`ticket`、Task ID、`model`；model 始终取当前 Task `meta.model`。Whole-change dispatch 使用
+`task_id: null` 并携带 acceptance index。Agent/API 失败先查询 `status` 与 `next-action`。只有 helper 推进后的新 review/fix attempt 才增加
+`<M>`；无合法 handoff 的 API/transport retry 保持 state、schema `attempt`、`<M>` 与 budget
+不变，仅将原始 artifact 另存为带 `-retry<N>` 的新文件且不得覆盖旧文件，禁止凭记忆追加 fix。
+Hash drift、非法 JSON、BASELINE/MINOR/suggestion/OUT_OF_CONTRACT 均不消费 budget；任何 HALT
+向用户报告文件证据。
 
-### Step 4.3 — 生成 Eval Prompts
-基于 Spec Section 3 和 Section 5 生成 Eval Prompts（格式沿用 references/templates.md#eval-prompts-template）。
+### Step 4.2 — Eval Input 与转场
 
-### Step 4.4 — Squash（仅 Phase 5 全部通过后执行）
-执行前向用户说明："即将把本次 Phase 4 产生的 N 个小 commit 合并为 1 个，
-commit message 将替换为 `feat(<scope>): <汇总>`（scope/ticket 与 per-task commit 一致），是否继续？"
-> <INITIAL_BASE_SHA> 替换为 Step 4.0 记录的实际 commit SHA（$(git rev-parse HEAD) 的输出）。
-合并命令（macOS BSD sed 兼容，Linux 同样可用）：GIT_SEQUENCE_EDITOR="sed -i '' -e '1!s/^pick/squash/'" git rebase -i <INITIAL_BASE_SHA>
-合并后 commit message 由主 session 生成一句话汇总，格式为 `feat(<scope>): <汇总>`，
-覆盖 rebase 默认拼接 message。
-
-### Post-delegation Constraint
-final review 通过后，主 session 禁止直接 Edit/Write skill 文件；如需追加修改必须重新
-进入 Phase 4 Step 4.1 委托。
-唯一例外：Phase 5 验证失败后的修复循环（重新 dispatch implementer）。
-Auto-transition to Phase 5（no user gate）。
+Mandatory final review 前生成基于 Spec Architecture/Success Criteria 的
+`eval-prompts.md`（格式见 [references/templates.md#eval-prompts-template](references/templates.md#eval-prompts-template)）；
+final review 经 helper PASS 后无用户 Gate 自动进入 Phase 5。Final review 后主 Session 不直接 Edit/Write 产品文件；
+后续失败只能经 observation→helper authorize→bounded fixer。
 
 ---
 
 ## Phase 5: Validate
 
-**Goal:** 双 Hard Gate 验证 — 结构合规 + 行为正确。全部通过才算 Skill ready to use。
+**Goal:** Structural 与 Behavioral 两个 Gate 使用同一 finding ledger、owner mapping、shared budget；
+详细转换遵循 [references/review-state-protocol.md](references/review-state-protocol.md)。
 
-### Step 5.1 — Structural Validation (Hard Gate)
+### Step 5.1 — Structural Validation
 
-Read [references/validation-checklist.md](references/validation-checklist.md) and run Dimensions 1-5:
+`RUN_STRUCTURAL_VALIDATION` 时按
+[references/validation-checklist.md](references/validation-checklist.md) 执行 Dimensions 1-5。
+对 `INITIAL_BASE` 与 `CURRENT_HEAD` 运行相同适用命令，记录 base/head evidence 后分类 origin；
+把 PASS/FAIL 写成 reviewer 同 schema 的 `STRUCTURAL_VALIDATION` observation 并 `import-review`。
+失败不直接改文件，也不维护独立次数；只有 helper authorize 后才能 dispatch owner fixer。
 
-1. Spec Conformance
-2. Pattern Consistency
-3. Flow Completeness
-4. Structural Compliance
-5. Token Efficiency
+### Step 5.2 — Behavioral Validation
 
-**执行方式：** 结构合规检查（Dimension 1-5）使用 Bash 命令（`wc -l`、`grep -c`、`grep -rn`）做机械检查，不整段 Read 文件内容，减少主 session 上下文占用。各 Dimension 的 How to Verify 列已给出对应命令；纯语义判定项标注 Manual check。Dimension 1-5 的判定标准本身不变。
+`RUN_BEHAVIORAL_VALIDATION` 时用 Eval Prompts dispatch skill-local eval，并显式传：
 
-**If any fail:**
-- List failures with evidence + fix suggestions
-- 回 Phase 4 Step 4.1 修复（重新 dispatch implementer 执行相关 Task）
-- Maximum 2 fix cycles; after 2 failures → stop, report to user, await instructions
+- `run_consistency=true` 仅当 Delta Spec 涉及 Routing/Gate，且每个选定 prompt 只追加一次；否则 false。
+- `run_baseline=true` 仅当 Delta Spec Changed 含 Pattern/Architecture；否则 false。
 
-### Step 5.2 — Behavioral Validation (Hard Gate)
+每个 eval case 必须归属产生其合同的 Task，并逐字使用该 Task `meta.model`；不能唯一归属时
+在 Pre-Flight 交用户裁定。Flag 为 false 的维度必须输出 `SKIP`，不得 spawn 或追加运行。
+将结果转换为同 schema 的
+`BEHAVIORAL_VALIDATION` observation 并 `import-review`；FAIL 也只能走 shared budget fixer。
 
-**Precondition:** Step 5.1 all pass.
+### Step 5.3 — Completion/Squash Gate
 
-使用 Step 4.3 生成的 Eval Prompts，spawn eval agent（instructions: [agents/skill-creator-eval.md](agents/skill-creator-eval.md)）执行模拟验证。
+仅当 helper 返回 `REQUEST_SQUASH_APPROVAL` 才询问用户。用户拒绝时调用
+`advance-gate --gate SQUASH_APPROVAL --result UNSQUASHED --head <CURRENT_HEAD>`，合法完成为
+`COMPLETE_UNSQUASHED`。
 
-**验证维度（详见 [references/validation-checklist.md#dimension-6-behavioral-correctness](references/validation-checklist.md#dimension-6-behavioral-correctness)）：**
-
-| 维度 | 通过标准 |
-|------|----------|
-| 路径正确性 | 100% 路径匹配预期 |
-| Gate 完整性 | 所有 Hard Gate 均触发暂停 |
-| 边界处理 | 正确澄清或拒绝 |
-| 输出格式 | description 格式、行数、TOC 合规 |
-| 一致性 | 同一 prompt 执行 1 次；若 Step 5.1 结构检查全部通过，视为高置信度，不重复验证一致性；仅当本次变更涉及 Routing/Gate 逻辑改动时才追加 1 次重跑 |
-| 质量基线（LLM-as-Judge） | 仅当 Delta Spec 的 Changed 部分包含 Pattern/Architecture 级改动时才执行 with-skill vs baseline 双跑；纯内容/文案微调（无结构变化）跳过该维度，标记为 SKIP |
-
-**If any fail:**
-- List failures: 失败维度 + 具体 prompt + 实际行为 vs 预期行为
-- 回 Phase 4 Step 4.1 修复
-- Maximum 2 fix cycles; after 2 failures → stop, report to user, await instructions
-
-### 完成条件
-
-Step 5.1 + Step 5.2 均通过 → 输出：
-- "✅ Skill 验证通过，ready to use"
-- 验证报告摘要（各维度结果一行总结）
+用户当前明确同意后，主 Session 先记录 commits、message 和 tree，再执行跨平台非交互 squash：
+`git reset --soft "$INITIAL_BASE"`，随后单次
+`git commit -m "feat(<scope>): <summary>"`；验证 tree 未变、range 仅一个 commit、subject 精确后，
+调用 `advance-gate ... --result SQUASHED --head <NEW_HEAD>` 得到 `COMPLETE`。这些分支改写命令
+不得写入 agent prompt，用户本轮确认前不得执行。最终报告使用 helper 终态与各 Gate evidence，
+不得以 agent claim 提前宣告 ready。

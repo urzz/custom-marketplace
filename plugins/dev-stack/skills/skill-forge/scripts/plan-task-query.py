@@ -3,20 +3,26 @@
 
 用法:
     python3 plan-task-query.py <plan_yaml_path> <task_id>
+        [--output PATH] [--format markdown|json]
 
 行为:
     1. 读取 <plan_yaml_path>（YAML 格式，schema 含 goal/architecture/global_constraints/tasks）
     2. 在 tasks 列表中查找 id == <task_id> 的节点
     3. 将该 Task 节点全部字段与顶层 global_constraints 合并为一个 brief 文档
-    4. 写入唯一命名临时文件（tempfile.mkstemp，后缀 .md），打印文件绝对路径到 stdout
+    4. 默认写入唯一命名临时 Markdown；指定 --output 时写稳定 Markdown/JSON 路径
+    5. 所有成功调用都把输出文件绝对路径打印到 stdout
 
 错误处理:
     - Plan 文件不存在 → 打印 "ERROR: plan file not found" 到 stderr，exit 1
     - task_id 不存在 → 打印 "ERROR: task <id> not found in plan" 到 stderr，exit 1
     - YAML 解析失败 → 打印 "ERROR: invalid YAML: <原因>" 到 stderr，exit 1
+    - 稳定输出已存在 → 拒绝覆盖，打印 "ERROR: output already exists"，exit 1
 """
 
+import argparse
+import json
 import os
+from pathlib import Path
 import sys
 import tempfile
 
@@ -97,72 +103,94 @@ def _format_task_brief(task, global_constraints):
     return "\n".join(sections)
 
 
-def main():
-    if len(sys.argv) != 3:
-        print("usage: python3 plan-task-query.py <plan_yaml_path> <task_id>", file=sys.stderr)
-        sys.exit(1)
+def _parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="从 plan YAML 中提取单个 Task 的稳定 brief。",
+    )
+    parser.add_argument("plan_yaml_path")
+    parser.add_argument("task_id")
+    parser.add_argument("--output", help="稳定输出路径；已存在时拒绝覆盖")
+    parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
+    return parser.parse_args(argv)
 
-    plan_path = sys.argv[1]
-    task_id_str = sys.argv[2]
 
-    # Step 1: 检查文件存在性
+def _load_task(plan_path, task_id_str):
     if not os.path.isfile(plan_path):
-        print("ERROR: plan file not found", file=sys.stderr)
-        sys.exit(1)
-
-    # Step 2: 读取并解析 YAML
+        raise ValueError("plan file not found")
     try:
-        with open(plan_path, "r", encoding="utf-8") as f:
-            plan = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        print(f"ERROR: invalid YAML: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"ERROR: invalid YAML: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    if plan is None or not isinstance(plan, dict):
-        print("ERROR: invalid YAML: plan root is empty or not a mapping", file=sys.stderr)
-        sys.exit(1)
-
-    # Step 3: 提取 global_constraints
-    global_constraints = plan.get("global_constraints", [])
-
-    # Step 4: 在 tasks 列表中查找 id == task_id 的节点
+        with open(plan_path, "r", encoding="utf-8") as handle:
+            plan = yaml.safe_load(handle)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"invalid YAML: {exc}") from exc
+    if not isinstance(plan, dict):
+        raise ValueError("invalid YAML: plan root is empty or not a mapping")
     tasks = plan.get("tasks", [])
     if not isinstance(tasks, list):
         tasks = []
-
-    # 支持 task_id 为数字或字符串，做宽松匹配
-    matched_task = None
-    for t in tasks:
-        if not isinstance(t, dict):
-            continue
-        tid = t.get("id")
-        # 尝试字符串比较和数字比较
-        if str(tid) == str(task_id_str):
-            matched_task = t
-            break
-
+    matched_task = next(
+        (
+            task for task in tasks
+            if isinstance(task, dict) and str(task.get("id")) == str(task_id_str)
+        ),
+        None,
+    )
     if matched_task is None:
-        print(f"ERROR: task {task_id_str} not found in plan", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"task {task_id_str} not found in plan")
+    return plan, matched_task
 
-    # Step 5: 生成 brief 文档
-    brief = _format_task_brief(matched_task, global_constraints)
 
-    # Step 6: 写入唯一命名临时文件
-    fd, tmp_path = tempfile.mkstemp(suffix=".md", prefix="plan-task-brief-")
+def _render(plan, task, output_format):
+    if output_format == "markdown":
+        return _format_task_brief(task, plan.get("global_constraints", []))
+    payload = {
+        "schema_version": 1,
+        "goal": plan.get("goal"),
+        "architecture": plan.get("architecture"),
+        "global_constraints": plan.get("global_constraints", []),
+        "task": task,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
+def _write_stable_output(path, content):
+    output = Path(path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(brief)
-    except Exception as e:
-        print(f"ERROR: failed to write temp file: {e}", file=sys.stderr)
-        sys.exit(1)
+        with output.open("x", encoding="utf-8") as handle:
+            handle.write(content)
+    except FileExistsError as exc:
+        raise ValueError(f"output already exists: {output}") from exc
+    return output
 
-    # Step 7: 打印绝对路径到 stdout
-    print(os.path.abspath(tmp_path))
+
+def main(argv=None):
+    args = _parse_args(argv)
+    try:
+        plan, task = _load_task(args.plan_yaml_path, args.task_id)
+        content = _render(plan, task, args.format)
+        if args.output:
+            output = _write_stable_output(args.output, content)
+        else:
+            if args.format != "markdown":
+                raise ValueError("--format json requires --output")
+            job_dir = os.environ.get("CLAUDE_JOB_DIR")
+            temp_dir = Path(job_dir) / "tmp" if job_dir else None
+            if temp_dir is not None:
+                temp_dir.mkdir(parents=True, exist_ok=True)
+            fd, temp_path = tempfile.mkstemp(
+                suffix=".md", prefix="plan-task-brief-", dir=temp_dir,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            output = Path(temp_path).resolve()
+        print(output)
+        return 0
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
