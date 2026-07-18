@@ -1,11 +1,11 @@
 # Lifecycle
 
-本 lifecycle 使用 `authority.md` 中的 authority 术语：`.dev-docs/` 是事实源，artifact existence 不是 approval，Contract/Finish approval 必须 fresh，`mutation_targets` 是唯一写授权。
+本 lifecycle 使用 `authority.md` 中的 authority 术语：`.dev-docs/` 是事实源，active change authority 位于 `CHANGE_ROOT=.dev-docs/changes/<change-id>`，artifact existence 不是 approval，Contract/Finish approval 必须 fresh，`mutation_targets` 是唯一写授权。
 
 ## 日常 Gate
 
-- Contract Gate：用户批准当前 `contract.yaml`、context fingerprint、state version 和 mutation_targets 后，才允许产品 mutation。
-- Finish Gate：用户批准 completion proposal、decision identity 与 state version 后，才允许长期知识写入、归档或 finish apply。
+- Contract Gate：用户批准当前 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl` fingerprint、`CHANGE_ROOT/state.json` version 和 mutation_targets 后，才允许产品 mutation。
+- Finish Gate：用户批准 `CHANGE_ROOT/evidence/completion.md` proposal、`CHANGE_ROOT/evidence/decision.md` identity 与 `CHANGE_ROOT/state.json` version 后，才允许长期知识写入、归档或 finish apply。
 
 除这两个日常 Gate 外，Controller 可以要求澄清或修复，但不能把对话同意、agent claim 或 artifact 存在解释为 Gate approval。
 
@@ -13,23 +13,30 @@
 
 | status | 含义 | 允许的 next action |
 | --- | --- | --- |
-| `idle` | 没有 active change，或上一个 change 已归档。 | 启动 init；创建 draft contract；读取 project context。 |
-| `drafting_contract` | 正在形成或修订 `contract.yaml` 与 `context.jsonl`。 | 询问澄清；生成/更新 contract draft；运行 schema 与 context 检查；转入 `contract_pending`。 |
+| `idle` | 没有 active change，或上一个 change 已归档。 | 启动 init；选择或创建 change-local `CHANGE_ROOT=.dev-docs/changes/<change-id>`；读取 project context。 |
+| `drafting_contract` | 正在形成或修订 `CHANGE_ROOT/contract.yaml` 与 `CHANGE_ROOT/context.jsonl`。 | 询问澄清；生成/更新 contract draft；运行 schema 与 context 检查；转入 `contract_pending`。 |
 | `contract_pending` | Contract draft 已可展示，等待用户 Contract Gate decision。 | 展示摘要、风险、mutation_targets、validation；等待 explicit approve/defer/reject；不得执行 mutation。 |
 | `ready_to_execute` | 存在 fresh Contract approval，且 state/context/contract identity 未变。 | 派发 Task packet；重新校验 dirty/fingerprint；开始执行；转入 `executing`。 |
-| `executing` | 一个或多个 Task 正在实现、review 或修复。 | 按 packet 派发 fresh implementer/reviewer/fixer；记录 evidence；更新 Task 状态；完成后转入 `completing`。 |
-| `completing` | 所有 Task 候选实现完成，正在做 change-wide completion。 | 汇总 mutation map、checks、review evidence、risk；生成 completion proposal；转入 `decision_pending`。 |
-| `decision_pending` | Completion proposal 已可展示，等待 Finish Gate decision。 | 展示 before/after、residual risk、finish apply plan；等待 explicit approve/defer/reject；不得写长期知识或归档。 |
-| `folding` | 存在 fresh Finish approval，正在执行长期知识写入或归档。 | 应用 approved finish plan；记录 before/after evidence；归档 state；转入 `archived`。 |
+| `executing` | 一个或多个 Task 正在实现、review 或修复。 | 按 packet 派发 fresh implementer/reviewer/fixer；记录 `CHANGE_ROOT/evidence/tasks/<task-id>/...`；更新 Task 状态；完成后转入 `completing`。 |
+| `completing` | 所有 Task 候选实现完成，正在做 change-wide completion。 | 汇总 mutation map、checks、review evidence、risk；写 `CHANGE_ROOT/evidence/completion.md` 与 `CHANGE_ROOT/evidence/decision.md` proposal；转入 `decision_pending`。 |
+| `decision_pending` | Completion proposal 已可展示，等待 Finish Gate decision。 | 展示 before/after、residual risk、finish apply plan；等待 exact `accept`/`request_changes`/`defer`/`reject`；不得写长期知识或归档。 |
+| `folding` | 存在 fresh Finish approval，正在执行长期知识写入或归档。 | 应用 approved finish plan；记录 `CHANGE_ROOT/evidence/finish-apply.md` before/after evidence；归档 state；转入 `archived`。 |
 | `archived` | Change 已结束且历史可追溯。 | 回到 `idle`；只允许只读审计或显式新 change。 |
 | `repair_required` | helper 发现 state、hash、ownership、dirty、schema 或 evidence 不一致。 | 停止自动推进；展示原因；执行授权 repair；必要时重新请求 Gate。 |
 | `context_stale` | context fingerprint 或 required source identity 与 approval/packet 不匹配。 | 停止执行；刷新 context；重新生成 packet 或回到 Contract Gate。 |
 | `deferred` | 用户选择暂缓 Contract 或 Finish decision。 | 保留 state；允许 resume 前重新校验 freshness；不得假设继续批准。 |
 | `rejected` | 用户拒绝 Contract 或 Finish decision。 | 停止当前路径；允许重开 drafting 或归档为 rejected；不得执行被拒绝 mutation。 |
 
+## Change-local artifact map
+
+- Project-level `.dev-docs/` 只保留 index、knowledge 和 changes/index。
+- Active change contract、context、state、research 与 evidence 必须位于 `CHANGE_ROOT=.dev-docs/changes/<change-id>`。
+- Exact active paths are `CHANGE_ROOT/contract.yaml`, `CHANGE_ROOT/context.jsonl`, `CHANGE_ROOT/state.json`, `CHANGE_ROOT/research/`, `CHANGE_ROOT/evidence/tasks/<task-id>/...`, `CHANGE_ROOT/evidence/completion.md`, `CHANGE_ROOT/evidence/decision.md`, and `CHANGE_ROOT/evidence/finish-apply.md`.
+- Migration target authority must use the selected `CHANGE_ROOT`; a legacy source path may be user-specified, but migrated contract/context/state/evidence must be change-local.
+
 ## Resume 规则
 
-- Resume 必须先读取 `.dev-docs/state.json`，再由 helper 校验 contract hash、context fingerprint、state version、dirty state、Task ownership 与 pending Gate identity。
+- Resume 必须先读取 `CHANGE_ROOT/state.json`，再由 helper 校验 contract hash、context fingerprint、state version、dirty state、Task ownership 与 pending Gate identity。
 - 从 `deferred` resume 时，不能沿用过期 approval；若 artifact identity 或 state version 变化，必须回到相应 Gate。
 - 从 `executing` resume 时，必须用 packet/evidence 中的 snapshot 与 current tree 对比；dirty 或 unknown changes 触发 `repair_required`。
 - 从 `context_stale` resume 时，必须重新构造 context identity，并重新派发依赖该 context 的 packet。

@@ -25,9 +25,11 @@ ROOT = Path(__file__).resolve().parents[3]
 PLUGIN = ROOT / "plugins" / "nuclio-next-plugin"
 SCRIPTS = PLUGIN / "scripts"
 SKILLS = PLUGIN / "skills"
+REFERENCES = PLUGIN / "references"
 MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 OLD_LIFECYCLE = {"project-init", "brief", "design", "implement", "verify", "fold"}
 NEW_LIFECYCLE = {"init", "work", "finish"}
+CHANGE_AUTHORITY_REFERENCES = ["authority.md", "lifecycle.md", "finish.md", "migration.md", "eval-prompts.md"]
 HEX = {
     "a": "a" * 64,
     "b": "b" * 64,
@@ -324,6 +326,94 @@ class StaticPluginTests(unittest.TestCase):
             for bad_path in forbidden:
                 with self.subTest(text=label, forbidden=bad_path):
                     self.assertNotIn(bad_path, text)
+
+    def test_references_and_eval_use_change_local_authority_paths(self):
+        required_paths = [
+            "CHANGE_ROOT=.dev-docs/changes/<change-id>",
+            "CHANGE_ROOT/contract.yaml",
+            "CHANGE_ROOT/context.jsonl",
+            "CHANGE_ROOT/state.json",
+            "CHANGE_ROOT/research/",
+            "CHANGE_ROOT/evidence/completion.md",
+            "CHANGE_ROOT/evidence/decision.md",
+            "CHANGE_ROOT/evidence/finish-apply.md",
+        ]
+        forbidden_project_root = re.compile(
+            r"(?<!changes/<change-id>/)\.dev-docs/(contract\.yaml|context\.jsonl|state\.json|completion\.md|decision\.md|finish-apply\.md)"
+        )
+        for filename in CHANGE_AUTHORITY_REFERENCES:
+            text = read_text(REFERENCES / filename)
+            with self.subTest(reference=filename, needle="CHANGE_ROOT declaration"):
+                self.assertIn(required_paths[0], text)
+            for needle in required_paths[1:]:
+                with self.subTest(reference=filename, needle=needle):
+                    self.assertIn(needle, text)
+            for line in text.splitlines():
+                if "legacy source" in line.lower() or "旧" in line or "baseline" in line.lower():
+                    continue
+                with self.subTest(reference=filename, line=line):
+                    self.assertNotRegex(line, forbidden_project_root)
+
+    def test_eval_owner_routing_keeps_contract_work_out_of_init(self):
+        eval_prompts = read_text(REFERENCES / "eval-prompts.md")
+        rows = {}
+        for line in eval_prompts.splitlines():
+            match = re.match(r"\| `([^`]+)` \| (.*?) \| `(init|work|finish)` \| (.*?) \| (.*?) \| (.*?) \| (.*?) \|$", line)
+            if match:
+                case_id, case_input, owner, next_action, allowed_writes, forbidden_writes, assertions = match.groups()
+                rows[case_id] = {
+                    "input": case_input,
+                    "owner_skill": owner,
+                    "expected_next_action": next_action,
+                    "allowed_writes": allowed_writes,
+                    "forbidden_writes": forbidden_writes,
+                    "assertions": assertions,
+                }
+
+        expected_work_cases = {
+            "work-contract-draft-new-change",
+            "work-contract-repair-missing-context-fingerprint",
+            "work-contract-approval-exact",
+            "work-contract-revise",
+            "work-contract-reject",
+            "work-resume-deferred-contract-stale",
+        }
+        self.assertTrue(expected_work_cases.issubset(rows), sorted(expected_work_cases - set(rows)))
+        for case_id in expected_work_cases:
+            with self.subTest(case=case_id, field="owner_skill"):
+                self.assertEqual(rows[case_id]["owner_skill"], "work")
+            with self.subTest(case=case_id, field="allowed_writes"):
+                self.assertNotIn(".dev-docs/contract.yaml", rows[case_id]["allowed_writes"])
+                self.assertNotIn(".dev-docs/context.jsonl", rows[case_id]["allowed_writes"])
+                self.assertNotIn(".dev-docs/state.json", rows[case_id]["allowed_writes"])
+                self.assertIn("CHANGE_ROOT", rows[case_id]["allowed_writes"])
+
+        init_cases = {case_id: row for case_id, row in rows.items() if row["owner_skill"] == "init"}
+        self.assertTrue(init_cases)
+        for case_id, row in init_cases.items():
+            with self.subTest(init_case=case_id):
+                self.assertRegex(case_id, r"^(init-bootstrap|init-repair|migration-|multi-active-change-refuse-guess|baseline-)")
+                self.assertNotRegex(case_id, r"contract-(approval|revise|reject)|resume-deferred")
+                if not case_id.startswith("migration-apply"):
+                    self.assertNotRegex(row["allowed_writes"], r"(?<!TARGET_)CHANGE_ROOT/(contract\.yaml|context\.jsonl|state\.json)")
+                self.assertNotRegex(row["expected_next_action"], r"生成可审 .*contract|批准 Contract Gate|返回 drafting_contract")
+        self.assertIn("`init` 只负责 project fact-source bootstrap/repair/legacy migration", eval_prompts)
+        self.assertIn("STOP before work", eval_prompts)
+
+    def test_reference_eval_finish_tokens_match_helper_enum_without_spaced_machine_token(self):
+        state_helper = load_helper_module("state-helper.py")
+        expected = {"accept", "request_changes", "defer", "reject"}
+        self.assertEqual(state_helper.FINISH_DECISIONS, expected)
+        machine_context = "\n".join(read_text(REFERENCES / filename) for filename in ["finish.md", "eval-prompts.md"])
+        for token in expected:
+            with self.subTest(token=token):
+                self.assertIn(f"`{token}`", machine_context)
+        self.assertIn("--decision request_changes", split_skill(SKILLS / "finish" / "SKILL.md")[1])
+        self.assertNotIn("`request changes`", machine_context)
+        self.assertNotRegex(machine_context, r"exact token `[^`]*request changes[^`]*`")
+        self.assertNotRegex(machine_context, r"用户输入 exact token `request changes`")
+        self.assertNotRegex(machine_context, r"--decision request changes")
+        self.assertRegex(machine_context, r"(?is)`accept`.*?`request_changes`.*?`defer`.*?`reject`")
 
     def test_finish_accept_apply_uses_controller_sequence_and_real_helper_flags(self):
         finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]

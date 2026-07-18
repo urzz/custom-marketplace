@@ -15,7 +15,7 @@ Migration 定义 Nuclio Next 对 legacy `.dev-docs/` 或其它旧工作流 artif
 
 ## 目标与边界
 
-Migration 的目标是把已有 change 事实转换成 Nuclio Next 可验证的 `.dev-docs/contract.yaml`、`.dev-docs/context.jsonl`、`.dev-docs/state.json` 和 evidence identity。它不恢复来源不明的历史内容，不制造缺失 approval，不把旧 artifact existence 当成 authority。
+Migration 的目标是把已有 change 事实转换成 Nuclio Next 可验证的 selected `TARGET_CHANGE_ROOT`。`TARGET_CHANGE_ROOT` 必须等价于 `CHANGE_ROOT=.dev-docs/changes/<change-id>`，迁移后的 target authority 是 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl`、`CHANGE_ROOT/state.json`、`CHANGE_ROOT/research/` 和 change-local evidence identity。Project-level `.dev-docs/` 只保留 index、knowledge 和 changes/index。Legacy source path 可由用户指定，但迁移后的 target authority 必须 change-local。Migration 不恢复来源不明的历史内容，不制造缺失 approval，不把旧 artifact existence 当成 authority。
 
 边界：
 
@@ -51,9 +51,11 @@ Detect 输出必须包含：
 
 Detect 不允许：
 
-- 写 `.dev-docs/contract.yaml`。
-- 写 `.dev-docs/context.jsonl`。
-- 写 `.dev-docs/state.json`。
+- 写 target `CHANGE_ROOT/contract.yaml`。
+- 写 target `CHANGE_ROOT/context.jsonl`。
+- 写 target `CHANGE_ROOT/state.json`。
+- 写 target `CHANGE_ROOT/research/`。
+- 写 target `CHANGE_ROOT/evidence/completion.md`、`CHANGE_ROOT/evidence/decision.md` 或 `CHANGE_ROOT/evidence/finish-apply.md`。
 - 修改 legacy 文件。
 - 读取 raw transcript 或 full conversation。
 - 递归读取整个仓库。
@@ -67,10 +69,11 @@ Preview 基于 detect 输出生成只读迁移计划。Preview 必须输出逐�
 Preview 必须包含：
 
 - source artifact map：每个 source path、sha256、type、line range 或 object path。
-- target `.dev-docs/contract.yaml` field map。
-- target `.dev-docs/context.jsonl` entry map。
-- target `.dev-docs/state.json` status、gates、tasks、blockers、fix_budgets、history 草案。
-- evidence mapping：哪些 source evidence 可成为 Nuclio Next evidence，哪些只能成为 diagnostic note。
+- target `CHANGE_ROOT/contract.yaml` field map。
+- target `CHANGE_ROOT/context.jsonl` entry map。
+- target `CHANGE_ROOT/state.json` status、gates、tasks、blockers、fix_budgets、history 草案。
+- target `CHANGE_ROOT/research/` mapping for bounded research artifacts that can be verified.
+- evidence mapping：哪些 source evidence 可成为 `CHANGE_ROOT/evidence/tasks/<task-id>/...`、`CHANGE_ROOT/evidence/completion.md`、`CHANGE_ROOT/evidence/decision.md` 或 `CHANGE_ROOT/evidence/finish-apply.md`，哪些只能成为 diagnostic note。
 - blockers：字段级缺失、冲突、stale、ownership unknown 或 validation impossible。
 - apply plan：将要创建的新 artifacts、不会覆盖的 legacy artifacts、rollback/stop 行为。
 
@@ -78,13 +81,13 @@ Preview 必须显式标注哪些字段不能从 legacy 推导。不能为了让 
 
 ## Apply
 
-Apply 必须由用户对当前 preview identity 给出显式 opt-in。Opt-in 必须绑定 preview hash、source artifact hashes、target paths、state version plan 与 apply command identity。
+Apply 必须由用户对当前 preview identity 给出显式 opt-in。Opt-in 必须绑定 preview hash、source artifact hashes、target paths、state version plan 与 apply command identity。Target paths must all be under the selected `TARGET_CHANGE_ROOT` / `CHANGE_ROOT=.dev-docs/changes/<change-id>` except project-level indexes explicitly maintained outside migration authority.
 
 Apply 顺序：
 
 1. 重新运行 detect，并确认 source hashes 未变。
 2. 重新生成 preview，并确认 preview hash 与用户 opt-in 绑定一致。
-3. 完整 validate 目标 `contract.yaml`、`context.jsonl`、`state.json` 与 evidence identity。
+3. 完整 validate 目标 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl`、`CHANGE_ROOT/state.json`、`CHANGE_ROOT/research/` 与 evidence identity。
 4. 检查目标路径不存在，或只存在 apply plan 明确允许的临时文件。
 5. 原子写入新 artifacts。
 6. 写入 migration evidence，记录 source hashes、target hashes、blocked fields、apply result。
@@ -174,6 +177,8 @@ Preview 至少必须覆盖以下 Nuclio Next 字段，且逐项说明 source 或
 - Task id when relevant
 - implementation, validation, review, mutation_map, completion, decision 或 finish_apply_journal object when relevant
 
+字段映射中的 artifact path 必须指向 selected `CHANGE_ROOT`：`CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl`、`CHANGE_ROOT/state.json`、`CHANGE_ROOT/research/`、`CHANGE_ROOT/evidence/completion.md`、`CHANGE_ROOT/evidence/decision.md` 与 `CHANGE_ROOT/evidence/finish-apply.md`。
+
 ## Blockers
 
 以下字段或情况缺失时必须产生字段级 blocker，且不生成部分 authority：
@@ -206,7 +211,7 @@ Migration helper 的验证必须覆盖：
 - evidence identity。
 - no product code mutation。
 
-Migration evidence 必须能证明 detect/preview/apply 的输入、输出和 stop reason。Raw transcript、agent summary 和 artifact existence 不得成为 authority 字段。
+Migration evidence 必须能证明 detect/preview/apply 的输入、输出和 stop reason。Raw transcript、agent summary 和 artifact existence 不得成为 authority 字段。Migration evidence 的 target authority 必须 under selected `CHANGE_ROOT=.dev-docs/changes/<change-id>`，包括 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl`、`CHANGE_ROOT/state.json`、`CHANGE_ROOT/research/`、`CHANGE_ROOT/evidence/completion.md`、`CHANGE_ROOT/evidence/decision.md` 与 `CHANGE_ROOT/evidence/finish-apply.md`。
 
 ## 禁止事项
 
@@ -220,3 +225,4 @@ Migration 禁止：
 - 猜测 ownership、approval、freshness、acceptance 或 validation。
 - 将旧 workflow 名称写成 Nuclio Next canonical lifecycle。
 - 在 authority 字段缺失时继续执行 work。
+- 将 migration target authority 写到 project-root `.dev-docs/` change artifacts；target contract/context/state/research/evidence 必须位于 selected `CHANGE_ROOT`。

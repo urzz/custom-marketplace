@@ -8,7 +8,7 @@ Finish 定义 Nuclio Next 在 `work` 完成候选实现后，如何形成 comple
 - [decision.md 四段](#decisionmd-四段)
 - [允许的 decision token](#允许的-decision-token)
 - [accept](#accept)
-- [request changes](#request-changes)
+- [request_changes](#request_changes)
 - [defer](#defer)
 - [reject](#reject)
 - [模糊答复](#模糊答复)
@@ -17,20 +17,23 @@ Finish 定义 Nuclio Next 在 `work` 完成候选实现后，如何形成 comple
 
 ## 入口与事实源
 
-Finish 只能在 helper 判定 `.dev-docs/state.json` 的 `status` 为 `decision_pending`，且存在 fresh completion identity 时启动。Completion identity 必须绑定：
+Finish 只能在 helper 判定 `CHANGE_ROOT=.dev-docs/changes/<change-id>` 下的 `CHANGE_ROOT/state.json` 的 `status` 为 `decision_pending`，且存在 fresh completion identity 时启动。Project-level `.dev-docs/` 只保留 index、knowledge 和 changes/index；active change authority 必须位于 `CHANGE_ROOT`。Completion identity 必须绑定：
 
-- `.dev-docs/contract.yaml` 的 `contract_sha256`
-- `.dev-docs/context.jsonl` 的 `context_fingerprint`
-- `.dev-docs/state.json` 的 `state_version`
-- completion proposal hash
+- `CHANGE_ROOT/contract.yaml` 的 `contract_sha256`
+- `CHANGE_ROOT/context.jsonl` 的 `context_fingerprint`
+- `CHANGE_ROOT/state.json` 的 `state_version`
+- `CHANGE_ROOT/research/` 中 relevant research identity when referenced by the completion proposal
+- `CHANGE_ROOT/evidence/completion.md` proposal hash
 - mutation map hash
 - change-wide check summary hash
+- `CHANGE_ROOT/evidence/decision.md` identity
+- finish apply journal target `CHANGE_ROOT/evidence/finish-apply.md`
 
 Finish Gate 的用户 decision 只对这些 identity 生效。任何 artifact hash、state version、context fingerprint、completion proposal 或 finish plan 改变，都必须重新请求 decision。
 
 ## decision.md 四段
 
-Finish 展示给用户的 `decision.md` 必须只包含以下四个顶层决策段，段名固定：
+Finish 展示给用户的 `CHANGE_ROOT/evidence/decision.md` 必须只包含以下四个顶层决策段，段名固定：
 
 1. `Completion Verdict`
 2. `Remaining Risks`
@@ -55,7 +58,7 @@ Finish 展示给用户的 `decision.md` 必须只包含以下四个顶层决策�
 - 影响范围
 - evidence 来源
 - 为什么不阻塞 Finish Gate
-- 用户可选择的 mitigation 或 request changes 建议
+- 用户可选择的 mitigation 或 request_changes 建议
 
 Remaining risk 不能自动批准，也不能被隐藏到 agent summary。
 
@@ -85,14 +88,14 @@ Archive Decision 不是 approval。只有 Finish Gate fresh accept 才能使 hel
 
 ## 允许的 decision token
 
-Finish 只接受用户以 exact token 表达的四种 decision：
+Finish 只接受用户以 exact token 表达的四种 decision，且 helper enum 必须逐字保持：
 
 - `accept`
-- `request changes`
+- `request_changes`
 - `defer`
 - `reject`
 
-这些 token 必须针对当前展示的 `decision.md` identity。Controller 可以要求用户选择其中之一，但不能把“看起来不错”、“继续吧”、“可以”、“LGTM”或其它模糊肯定推断为 `accept`。
+这些 token 必须针对当前展示的 `CHANGE_ROOT/evidence/decision.md` identity。Controller 可以要求用户选择其中之一，但不能把“看起来不错”、“继续吧”、“可以”、“LGTM”或其它模糊肯定推断为 `accept`。
 
 ## accept
 
@@ -102,7 +105,7 @@ Fresh accept 后允许的写入仅限：
 
 - `Knowledge Proposal` 中逐项列明的 knowledge targets。
 - `Archive Decision` 中列明的 journal、state archive 或 archive target。
-- finish apply evidence 中列明的 `finish_apply_journal`。
+- finish apply evidence 中列明的 `finish_apply_journal`，其 journal file 必须是 `CHANGE_ROOT/evidence/finish-apply.md`。
 
 Accept 不允许：
 
@@ -114,9 +117,9 @@ Accept 不允许：
 
 如果 finish apply validation fail closed，必须停止并进入 `repair_required` 或返回 Finish Gate；不能部分归档。
 
-## request changes
+## request_changes
 
-`request changes` 表示用户不接受当前 completion proposal，要求回到 `work`。Controller 必须要求用户说明变更方向，或将 request changes 转成 blocker 返回 Contract revision。
+`request_changes` 表示用户不接受当前 completion proposal，要求回到 `work`。Controller 必须要求用户说明变更方向，或将 request_changes 转成 blocker 返回 Contract revision。
 
 规则：
 
@@ -127,7 +130,7 @@ Accept 不允许：
 - 若 requested change 仍在 approved Contract 内，helper 可回到 bounded fixer 或 work loop。
 - 若 requested change 改变 goals、acceptance、constraints、design 或 `mutation_targets`，必须回到 Contract Gate 或 contract revision。
 
-`request changes` 不是新的 Contract approval。
+`request_changes` 不是新的 Contract approval。
 
 ## defer
 
@@ -153,13 +156,13 @@ Accept 不允许：
 - 可以保留只读 evidence 供审计。
 - 若用户之后要继续，必须启动新的 Contract revision 或新 change。
 
-Reject 不能被 Controller 转换为 request changes，也不能保留隐含 approval。
+Reject 不能被 Controller 转换为 request_changes，也不能保留隐含 approval。
 
 ## 模糊答复
 
-任何不完全等于 `accept`、`request changes`、`defer` 或 `reject` 的答复都是 ambiguous。Controller 必须一次只问一个澄清问题：
+任何不完全等于 `accept`、`request_changes`、`defer` 或 `reject` 的答复都是 ambiguous。Controller 必须一次只问一个澄清问题：
 
-“请选择 exact Finish decision：`accept`、`request changes`、`defer` 或 `reject`。”
+“请选择 exact Finish decision：`accept`、`request_changes`、`defer` 或 `reject`。”
 
 在用户给出 exact token 前：
 
@@ -173,11 +176,11 @@ Reject 不能被 Controller 转换为 request changes，也不能保留隐含 ap
 
 Fresh accept 后，helper 派生 finish packet，packet `role` 为 `finish`，包含 `completion_sha256`、`decision_sha256`、`finish_plan_sha256` 与 `snapshots`。Finish apply 的执行必须满足：
 
-1. 重新校验 state version、decision identity、completion proposal hash 与 finish plan hash。
+1. 重新校验 `CHANGE_ROOT/state.json` version、`CHANGE_ROOT/evidence/decision.md` identity、`CHANGE_ROOT/evidence/completion.md` proposal hash 与 finish plan hash。
 2. 读取所有 knowledge target 的 before identity。
 3. 按 `Archive Decision` 的 apply order 写入列明 targets。
-4. 写入 `finish_apply_journal` evidence，包含每个 target 的 before/after hash 与 reason。
-5. 原子更新 state 到 `archived`，或在失败时停止并报告未应用步骤。
+4. 写入 `CHANGE_ROOT/evidence/finish-apply.md` evidence，包含每个 target 的 before/after hash 与 reason。
+5. 原子更新 `CHANGE_ROOT/state.json` 到 `archived`，或在失败时停止并报告未应用步骤。
 
 如果任一步骤失败，helper 必须 fail closed。已写入但未 journal 的情况必须进入 manual handling blocker，Controller 不得声称完成。
 
@@ -192,3 +195,4 @@ Finish 阶段禁止：
 - 写出 `Knowledge Proposal` 和 `Archive Decision` 未列明的路径。
 - 使用 raw transcript、agent summary 或 chat history 作为 decision authority。
 - 因 artifact existence 推断 Finish approval。
+- 将 active change authority 写到 project-root `.dev-docs/` artifacts；必须使用 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl`、`CHANGE_ROOT/state.json`、`CHANGE_ROOT/research/`、`CHANGE_ROOT/evidence/completion.md`、`CHANGE_ROOT/evidence/decision.md` 与 `CHANGE_ROOT/evidence/finish-apply.md`。

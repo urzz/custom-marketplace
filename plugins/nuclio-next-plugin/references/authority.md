@@ -4,17 +4,21 @@ Nuclio Next 的 authority 只来自项目内 `.dev-docs/` 文件和 deterministi
 
 ## 唯一事实源
 
-- `.dev-docs/contract.yaml` 是当前 change 的目标、约束、设计边界、Task、mutation_targets、handoff、检查与 rollback 事实源。
-- `.dev-docs/context.jsonl` 是允许读取的 bounded context 事实源；它只授权读取，不授权写入。
-- `.dev-docs/state.json` 是 lifecycle、Gate ledger、Task 状态、blocker、completion、decision 与 history 的事实源。
-- evidence 文件记录 helper 可校验的 hash、fingerprint、snapshot、check output 与 before/after identity；它们不能绕过 Gate。
+- Project-level `.dev-docs/` 只保留 index、knowledge 和 changes/index：`.dev-docs/index.md`、`.dev-docs/index.json`、`.dev-docs/knowledge/` 与 `.dev-docs/changes/index.md`。
+- 每个 active change 必须先定义 `CHANGE_ROOT=.dev-docs/changes/<change-id>`；所有 change authority、helper state 与 evidence 都必须位于该目录下。
+- `CHANGE_ROOT/contract.yaml` 是当前 change 的目标、约束、设计边界、Task、mutation_targets、handoff、检查与 rollback 事实源。
+- `CHANGE_ROOT/context.jsonl` 是允许读取的 bounded context 事实源；它只授权读取，不授权写入。
+- `CHANGE_ROOT/state.json` 是 lifecycle、Gate ledger、Task 状态、blocker、completion、decision 与 history 的事实源。
+- `CHANGE_ROOT/research/` 只保存当前 change 的 bounded research artifact；它不能扩展 context 读授权或写授权。
+- Evidence authority 只在 `CHANGE_ROOT/evidence/`：Task evidence 位于 `CHANGE_ROOT/evidence/tasks/<task-id>/...`，completion、decision、finish apply 分别位于 `CHANGE_ROOT/evidence/completion.md`、`CHANGE_ROOT/evidence/decision.md`、`CHANGE_ROOT/evidence/finish-apply.md`。
+- Evidence 文件记录 helper 可校验的 hash、fingerprint、snapshot、check output 与 before/after identity；它们不能绕过 Gate。
 
 ## Approval 与 freshness
 
 - Artifact existence != approval。存在 contract、packet、evidence、report 或 summary 不代表用户批准。
 - Contract Gate 和 Finish Gate 是唯一日常用户 Gate，必须由当前轮 explicit approval 表达。
-- Fresh Contract approval 必须绑定 contract artifact hash、context fingerprint、state version 与 approval identity；产品 mutation 前必须存在该 fresh approval。
-- Fresh Finish approval 必须绑定 completion proposal、decision identity、state version 与 approval identity；长期知识写入、归档或 finish apply 前必须存在该 fresh approval。
+- Fresh Contract approval 必须绑定 `CHANGE_ROOT/contract.yaml` artifact hash、`CHANGE_ROOT/context.jsonl` fingerprint、`CHANGE_ROOT/state.json` version 与 approval identity；产品 mutation 前必须存在该 fresh approval。
+- Fresh Finish approval 必须绑定 `CHANGE_ROOT/evidence/completion.md` proposal、`CHANGE_ROOT/evidence/decision.md` identity、`CHANGE_ROOT/state.json` version 与 approval identity；长期知识写入、归档或 `CHANGE_ROOT/evidence/finish-apply.md` 写入前必须存在该 fresh approval。
 - 如果 contract、context、state version、mutation_targets、decision 或 relevant artifact hash 改变，旧 approval 失效，状态必须转入需要重新决策或 repair 的路径。
 
 ## 写授权与读授权
@@ -36,7 +40,7 @@ Nuclio Next 的 authority 只来自项目内 `.dev-docs/` 文件和 deterministi
 ## 禁止能力
 
 - 不引入 daemon、background worker、MCP server、runtime hook 或项目本地 `.claude/` 安装。
-- 不创建 `.nuclio/` runtime state；Nuclio Next 的运行事实源只在 `.dev-docs/`。
+- 不创建 `.nuclio/` runtime state；Nuclio Next 的运行事实源只在 `.dev-docs/` 和 change-local `CHANGE_ROOT`。
 - 不自动 `stash`、`reset`、`clean`、`rebase`、`push` 或批量改写用户 active changes。
 - 不把 raw logs、raw transcript、agent summary 或 chat history 作为 authority 字段。
-- 不 silent migrate legacy content；migration 必须可检测、可预览、显式 opt-in、可验证。
+- 不 silent migrate legacy content；migration 必须可检测、可预览、显式 opt-in、可验证，migration target authority 必须写入 selected `CHANGE_ROOT`。
