@@ -370,16 +370,22 @@ class StaticPluginTests(unittest.TestCase):
                     "assertions": assertions,
                 }
 
+        contract_work_case_pattern = re.compile(
+            r"contract-draft|contract-repair|contract-approval|contract-revise|contract-reject|resume-deferred-contract"
+        )
         expected_work_cases = {
             "work-contract-draft-new-change",
+            "work-contract-draft-safe-defaults",
+            "work-contract-draft-five-questions",
             "work-contract-repair-missing-context-fingerprint",
             "work-contract-approval-exact",
             "work-contract-revise",
             "work-contract-reject",
             "work-resume-deferred-contract-stale",
         }
-        self.assertTrue(expected_work_cases.issubset(rows), sorted(expected_work_cases - set(rows)))
-        for case_id in expected_work_cases:
+        actual_contract_work_cases = {case_id for case_id in rows if contract_work_case_pattern.search(case_id)}
+        self.assertEqual(actual_contract_work_cases, expected_work_cases)
+        for case_id in sorted(expected_work_cases):
             with self.subTest(case=case_id, field="owner_skill"):
                 self.assertEqual(rows[case_id]["owner_skill"], "work")
             with self.subTest(case=case_id, field="allowed_writes"):
