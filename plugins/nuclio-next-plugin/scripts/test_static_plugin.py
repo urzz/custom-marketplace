@@ -278,6 +278,53 @@ class StaticPluginTests(unittest.TestCase):
         self.assertIn("pass only absolute resolved `CHANGE_ROOT` artifact paths to helpers", work)
         self.assertIn("absolute resolved `CHANGE_ROOT/state.json`", finish)
 
+    def test_finish_apply_journal_uses_evidence_path(self):
+        finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]
+        work = split_skill(SKILLS / "work" / "SKILL.md")[1]
+        canonical = "CHANGE_ROOT/evidence/finish-apply.md"
+        full_change_local = ".dev-docs/changes/<change-id>/evidence/finish-apply.md"
+        forbidden = [
+            "CHANGE_ROOT/finish-apply.md",
+            ".dev-docs/changes/<change-id>/finish-apply.md",
+            ".dev-docs/finish-apply.md",
+        ]
+
+        entry_guard = re.search(r"(?is)## Entry guard(?P<section>.*?)(?:\n## |\Z)", finish).group("section")
+        accept_sequence = re.search(r"(?is)## Accept apply sequence(?P<section>.*?)(?:\n## |\Z)", finish).group("section")
+        work_handoff_surface = "\n".join(
+            re.search(rf"(?is)## {heading}(?P<section>.*?)(?:\n## |\Z)", work).group("section")
+            for heading in ["Helper next-action loop", "Completion and decision handoff"]
+        )
+
+        for label, section in {
+            "finish entry guard": entry_guard,
+            "finish accept sequence": accept_sequence,
+        }.items():
+            with self.subTest(section=label):
+                self.assertTrue(canonical in section or full_change_local in section, section)
+        with self.subTest(section="work completion handoff surface"):
+            self.assertTrue(
+                canonical in work_handoff_surface
+                or full_change_local in work_handoff_surface
+                or ("CHANGE_ROOT" in work_handoff_surface and "evidence/finish-apply.md" in work_handoff_surface),
+                work_handoff_surface,
+            )
+
+        for needle in [
+            "create or append the target entry to the change-local `CHANGE_ROOT/evidence/finish-apply.md` journal evidence",
+            "read back `CHANGE_ROOT/evidence/finish-apply.md`",
+            "evidence-helper.py validate-finish-apply --decision-sha256 <sha256> --finish-plan-json <plan> --journal-json CHANGE_ROOT/evidence/finish-apply.md",
+            "verified `CHANGE_ROOT/evidence/finish-apply.md` identity",
+            "state-helper.py record-finish-apply <state> --expected-version <n> --journal-json CHANGE_ROOT/evidence/finish-apply.md",
+        ]:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, accept_sequence)
+
+        for label, text in {"finish": finish, "work": work}.items():
+            for bad_path in forbidden:
+                with self.subTest(text=label, forbidden=bad_path):
+                    self.assertNotIn(bad_path, text)
+
     def test_finish_accept_apply_uses_controller_sequence_and_real_helper_flags(self):
         finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]
         required_in_order = [
@@ -292,10 +339,10 @@ class StaticPluginTests(unittest.TestCase):
             "no untracked/out-of-packet targets",
             "Controller Write/Edit is limited to exact approved",
             "Do not write product files",
-            "finish-apply.md",
-            "evidence-helper.py validate-finish-apply --decision-sha256 <sha256> --finish-plan-json <plan> --journal-json <journal>",
-            "Only an ok JSON result permits setting `verified: true` and `journal_sha256`",
-            "state-helper.py record-finish-apply <state> --expected-version <n> --journal-json <journal>",
+            "CHANGE_ROOT/evidence/finish-apply.md",
+            "evidence-helper.py validate-finish-apply --decision-sha256 <sha256> --finish-plan-json <plan> --journal-json CHANGE_ROOT/evidence/finish-apply.md",
+            "Only an ok JSON result for the verified `CHANGE_ROOT/evidence/finish-apply.md` identity permits setting `verified: true` and `journal_sha256`",
+            "state-helper.py record-finish-apply <state> --expected-version <n> --journal-json CHANGE_ROOT/evidence/finish-apply.md",
             "partial write failure",
             "do not invent rollback",
         ]
