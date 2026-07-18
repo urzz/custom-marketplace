@@ -250,6 +250,23 @@ class MigrationHelperTests(unittest.TestCase):
         self.assertTrue(any(blocker["target_field"] == "context.entries" and blocker["code"] == "FIELD_BLOCKED" for blocker in preview["blockers"]))
         self.assertFalse(self.target.exists())
 
+    def test_missing_required_authority_returns_field_blockers_without_target_files(self):
+        (self.legacy / "spec.md").unlink()
+        preview = self.helper.preview_migration(self.legacy, self.target)
+        self.assertFalse(preview["ready_to_apply"])
+        blockers = [blocker for blocker in preview["blockers"] if blocker["code"] == "FIELD_BLOCKED"]
+        self.assertTrue(any(blocker["target"] == "contract.acceptance" and blocker["source"].endswith("/spec.md") and blocker["confidence"] == "none" for blocker in blockers))
+        self.assertTrue(any(blocker["target"] == "contract.constraints" and blocker["source"].endswith("/spec.md") and blocker["reason"] for blocker in blockers))
+        self.assertEqual(preview["validation"]["state"]["code"], "SKIPPED")
+        cli = subprocess.run([sys.executable, str(HELPER), "preview", "--legacy-change-path", str(self.legacy), "--target-change-path", str(self.target)], text=True, capture_output=True)
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        cli_preview = json.loads(cli.stdout)["preview"]
+        self.assertFalse(cli_preview["ready_to_apply"])
+        self.assertTrue(any(blocker["code"] == "FIELD_BLOCKED" and blocker["target"] == "contract.acceptance" for blocker in cli_preview["blockers"]))
+        self.assertFalse((self.target / "contract.yaml").exists())
+        self.assertFalse((self.target / "context.jsonl").exists())
+        self.assertFalse((self.target / "state.json").exists())
+
     def test_unsupported_version_fails_closed(self):
         (self.legacy / "plan.yaml").write_text((self.legacy / "plan.yaml").read_text(encoding="utf-8").replace("legacy_version: 1", "legacy_version: 9"), encoding="utf-8")
         detect = self.helper.detect_legacy(self.legacy, self.target)
@@ -307,16 +324,52 @@ class MigrationHelperTests(unittest.TestCase):
 
         write_complete_legacy(self.legacy)
         preview = self.helper.preview_migration(self.legacy, self.target)
-        original_replace = self.helper.os.replace
-        def fail_replace(src, dst):
-            raise OSError("simulated publish failure")
-        self.helper.os.replace = fail_replace
+        original_write = self.helper._write_staged_files
+        def race_empty_target(staging, preview_data, approval, apply_identity):
+            original_write(staging, preview_data, approval, apply_identity)
+            self.target.mkdir()
+        self.helper._write_staged_files = race_empty_target
+        try:
+            with self.assertRaises(self.helper.ProtocolError) as ctx:
+                self.helper.apply_migration(self.legacy, self.target, apply=True, preview_identity=preview["preview_identity"], approval=APPROVAL)
+            self.assertEqual(ctx.exception.code, "TARGET_EXISTS")
+        finally:
+            self.helper._write_staged_files = original_write
+        self.assertTrue(self.target.exists())
+        self.assertEqual(list(self.target.iterdir()), [])
+        self.target.rmdir()
+        self.assertEqual([], list(self.target.parent.glob(".migration-staging-*")))
+
+        preview = self.helper.preview_migration(self.legacy, self.target)
+        def race_nonempty_target(staging, preview_data, approval, apply_identity):
+            original_write(staging, preview_data, approval, apply_identity)
+            self.target.mkdir()
+            (self.target / "race-owned.txt").write_text("preserve me\n", encoding="utf-8")
+        self.helper._write_staged_files = race_nonempty_target
+        try:
+            with self.assertRaises(self.helper.ProtocolError) as ctx:
+                self.helper.apply_migration(self.legacy, self.target, apply=True, preview_identity=preview["preview_identity"], approval=APPROVAL)
+            self.assertEqual(ctx.exception.code, "TARGET_EXISTS")
+        finally:
+            self.helper._write_staged_files = original_write
+        self.assertEqual((self.target / "race-owned.txt").read_text(encoding="utf-8"), "preserve me\n")
+        shutil.rmtree(self.target)
+        self.assertEqual([], list(self.target.parent.glob(".migration-staging-*")))
+
+        preview = self.helper.preview_migration(self.legacy, self.target)
+        original_move = self.helper.shutil.move
+        def fail_after_first_move(src, dst):
+            result = original_move(src, dst)
+            if Path(dst).name == "contract.yaml":
+                raise OSError("simulated publish failure")
+            return result
+        self.helper.shutil.move = fail_after_first_move
         try:
             with self.assertRaises(self.helper.ProtocolError) as ctx:
                 self.helper.apply_migration(self.legacy, self.target, apply=True, preview_identity=preview["preview_identity"], approval=APPROVAL)
             self.assertEqual(ctx.exception.code, "PUBLISH_FAILED")
         finally:
-            self.helper.os.replace = original_replace
+            self.helper.shutil.move = original_move
         self.assertFalse(self.target.exists())
         self.assertEqual([], list(self.target.parent.glob(".migration-staging-*")))
 

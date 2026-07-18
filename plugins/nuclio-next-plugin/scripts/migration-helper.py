@@ -44,6 +44,15 @@ KNOWN_LEGACY_FILES = (
     "state.json",
 )
 REQUIRED_PREVIEW_FILES = ("brief.md", "spec.md", "design.md", "plan.yaml", "context/implement.jsonl", "context/verify.jsonl", "state.json")
+REQUIRED_PREVIEW_FIELD_TARGETS = {
+    "brief.md": ("contract.intent.goals", "contract.intent.confirmed_answers"),
+    "spec.md": ("contract.acceptance", "contract.constraints"),
+    "design.md": ("contract.design",),
+    "plan.yaml": ("contract.tasks", "contract.validation", "contract.migration_or_rollout"),
+    "context/implement.jsonl": ("context.entries",),
+    "context/verify.jsonl": ("context.entries",),
+    "state.json": ("state.gates.contract", "state.gates.finish"),
+}
 HASH_CHARS = set("0123456789abcdef")
 
 
@@ -152,6 +161,13 @@ def _load_jsonl(path: Path) -> list[Any]:
     return rows
 
 
+def _coerce_legacy_version(value: Any, relpath: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ProtocolError("UNSUPPORTED_LEGACY_VERSION", "legacy_version must be an integer", {"path": relpath, "value": value}) from exc
+
+
 def _frontmatter_and_body(text: str) -> tuple[dict[str, Any], str]:
     if not text.startswith("---\n"):
         return {}, text
@@ -194,19 +210,19 @@ def _legacy_version_for(path: Path, relpath: str) -> int | None:
         return None
     if relpath.endswith(".md"):
         frontmatter, _ = _frontmatter_and_body(_read_text(path))
-        return int(frontmatter.get("legacy_version", SUPPORTED_LEGACY_VERSION))
+        return _coerce_legacy_version(frontmatter.get("legacy_version", SUPPORTED_LEGACY_VERSION), relpath)
     if relpath.endswith(".yaml"):
         data = contract_helper.parse_yaml_subset(_read_text(path))
-        return int(data.get("legacy_version", SUPPORTED_LEGACY_VERSION))
+        return _coerce_legacy_version(data.get("legacy_version", SUPPORTED_LEGACY_VERSION), relpath)
     if relpath.endswith(".jsonl"):
         rows = _load_jsonl(path)
-        versions = {int(row.get("legacy_version", SUPPORTED_LEGACY_VERSION)) for row in rows if isinstance(row, dict)}
+        versions = {_coerce_legacy_version(row.get("legacy_version", SUPPORTED_LEGACY_VERSION), relpath) for row in rows if isinstance(row, dict)}
         if len(versions) > 1:
             raise ProtocolError("UNSUPPORTED_LEGACY_VERSION", "legacy JSONL contains mixed versions", {"path": relpath, "versions": sorted(versions)})
         return next(iter(versions), SUPPORTED_LEGACY_VERSION)
     if relpath.endswith(".json"):
         data = _load_json(path)
-        return int(data.get("legacy_version", SUPPORTED_LEGACY_VERSION)) if isinstance(data, dict) else SUPPORTED_LEGACY_VERSION
+        return _coerce_legacy_version(data.get("legacy_version", SUPPORTED_LEGACY_VERSION), relpath) if isinstance(data, dict) else SUPPORTED_LEGACY_VERSION
     return SUPPORTED_LEGACY_VERSION
 
 
@@ -214,8 +230,13 @@ def _field_mapping(legacy: Path, relpath: str, locator: str, target_field: str, 
     return {"source_path": _source_path(legacy, relpath), "locator": locator, "target_field": target_field, "confidence": confidence, "blocker": blocker}
 
 
-def _blocker(target_field: str, source_path: str, locator: str, reason: str, code: str = "FIELD_BLOCKED") -> dict[str, Any]:
-    return {"code": code, "target_field": target_field, "source_path": source_path, "locator": locator, "reason": reason}
+def _blocker(target_field: str, source_path: str, locator: str, reason: str, code: str = "FIELD_BLOCKED", confidence: str = "none") -> dict[str, Any]:
+    return {"code": code, "target_field": target_field, "target": target_field, "source_path": source_path, "source": source_path, "locator": locator, "confidence": confidence, "reason": reason}
+
+
+def _missing_required_blockers(legacy: Path, relpath: str) -> list[dict[str, Any]]:
+    targets = REQUIRED_PREVIEW_FIELD_TARGETS.get(relpath, (relpath,))
+    return [_blocker(target, _source_path(legacy, relpath), "exists", "required legacy authority file is missing") for target in targets]
 
 
 def _string_list(items: Any) -> list[str]:
@@ -308,6 +329,51 @@ def _source_hashes(legacy: Path) -> dict[str, str]:
     return hashes
 
 
+def _empty_contract() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "change_id": "",
+        "contract_version": "",
+        "intent": {"goals": [], "non_goals": [], "confirmed_answers": []},
+        "acceptance": [],
+        "constraints": [],
+        "design": {"boundaries": "", "data_flow": "", "contracts": "", "tradeoffs": ""},
+        "tasks": [],
+        "context_policy": {},
+        "validation": {},
+        "migration_or_rollout": {},
+    }
+
+
+def _section_data_or_blocked(legacy: Path, relpath: str, blockers: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, list[str]]]:
+    path = legacy / relpath
+    if not path.exists():
+        return {}, {}
+    try:
+        return _markdown_sections(path)
+    except ProtocolError as exc:
+        blockers.append(_blocker(REQUIRED_PREVIEW_FIELD_TARGETS.get(relpath, (relpath,))[0], _source_path(legacy, relpath), "parse", exc.message, exc.code))
+    return {}, {}
+
+
+def _plan_data_or_blocked(legacy: Path, blockers: list[dict[str, Any]]) -> dict[str, Any]:
+    path = legacy / "plan.yaml"
+    if not path.exists():
+        return {}
+    try:
+        plan = contract_helper.parse_yaml_subset(_read_text(path))
+    except ProtocolError as exc:
+        blockers.append(_blocker("contract.tasks", _source_path(legacy, "plan.yaml"), "parse", exc.message, exc.code))
+        return {}
+    except Exception as exc:
+        blockers.append(_blocker("contract.tasks", _source_path(legacy, "plan.yaml"), "parse", str(exc)))
+        return {}
+    if not isinstance(plan, dict):
+        blockers.append(_blocker("contract.tasks", _source_path(legacy, "plan.yaml"), "parse", "plan must be an object"))
+        return {}
+    return plan
+
+
 def _normalize_context_rows(legacy: Path, relpaths: list[str], mappings: list[dict[str, Any]], blockers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     entries = []
     seen: dict[str, dict[str, Any]] = {}
@@ -315,12 +381,20 @@ def _normalize_context_rows(legacy: Path, relpaths: list[str], mappings: list[di
         path = legacy / relpath
         if not path.exists():
             continue
-        rows = _load_jsonl(path)
+        try:
+            rows = _load_jsonl(path)
+        except ProtocolError as exc:
+            blockers.append(_blocker("context.entries", _source_path(legacy, relpath), "jsonl", exc.message, exc.code))
+            continue
         for line_number, row in enumerate(rows, 1):
             if not isinstance(row, dict):
                 blockers.append(_blocker("context.entries", _source_path(legacy, relpath), f"line:{line_number}", "context row must be an object"))
                 continue
-            version = int(row.get("legacy_version", SUPPORTED_LEGACY_VERSION))
+            try:
+                version = _coerce_legacy_version(row.get("legacy_version", SUPPORTED_LEGACY_VERSION), relpath)
+            except ProtocolError as exc:
+                blockers.append(_blocker("context.entries", _source_path(legacy, relpath), f"line:{line_number}.legacy_version", exc.message, exc.code))
+                continue
             if version != SUPPORTED_LEGACY_VERSION:
                 blockers.append(_blocker("context.entries", _source_path(legacy, relpath), f"line:{line_number}", "unsupported legacy_version", "UNSUPPORTED_LEGACY_VERSION"))
                 continue
@@ -402,22 +476,23 @@ def _build_preview(legacy: Path, target: Path) -> dict[str, Any]:
     blockers: list[dict[str, Any]] = []
     detect = detect_legacy(legacy, target)
     for item in detect["unsupported"]:
-        blockers.append(_blocker(item["path"], _source_path(legacy, item["path"]), "legacy_version", item["reason"], "UNSUPPORTED_LEGACY_VERSION"))
+        for target_field in REQUIRED_PREVIEW_FIELD_TARGETS.get(item["path"], (item["path"],)):
+            blockers.append(_blocker(target_field, _source_path(legacy, item["path"]), "legacy_version", item["reason"], "UNSUPPORTED_LEGACY_VERSION"))
     for relpath in REQUIRED_PREVIEW_FILES:
         if relpath in detect["missing"]:
-            blockers.append(_blocker(relpath, _source_path(legacy, relpath), "exists", "required legacy authority file is missing"))
+            blockers.extend(_missing_required_blockers(legacy, relpath))
+
+    brief_front, brief = _section_data_or_blocked(legacy, "brief.md", blockers)
+    spec_front, spec = _section_data_or_blocked(legacy, "spec.md", blockers)
+    _, design_sections = _section_data_or_blocked(legacy, "design.md", blockers)
+    plan = _plan_data_or_blocked(legacy, blockers)
 
     try:
-        brief_front, brief = _markdown_sections(legacy / "brief.md")
-        spec_front, spec = _markdown_sections(legacy / "spec.md")
-        _, design_sections = _markdown_sections(legacy / "design.md")
-        plan = contract_helper.parse_yaml_subset(_read_text(legacy / "plan.yaml"))
-    except ProtocolError:
-        raise
-    except Exception as exc:
-        raise ProtocolError("INVALID_LEGACY_AUTHORITY", "legacy authority cannot be parsed", {"message": str(exc)}) from exc
-
-    if int(brief_front.get("legacy_version", SUPPORTED_LEGACY_VERSION)) != SUPPORTED_LEGACY_VERSION or int(spec_front.get("legacy_version", SUPPORTED_LEGACY_VERSION)) != SUPPORTED_LEGACY_VERSION:
+        unsupported_frontmatter = _coerce_legacy_version(brief_front.get("legacy_version", SUPPORTED_LEGACY_VERSION), "brief.md") != SUPPORTED_LEGACY_VERSION or _coerce_legacy_version(spec_front.get("legacy_version", SUPPORTED_LEGACY_VERSION), "spec.md") != SUPPORTED_LEGACY_VERSION
+    except ProtocolError as exc:
+        unsupported_frontmatter = True
+        blockers.append(_blocker("contract.schema_version", _source_path(legacy, exc.details.get("path", "brief.md")), "frontmatter.legacy_version", exc.message, exc.code))
+    if unsupported_frontmatter:
         blockers.append(_blocker("contract.schema_version", _source_path(legacy, "brief.md"), "frontmatter.legacy_version", "unsupported legacy_version", "UNSUPPORTED_LEGACY_VERSION"))
 
     goals = _string_list(brief.get("goals", []))
@@ -482,8 +557,8 @@ def _build_preview(legacy: Path, target: Path) -> dict[str, Any]:
 
     context_policy = plan.get("context_policy", {}) if isinstance(plan, dict) else {}
     migration_or_rollout = plan.get("migration_or_rollout", {}) if isinstance(plan, dict) else {}
-    contract = {
-        "schema_version": 1,
+    contract = _empty_contract()
+    contract.update({
         "change_id": str(brief_front.get("change_id", legacy.name)),
         "contract_version": str(brief_front.get("contract_version", "v1")),
         "intent": {"goals": goals, "non_goals": non_goals, "confirmed_answers": answers},
@@ -494,7 +569,7 @@ def _build_preview(legacy: Path, target: Path) -> dict[str, Any]:
         "context_policy": context_policy,
         "validation": validation or {},
         "migration_or_rollout": migration_or_rollout,
-    }
+    })
 
     context_entries = _normalize_context_rows(legacy, ["context/implement.jsonl", "context/verify.jsonl", "context/finish.jsonl"], mappings, blockers)
     evidence_facts, unmigrated = _load_evidence_facts(legacy)
@@ -615,6 +690,40 @@ def _require_approval(approval: dict[str, Any]) -> dict[str, Any]:
     return {key: approval[key].strip() if isinstance(approval[key], str) else approval[key] for key in approval}
 
 
+def _publish_staging_without_replace(staging: Path, target: Path) -> None:
+    try:
+        target.mkdir()
+    except FileExistsError as exc:
+        raise ProtocolError("TARGET_EXISTS", "target change path already exists; refusing to overwrite", {"target_change_path": str(target)}) from exc
+    except Exception as exc:
+        raise ProtocolError("PUBLISH_FAILED", "target reservation failed", {"message": str(exc)}) from exc
+    published = []
+    current_destination = None
+    try:
+        for item in sorted(staging.iterdir()):
+            destination = target / item.name
+            current_destination = destination
+            shutil.move(str(item), str(destination))
+            published.append(destination)
+            current_destination = None
+        staging.rmdir()
+    except Exception as exc:
+        cleanup = list(reversed(published))
+        if current_destination is not None and current_destination.exists() and current_destination not in cleanup:
+            cleanup.insert(0, current_destination)
+        for item in cleanup:
+            if item.exists():
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+        try:
+            target.rmdir()
+        except OSError:
+            pass
+        raise ProtocolError("PUBLISH_FAILED", "atomic migration publish failed", {"message": str(exc)}) from exc
+
+
 def _write_staged_files(staging: Path, preview: dict[str, Any], approval: dict[str, Any], apply_identity: str) -> None:
     staging.mkdir(parents=True, exist_ok=False)
     artifacts = preview["artifacts"]
@@ -669,7 +778,7 @@ def apply_migration(legacy_change_path: str | Path, target_change_path: str | Pa
         shutil.rmtree(staging)
     try:
         _write_staged_files(staging, preview, approval, apply_identity)
-        os.replace(staging, target)
+        _publish_staging_without_replace(staging, target)
     except ProtocolError:
         if staging.exists():
             shutil.rmtree(staging)
@@ -677,8 +786,6 @@ def apply_migration(legacy_change_path: str | Path, target_change_path: str | Pa
     except Exception as exc:
         if staging.exists():
             shutil.rmtree(staging)
-        if target.exists() and target.name.startswith(".migration-staging-"):
-            shutil.rmtree(target)
         raise ProtocolError("PUBLISH_FAILED", "atomic migration publish failed", {"message": str(exc)}) from exc
     report = json.loads((target / "migration-report.json").read_text(encoding="utf-8"))
     return {"schema_version": 1, "applied": True, "legacy_change_path": _repo_relative_change_path(legacy), "target_change_path": _repo_relative_change_path(target), "preview_identity": preview_identity, "apply_identity": apply_identity, "target_hashes": report["target_hashes"], "legacy_retained": True}
