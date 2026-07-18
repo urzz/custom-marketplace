@@ -16,7 +16,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import jsonschema
+try:
+    import jsonschema
+except ImportError:  # pragma: no cover - optional validation dependency
+    jsonschema = None
 
 ROOT = Path(__file__).resolve().parents[3]
 HELPER = ROOT / "plugins" / "nuclio-next-plugin" / "scripts" / "packet-helper.py"
@@ -135,14 +138,102 @@ class PacketHelperTests(unittest.TestCase):
     def setUp(self):
         self.helper = load_helper()
         self.schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
-        self.validator = jsonschema.Draft202012Validator(self.schema)
+        self.validator = jsonschema.Draft202012Validator(self.schema) if jsonschema is not None else None
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name)
 
     def assert_schema_valid(self, packet):
+        if self.validator is None:
+            return
         errors = sorted(self.validator.iter_errors(packet), key=lambda error: list(error.absolute_path))
         self.assertEqual(errors, [], [error.message for error in errors])
+
+    def assert_schema_invalid(self, packet):
+        if self.validator is None:
+            return
+        errors = sorted(self.validator.iter_errors(packet), key=lambda error: list(error.absolute_path))
+        self.assertNotEqual(errors, [], packet)
+
+    def generated_role_packets(self):
+        return {
+            "worker": self.helper.worker_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef1", [{"path": "handoff.json", "state": "absent"}], 7),
+            "reviewer": self.helper.reviewer_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef2", mutation_map(), {"evidence_paths": ["evidence/t1.json"]}, [{"path": "iface.py", "state": "present", "sha256": A_HASH}], 7),
+            "completion": self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {"evidence_paths": ["validation.json"]}, ["risk-1"], 7),
+            "finish": self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, finish_plan(), [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7),
+        }
+
+    def assert_role_fields_forbidden(self, base_packet, forbidden_fields):
+        for field, value in forbidden_fields.items():
+            with self.subTest(role=base_packet["role"], forbidden_field=field):
+                self.assertNotIn(field, base_packet)
+                bad = dict(base_packet)
+                bad[field] = value
+                self.assert_schema_invalid(bad)
+
+    def test_packet_schema_rejects_cross_role_authority(self):
+        packets = self.generated_role_packets()
+        for packet in packets.values():
+            with self.subTest(role=packet["role"], legitimate=True):
+                self.assert_schema_valid(packet)
+
+        self.assert_role_fields_forbidden(
+            packets["worker"],
+            {
+                "completion_sha256": C_HASH,
+                "decision_sha256": F_HASH,
+                "finish_plan_sha256": D_HASH,
+                "knowledge_proposal": {"summary": "not worker authority"},
+                "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}],
+                "archive_targets": [{"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH}],
+                "archive_intent": "not worker authority",
+            },
+        )
+        self.assert_role_fields_forbidden(
+            packets["reviewer"],
+            {
+                "task_heads": {"T1": "1111111", "T2": "2222222"},
+                "implementation_range": {"base": "abcdef1", "head": "abcdef9"},
+                "acceptance_index_sha256": A_HASH,
+                "task_evidence": {"T1": A_HASH, "T2": B_HASH},
+                "task_evidence_sha256": B_HASH,
+                "completion_sha256": C_HASH,
+                "decision_sha256": F_HASH,
+                "finish_plan_sha256": D_HASH,
+                "knowledge_proposal": {"summary": "not reviewer authority"},
+                "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}],
+                "archive_targets": [{"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH}],
+                "archive_intent": "not reviewer authority",
+            },
+        )
+        self.assert_role_fields_forbidden(
+            packets["completion"],
+            {
+                "completion_sha256": C_HASH,
+                "decision_sha256": F_HASH,
+                "finish_plan_sha256": D_HASH,
+                "knowledge_proposal": {"summary": "not completion authority"},
+                "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}],
+                "archive_targets": [{"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH}],
+                "archive_intent": "not completion authority",
+            },
+        )
+        self.assert_role_fields_forbidden(
+            packets["finish"],
+            {
+                "task_id": "T1",
+                "ownership": [{"path": "plugins/nuclio-next-plugin/scripts/a.py", "mode": "modify"}],
+                "checks": {"focused": [], "full": []},
+                "handoffs": ["artifact-a"],
+                "review_targets": ["plugins/nuclio-next-plugin/scripts/a.py"],
+                "task_heads": {"T1": "1111111", "T2": "2222222"},
+                "implementation_range": {"base": "abcdef1", "head": "abcdef9"},
+                "acceptance_index_sha256": A_HASH,
+                "task_evidence": {"T1": A_HASH, "T2": B_HASH},
+                "task_evidence_sha256": B_HASH,
+                "mutation_map_sha256": E_HASH,
+            },
+        )
 
     def test_all_four_generated_packet_roles_conform_to_authoritative_schema(self):
         packets = [

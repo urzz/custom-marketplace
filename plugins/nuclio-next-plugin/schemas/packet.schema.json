@@ -143,6 +143,80 @@
           "ownership": {
             "minItems": 1
           }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "review_targets"
+              ]
+            },
+            {
+              "required": [
+                "task_heads"
+              ]
+            },
+            {
+              "required": [
+                "implementation_range"
+              ]
+            },
+            {
+              "required": [
+                "acceptance_index_sha256"
+              ]
+            },
+            {
+              "required": [
+                "task_evidence"
+              ]
+            },
+            {
+              "required": [
+                "task_evidence_sha256"
+              ]
+            },
+            {
+              "required": [
+                "mutation_map_sha256"
+              ]
+            },
+            {
+              "required": [
+                "completion_sha256"
+              ]
+            },
+            {
+              "required": [
+                "decision_sha256"
+              ]
+            },
+            {
+              "required": [
+                "finish_plan_sha256"
+              ]
+            },
+            {
+              "required": [
+                "knowledge_proposal"
+              ]
+            },
+            {
+              "required": [
+                "knowledge_targets"
+              ]
+            },
+            {
+              "required": [
+                "archive_targets"
+              ]
+            },
+            {
+              "required": [
+                "archive_intent"
+              ]
+            }
+          ]
         }
       }
     },
@@ -170,6 +244,70 @@
           "review_targets": {
             "minItems": 1
           }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "task_heads"
+              ]
+            },
+            {
+              "required": [
+                "implementation_range"
+              ]
+            },
+            {
+              "required": [
+                "acceptance_index_sha256"
+              ]
+            },
+            {
+              "required": [
+                "task_evidence"
+              ]
+            },
+            {
+              "required": [
+                "task_evidence_sha256"
+              ]
+            },
+            {
+              "required": [
+                "completion_sha256"
+              ]
+            },
+            {
+              "required": [
+                "decision_sha256"
+              ]
+            },
+            {
+              "required": [
+                "finish_plan_sha256"
+              ]
+            },
+            {
+              "required": [
+                "knowledge_proposal"
+              ]
+            },
+            {
+              "required": [
+                "knowledge_targets"
+              ]
+            },
+            {
+              "required": [
+                "archive_targets"
+              ]
+            },
+            {
+              "required": [
+                "archive_intent"
+              ]
+            }
+          ]
         }
       }
     },
@@ -194,7 +332,61 @@
           "mutation_map_sha256",
           "checks",
           "handoffs"
-        ]
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "task_id"
+              ]
+            },
+            {
+              "required": [
+                "ownership"
+              ]
+            },
+            {
+              "required": [
+                "review_targets"
+              ]
+            },
+            {
+              "required": [
+                "completion_sha256"
+              ]
+            },
+            {
+              "required": [
+                "decision_sha256"
+              ]
+            },
+            {
+              "required": [
+                "finish_plan_sha256"
+              ]
+            },
+            {
+              "required": [
+                "knowledge_proposal"
+              ]
+            },
+            {
+              "required": [
+                "knowledge_targets"
+              ]
+            },
+            {
+              "required": [
+                "archive_targets"
+              ]
+            },
+            {
+              "required": [
+                "archive_intent"
+              ]
+            }
+          ]
+        }
       }
     },
     {
@@ -218,7 +410,66 @@
           "archive_targets",
           "archive_intent",
           "snapshots"
-        ]
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "task_id"
+              ]
+            },
+            {
+              "required": [
+                "ownership"
+              ]
+            },
+            {
+              "required": [
+                "checks"
+              ]
+            },
+            {
+              "required": [
+                "handoffs"
+              ]
+            },
+            {
+              "required": [
+                "review_targets"
+              ]
+            },
+            {
+              "required": [
+                "task_heads"
+              ]
+            },
+            {
+              "required": [
+                "implementation_range"
+              ]
+            },
+            {
+              "required": [
+                "acceptance_index_sha256"
+              ]
+            },
+            {
+              "required": [
+                "task_evidence"
+              ]
+            },
+            {
+              "required": [
+                "task_evidence_sha256"
+              ]
+            },
+            {
+              "required": [
+                "mutation_map_sha256"
+              ]
+            }
+          ]
+        }
       }
     }
   ],
