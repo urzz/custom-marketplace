@@ -28,7 +28,7 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 Controller 必须显式提供以下值，且路径必须是绝对路径：
 
 - `repo_root`。
-- fixer packet path or worker packet plus authorized fixer envelope。
+- verified original worker packet path plus helper authorization envelope for authorized finding IDs and exact required paths。
 - `state_path` 或 current state identity summary。
 - `fix_report_path`，由 Controller 为本 attempt 预定，不得覆盖旧 attempt。
 - `evidence_path` 或 evidence output directory，由 Controller 预定，不得覆盖旧 attempt。
