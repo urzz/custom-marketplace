@@ -690,6 +690,31 @@ def _require_approval(approval: dict[str, Any]) -> dict[str, Any]:
     return {key: approval[key].strip() if isinstance(approval[key], str) else approval[key] for key in approval}
 
 
+def _copy_file_no_replace(source: Path, destination: Path, helper_owned: list[Path]) -> None:
+    try:
+        with source.open("rb") as src:
+            try:
+                with destination.open("xb") as dst:
+                    shutil.copyfileobj(src, dst)
+                    dst.flush()
+                    os.fsync(dst.fileno())
+            except FileExistsError as exc:
+                raise ProtocolError("TARGET_EXISTS", "target artifact already exists; refusing to overwrite", {"target_path": str(destination)}) from exc
+            except Exception as exc:
+                if destination.exists() and destination.is_file():
+                    try:
+                        destination.unlink()
+                    except OSError:
+                        pass
+                raise ProtocolError("PUBLISH_FAILED", "target artifact publish failed", {"target_path": str(destination), "message": str(exc)}) from exc
+        helper_owned.append(destination)
+        source.unlink()
+    except ProtocolError:
+        raise
+    except Exception as exc:
+        raise ProtocolError("PUBLISH_FAILED", "target artifact publish failed", {"target_path": str(destination), "message": str(exc)}) from exc
+
+
 def _publish_staging_without_replace(staging: Path, target: Path) -> None:
     try:
         target.mkdir()
@@ -697,26 +722,26 @@ def _publish_staging_without_replace(staging: Path, target: Path) -> None:
         raise ProtocolError("TARGET_EXISTS", "target change path already exists; refusing to overwrite", {"target_change_path": str(target)}) from exc
     except Exception as exc:
         raise ProtocolError("PUBLISH_FAILED", "target reservation failed", {"message": str(exc)}) from exc
-    published = []
-    current_destination = None
+    helper_owned: list[Path] = []
     try:
         for item in sorted(staging.iterdir()):
-            destination = target / item.name
-            current_destination = destination
-            shutil.move(str(item), str(destination))
-            published.append(destination)
-            current_destination = None
+            if not item.is_file():
+                raise ProtocolError("PUBLISH_FAILED", "staging contains a non-file artifact", {"path": str(item)})
+            _copy_file_no_replace(item, target / item.name, helper_owned)
         staging.rmdir()
-    except Exception as exc:
-        cleanup = list(reversed(published))
-        if current_destination is not None and current_destination.exists() and current_destination not in cleanup:
-            cleanup.insert(0, current_destination)
-        for item in cleanup:
+    except ProtocolError:
+        for item in reversed(helper_owned):
             if item.exists():
-                if item.is_dir():
-                    shutil.rmtree(item)
-                else:
-                    item.unlink()
+                item.unlink()
+        try:
+            target.rmdir()
+        except OSError:
+            pass
+        raise
+    except Exception as exc:
+        for item in reversed(helper_owned):
+            if item.exists():
+                item.unlink()
         try:
             target.rmdir()
         except OSError:

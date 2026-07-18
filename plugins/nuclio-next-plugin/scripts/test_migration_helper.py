@@ -357,21 +357,46 @@ class MigrationHelperTests(unittest.TestCase):
         self.assertEqual([], list(self.target.parent.glob(".migration-staging-*")))
 
         preview = self.helper.preview_migration(self.legacy, self.target)
-        original_move = self.helper.shutil.move
-        def fail_after_first_move(src, dst):
-            result = original_move(src, dst)
-            if Path(dst).name == "contract.yaml":
+        original_copy = self.helper._copy_file_no_replace
+        def fail_after_contract(source, destination, helper_owned):
+            original_copy(source, destination, helper_owned)
+            if destination.name == "contract.yaml":
                 raise OSError("simulated publish failure")
-            return result
-        self.helper.shutil.move = fail_after_first_move
+        self.helper._copy_file_no_replace = fail_after_contract
         try:
             with self.assertRaises(self.helper.ProtocolError) as ctx:
                 self.helper.apply_migration(self.legacy, self.target, apply=True, preview_identity=preview["preview_identity"], approval=APPROVAL)
             self.assertEqual(ctx.exception.code, "PUBLISH_FAILED")
         finally:
-            self.helper.shutil.move = original_move
+            self.helper._copy_file_no_replace = original_copy
         self.assertFalse(self.target.exists())
         self.assertEqual([], list(self.target.parent.glob(".migration-staging-*")))
+
+    def test_artifact_races_after_target_reservation_preserve_race_owned_files(self):
+        for artifact in ("context.jsonl", "contract.yaml", "migration-report.json"):
+            with self.subTest(artifact=artifact):
+                if self.target.exists():
+                    shutil.rmtree(self.target)
+                write_complete_legacy(self.legacy)
+                preview = self.helper.preview_migration(self.legacy, self.target)
+                source_before = read_tree_bytes(self.legacy)
+                original_copy = self.helper._copy_file_no_replace
+                def race_before_artifact(source, destination, helper_owned):
+                    if destination.name == artifact:
+                        destination.write_text(f"race-owned {artifact}\n", encoding="utf-8")
+                    original_copy(source, destination, helper_owned)
+                self.helper._copy_file_no_replace = race_before_artifact
+                try:
+                    with self.assertRaises(self.helper.ProtocolError) as ctx:
+                        self.helper.apply_migration(self.legacy, self.target, apply=True, preview_identity=preview["preview_identity"], approval=APPROVAL)
+                    self.assertEqual(ctx.exception.code, "TARGET_EXISTS")
+                finally:
+                    self.helper._copy_file_no_replace = original_copy
+                self.assertTrue(self.target.exists())
+                self.assertEqual((self.target / artifact).read_text(encoding="utf-8"), f"race-owned {artifact}\n")
+                self.assertEqual(sorted(item.name for item in self.target.iterdir()), [artifact])
+                self.assertEqual(source_before, read_tree_bytes(self.legacy))
+                self.assertEqual([], list(self.target.parent.glob(".migration-staging-*")))
 
     def test_cli_detect_preview_apply_and_blocked_preview(self):
         detect = subprocess.run([sys.executable, str(HELPER), "detect", "--legacy-change-path", str(self.legacy), "--target-change-path", str(self.target)], text=True, capture_output=True)
