@@ -13,14 +13,16 @@ Use progressive disclosure instead of copying schema detail: [authority](../../r
 
 ## Helper next-action loop
 
-1. First call `state-helper.py inspect` and then `state-helper.py next-action` for `.dev-docs/state.json` when it exists.
-2. Route strictly by helper `next-action`; do not infer transition from chat, agent claim, report existence, Git status, or memory.
-3. Execute one returned action at a time, then record/import with the helper and query `next-action` again.
-4. If helper reports multiple active changes, scope drift, stale context, unknown dirty state, overreach, validation failure, no-progress, budget exhausted, cross-owner, or requirement drift, STOP/HALT with the blocker. Never guess the active change.
+1. Select exactly one active change-id before any helper call. If zero or multiple active changes are possible, refuse to guess and ask one exact selection question.
+2. Define `CHANGE_ROOT` once as the absolute resolved `.dev-docs/changes/<change-id>` directory for the selected change. All change artifacts are byte-exact under `CHANGE_ROOT`: `contract.yaml`, `context.jsonl`, `state.json`, `research/`, `evidence/tasks/<task-id>/...`, `evidence/completion.md`, `evidence/decision.md`, and `evidence/finish-apply.md`.
+3. First call `state-helper.py inspect` and then `state-helper.py next-action` with the absolute resolved `CHANGE_ROOT/state.json` when it exists.
+4. Route strictly by helper `next-action`; do not infer transition from chat, agent claim, report existence, Git status, or memory.
+5. Execute one returned action at a time, pass only absolute resolved `CHANGE_ROOT` artifact paths to helpers, then record/import with the helper and query `next-action` again.
+6. If helper reports multiple active changes, scope drift, stale context, unknown dirty state, overreach, validation failure, no-progress, budget exhausted, cross-owner, or requirement drift, STOP/HALT with the blocker. Never guess the active change.
 
 ## Contract drafting and revision
 
-- In `idle` or `drafting_contract`, draft/update `contract.yaml` and `context.jsonl` only through helper-valid artifacts.
+- In `idle` or `drafting_contract`, draft/update only `CHANGE_ROOT/contract.yaml` and `CHANGE_ROOT/context.jsonl` through helper-valid artifacts.
 - Ask at most 5 recommendation-first Grill questions, strictly one question per turn, only when the answer changes Contract fields. Safe bounded changes can be zero-question.
 - After writing and validating contract/context, show one summary containing goals, non-goals, acceptance, mutation_targets, checks, rollback, bounded context, risks, and helper validation.
 - Contract revision for changed goals, acceptance, constraints, design, or mutation_targets invalidates old approval and returns to Contract Gate.
@@ -45,7 +47,7 @@ When all Tasks are helper PASS/completed, generate a schema-valid full-range com
 
 If completion critic or helper returns FAIL, only route to helper owner mapping/shared budget repair, blocker HALT, or Contract revision. Do not hide unresolved blockers as remaining risk.
 
-If completion PASS imports successfully, write `.dev-docs/completion.md` and `.dev-docs/decision.md`. `decision.md` must contain exactly these four top-level sections: `Completion Verdict`, `Remaining Risks`, `Knowledge Proposal`, `Archive Decision`. Record identity, transition to `decision_pending`, tell the user to call `/nuclio-next:finish`, and STOP. Do not write long-term knowledge, journal, or archive.
+If completion PASS imports successfully, write `CHANGE_ROOT/evidence/completion.md` and `CHANGE_ROOT/evidence/decision.md`. `decision.md` must contain exactly these four top-level sections: `Completion Verdict`, `Remaining Risks`, `Knowledge Proposal`, `Archive Decision`. Record identity using the absolute resolved `CHANGE_ROOT/state.json`, transition to `decision_pending`, tell the user to call `/nuclio-next:finish`, and STOP. Do not write long-term knowledge, journal, or archive.
 
 ## Legacy baseline wording
 

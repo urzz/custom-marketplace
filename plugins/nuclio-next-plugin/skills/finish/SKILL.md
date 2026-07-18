@@ -13,10 +13,12 @@ Use progressive disclosure instead of copying protocol detail: [authority](../..
 
 ## Entry guard
 
-1. Call state helper `inspect` and `next-action` first.
-2. Continue only when helper verifies `decision_pending`, fresh decision/state/contract/context identity, completion proposal hash, mutation map hash, and finish plan identity.
-3. If identity is stale, completion evidence is missing, decision sections are invalid, or helper returns repair/HALT, STOP with the helper blocker and route back to `/nuclio-next:work` if appropriate.
-4. Accept no product mutation request in finish.
+1. Select exactly one active change-id first. If zero or multiple active changes are possible, refuse to guess and ask one exact selection question.
+2. Define `CHANGE_ROOT` once as the absolute resolved `.dev-docs/changes/<change-id>` directory. The decision, state, contract, context, completion evidence, and finish journal paths are exactly `CHANGE_ROOT/evidence/decision.md`, `CHANGE_ROOT/state.json`, `CHANGE_ROOT/contract.yaml`, `CHANGE_ROOT/context.jsonl`, `CHANGE_ROOT/evidence/completion.md`, and `CHANGE_ROOT/evidence/finish-apply.md`.
+3. Call state helper `inspect` and `next-action` first with the absolute resolved `CHANGE_ROOT/state.json`.
+4. Continue only when helper verifies `decision_pending`, fresh decision/state/contract/context identity, completion proposal hash, mutation map hash, and finish plan identity under the same `CHANGE_ROOT`.
+5. If identity is stale, completion evidence is missing, decision sections are invalid, or helper returns repair/HALT, STOP with the helper blocker and route back to `/nuclio-next:work` if appropriate.
+6. Accept no product mutation request in finish.
 
 ## Present decision packet
 
@@ -50,7 +52,7 @@ Any other answer is ambiguous, including “looks good”, “continue”, “�
 ## Accept apply sequence
 
 1. Re-run `state-helper.py inspect <state>` and `state-helper.py next-action <state>` immediately before the first write.
-2. Derive a fresh finish packet with `packet-helper.py finish --repo <repo> --contract-json <contract> --context-json <context> --state-json <state> --base <base> --head <head> --output <packet> --expected-state-version <n> --decision-json <decision> --completion-identity-json <identity> --finish-plan-json <plan> --knowledge-snapshots-json <json>`.
+2. Derive a fresh finish packet with `packet-helper.py finish --repo <repo> --contract-json <contract> --context-json <context> --state-json <state> --base <base> --head <head> --output <packet> --expected-state-version <n> --decision-json <decision> --completion-identity-json <identity> --finish-plan-json <plan> --knowledge-snapshots-json <json>`, where `<contract>`, `<context>`, `<state>`, and `<decision>` are the absolute resolved `CHANGE_ROOT/contract.yaml`, `CHANGE_ROOT/context.jsonl`, `CHANGE_ROOT/state.json`, and `CHANGE_ROOT/evidence/decision.md` paths.
 3. Before each target write, re-run `state-helper.py inspect <state>` and `state-helper.py next-action <state>`, read the finish packet target, compare `before_sha256` against the current file bytes, treat `before_sha256: null` as create-only absent, and ensure there are no untracked/out-of-packet targets.
 4. Controller Write/Edit is limited to exact approved `.dev-docs/knowledge/`, `.dev-docs/index.md`, `.dev-docs/index.json`, and `.dev-docs/archive/` targets in finish packet order. Do not write product files.
 5. Immediately after each Write/Edit, read back the target, compute the after SHA-256, and append the target entry to the change-local `.dev-docs/changes/<change-id>/finish-apply.md` journal evidence.

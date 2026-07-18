@@ -256,6 +256,28 @@ class StaticPluginTests(unittest.TestCase):
         self.assertNotRegex(init, r"\.dev-docs/(contract\.yaml|context\.jsonl|state\.json).*bootstrap artifacts through helpers")
         self.assertNotIn("helper apply/validate action", init)
 
+    def test_change_artifacts_are_change_local(self):
+        init = split_skill(SKILLS / "init" / "SKILL.md")[1]
+        work = split_skill(SKILLS / "work" / "SKILL.md")[1]
+        finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]
+        required = {
+            "init": [".dev-docs/index.md", ".dev-docs/knowledge/product.md", ".dev-docs/changes/index.md", ".dev-docs/changes/<change-id>"],
+            "work": ["CHANGE_ROOT", "contract.yaml", "context.jsonl", "state.json", "research/", "evidence/tasks/<task-id>/...", "evidence/completion.md", "evidence/decision.md", "evidence/finish-apply.md"],
+            "finish": ["CHANGE_ROOT", "evidence/decision.md", "state.json", "contract.yaml", "context.jsonl", "evidence/completion.md", "evidence/finish-apply.md"],
+        }
+        for name, needles in required.items():
+            body = {"init": init, "work": work, "finish": finish}[name]
+            for needle in needles:
+                with self.subTest(skill=name, needle=needle):
+                    self.assertIn(needle, body)
+        project_level_root_artifact = re.compile(r"(?<!changes/<change-id>/)\.dev-docs/(contract\.yaml|context\.jsonl|state\.json|completion\.md|decision\.md|finish-apply\.md)")
+        for name, body in {"init": init, "work": work, "finish": finish}.items():
+            with self.subTest(skill=name, reject="root change artifact"):
+                self.assertNotRegex(body, project_level_root_artifact)
+        self.assertIn("Both `<path>` values must be `.dev-docs/changes/<change-id>` directories", init)
+        self.assertIn("pass only absolute resolved `CHANGE_ROOT` artifact paths to helpers", work)
+        self.assertIn("absolute resolved `CHANGE_ROOT/state.json`", finish)
+
     def test_finish_accept_apply_uses_controller_sequence_and_real_helper_flags(self):
         finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]
         required_in_order = [
