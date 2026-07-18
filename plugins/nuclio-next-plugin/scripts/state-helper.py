@@ -46,7 +46,7 @@ NEXT_ACTIONS = {
 }
 TASK_STATUSES = {"pending", "ready", "implementing", "reviewing", "fixing", "completed", "blocked", "rejected"}
 STATE_STATUSES = {"idle", "drafting_contract", "contract_pending", "ready_to_execute", "executing", "completing", "decision_pending", "folding", "archived", "repair_required", "context_stale", "deferred", "rejected"}
-FINISH_DECISIONS = {"accept", "request changes", "defer", "reject"}
+FINISH_DECISIONS = {"accept", "request_changes", "defer", "reject"}
 HASH_RE = "0123456789abcdef"
 
 
@@ -278,7 +278,7 @@ def _open_blockers(state: dict[str, Any], task_id: str | None = None) -> list[di
     if task_id is None:
         return blockers
     prefix = f"{task_id}:"
-    return [blocker for blocker in blockers if str(blocker.get("id", "")).startswith(prefix)]
+    return [blocker for blocker in blockers if str(blocker.get("id", "")).startswith(prefix) or blocker.get("task_id") == task_id]
 
 
 def _set_blockers(state: dict[str, Any], blockers: list[dict[str, Any]]) -> None:
@@ -586,6 +586,33 @@ def record_fix(path: str | Path, expected_version: int, evidence: dict[str, Any]
     return record_implementation(path, expected_version, evidence)
 
 
+def _require_completion_identity(state: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    required_fields = {"contract_sha256", "context_fingerprint", "task_heads", "implementation_range", "acceptance_index_sha256"}
+    missing = sorted(required_fields - set(payload))
+    if missing:
+        raise ProtocolError("INVALID_IDENTITY", "completion identity is incomplete", {"fields": missing})
+    contract_sha = _require_sha(payload.get("contract_sha256"), "completion.contract_sha256")
+    context_fingerprint = _require_sha(payload.get("context_fingerprint"), "completion.context_fingerprint")
+    if contract_sha != state["contract"]["sha256"] or context_fingerprint != state["context"]["fingerprint"]:
+        raise ProtocolError("INVALID_IDENTITY", "completion contract/context identity is stale")
+    metadata = _metadata(state)
+    expected_heads = copy.deepcopy(metadata.get("heads", {}))
+    task_heads = _require_object(payload.get("task_heads"), "completion.task_heads")
+    if task_heads != expected_heads or set(task_heads) != {str(task["id"]) for task in state["tasks"]}:
+        raise ProtocolError("INVALID_IDENTITY", "completion task_heads must exactly match all Task heads")
+    implementation_range = _require_object(payload.get("implementation_range"), "completion.implementation_range")
+    _non_empty(implementation_range.get("base"), "completion.implementation_range.base")
+    _non_empty(implementation_range.get("head"), "completion.implementation_range.head")
+    acceptance_index_sha = _require_sha(payload.get("acceptance_index_sha256"), "completion.acceptance_index_sha256")
+    return {
+        "contract_sha256": contract_sha,
+        "context_fingerprint": context_fingerprint,
+        "task_heads": copy.deepcopy(task_heads),
+        "implementation_range": copy.deepcopy(implementation_range),
+        "acceptance_index_sha256": acceptance_index_sha,
+    }
+
+
 def start_completion(path: str | Path, expected_version: int, packet: dict[str, Any]) -> dict[str, Any]:
     before = load_state(path)
     _check_version(before, expected_version)
@@ -594,11 +621,12 @@ def start_completion(path: str | Path, expected_version: int, packet: dict[str, 
     if not all(task["status"] == "completed" for task in before["tasks"]):
         raise ProtocolError("TASKS_INCOMPLETE", "all tasks must be PASS before completion")
     packet = _require_object(packet, "completion packet")
+    identity = _require_completion_identity(before, packet)
     after = copy.deepcopy(before)
     after["status"] = "completing"
     metadata = _metadata(after)
-    metadata["completion_packet"] = packet
-    metadata["completion_task_heads"] = copy.deepcopy(metadata.get("heads", {}))
+    metadata["completion_packet"] = copy.deepcopy(packet)
+    metadata["completion_identity"] = identity
     _update_initial_metadata(after, metadata)
     return _commit(path, before, after, "COMPLETION_STARTED", event_reason={"packet_sha256": sha256_value(packet)})
 
@@ -612,29 +640,35 @@ def record_completion(path: str | Path, expected_version: int, completion: dict[
     verdict = completion.get("verdict")
     after = copy.deepcopy(before)
     if verdict == "FAIL":
-        owner = completion.get("blocking_owner")
+        owner = _non_empty(completion.get("blocking_owner"), "blocking_owner")
         finding_id = _non_empty(completion.get("finding_id", "completion-blocker"), "finding_id")
         reason = _non_empty(completion.get("reason", "completion blocker"), "reason")
-        blocker = {"id": f"completion:{finding_id}", "severity": "blocking", "reason": reason}
-        if owner:
-            blocker["owner"] = _non_empty(owner, "blocking_owner")
+        owner_tasks = [task for task in after["tasks"] if _owner_for_task(after, str(task["id"])) == owner]
+        if not owner_tasks:
+            raise ProtocolError("INVALID_COMPLETION", "completion blocker owner does not map to a Task")
+        task_id = _non_empty(completion.get("task_id", owner_tasks[0]["id"]), "task_id")
+        if task_id not in {str(task["id"]) for task in owner_tasks}:
+            raise ProtocolError("INVALID_COMPLETION", "completion blocker task_id does not belong to owner")
+        blocker = {"id": f"{task_id}:{finding_id}", "task_id": task_id, "severity": "blocking", "reason": reason, "owner": owner, "source_gate": "COMPLETION"}
         after["status"] = "repair_required"
         _demote_completed_for_schema(after)
+        _task_state(after, task_id)["status"] = "blocked"
         after["blockers"].append(blocker)
         after.pop("decision", None)
-        return _commit(path, before, after, "COMPLETION_FAILED", event_reason={"finding_id": finding_id, "owner": owner})
+        return _commit(path, before, after, "COMPLETION_FAILED", event_reason={"task_id": task_id, "finding_id": finding_id, "owner": owner})
     if verdict != "PASS":
         raise ProtocolError("INVALID_COMPLETION", "completion verdict must be PASS or FAIL")
+    identity = _require_completion_identity(after, completion)
     proposal_sha = _require_sha(completion.get("proposal_sha256"), "proposal_sha256")
     mutation_sha = _require_sha(completion.get("mutation_map_sha256"), "mutation_map_sha256")
     metadata = _metadata(after)
+    packet_identity = metadata.get("completion_identity")
+    if packet_identity != identity:
+        raise ProtocolError("INVALID_IDENTITY", "completion PASS identity must match completion packet")
     metadata["completion"] = copy.deepcopy(completion)
-    metadata["completion"]["contract_sha256"] = after["contract"]["sha256"]
-    metadata["completion"]["context_fingerprint"] = after["context"]["fingerprint"]
-    metadata["completion"]["task_heads"] = copy.deepcopy(metadata.get("heads", {}))
     _update_initial_metadata(after, metadata)
-    after["completion"] = {"proposal_sha256": proposal_sha, "mutation_map_sha256": mutation_sha, "state_version": before["state_version"]}
-    after["decision"] = {"decision_sha256": sha256_value({"proposal_sha256": proposal_sha, "mutation_map_sha256": mutation_sha, "state_version": before["state_version"]}), "state_version": before["state_version"], "approved": False}
+    after["completion"] = {"proposal_sha256": proposal_sha, "mutation_map_sha256": mutation_sha, "state_version": before["state_version"], **identity}
+    after["decision"] = {"decision_sha256": sha256_value({"proposal_sha256": proposal_sha, "mutation_map_sha256": mutation_sha, "state_version": before["state_version"], **identity}), "state_version": before["state_version"], "approved": False}
     after["status"] = "decision_pending"
     return _commit(path, before, after, "COMPLETION_PASSED", artifact_sha256=proposal_sha)
 
@@ -645,10 +679,17 @@ def finish_decision(path: str | Path, expected_version: int, decision: str, meta
     if before["status"] != "decision_pending" or "completion" not in before or "decision" not in before:
         raise ProtocolError("DECISION_NOT_PENDING", "Finish decision is not pending")
     if decision not in FINISH_DECISIONS:
-        raise ProtocolError("INVALID_FINISH_DECISION", "decision must be exact accept/request changes/defer/reject")
+        raise ProtocolError("INVALID_FINISH_DECISION", "decision must be exact accept/request_changes/defer/reject")
     metadata_in = _require_object(metadata_in, "decision metadata")
     after = copy.deepcopy(before)
+    generated_decision = _require_object(before.get("decision"), "generated decision")
     decision_sha = _require_sha(metadata_in.get("decision_sha256"), "decision_sha256")
+    if decision_sha != _require_sha(generated_decision.get("decision_sha256"), "generated decision.decision_sha256"):
+        raise ProtocolError("STALE_DECISION", "Finish decision identity is stale")
+    if decision == "accept":
+        expected_decision_state_version = metadata_in.get("expected_decision_state_version")
+        if not isinstance(expected_decision_state_version, int) or isinstance(expected_decision_state_version, bool) or expected_decision_state_version != generated_decision.get("state_version"):
+            raise ProtocolError("STALE_DECISION", "Finish accept expected decision state version is stale")
     finish_plan_sha = _require_sha(metadata_in.get("finish_plan_sha256"), "finish_plan_sha256") if "finish_plan_sha256" in metadata_in else None
     decided_at = _non_empty(metadata_in.get("decided_at", "unknown"), "decided_at")
     notes = copy.deepcopy(metadata_in)
@@ -660,21 +701,21 @@ def finish_decision(path: str | Path, expected_version: int, decision: str, meta
         after["decision"] = {"decision_sha256": decision_sha, "state_version": before["state_version"], "approved": True}
         after["gates"]["finish"] = {"status": "approved", "artifact_sha256": decision_sha, "decision_sha256": decision_sha, "state_version": before["state_version"], "approval_id": "finish-accept", "approved_at": decided_at, "notes": canonical_json(notes)}
         action = "FINISH_ACCEPTED"
-    elif decision == "request changes":
+    elif decision == "request_changes":
         after["status"] = "ready_to_execute"
-        after["decision"] = {"decision_sha256": decision_sha, "state_version": before["state_version"], "approved": False}
+        after["decision"] = {"decision_sha256": decision_sha, "state_version": generated_decision["state_version"], "approved": False}
         after["gates"]["finish"] = {"status": "stale", "decision_sha256": decision_sha, "state_version": before["state_version"], "notes": canonical_json(notes)}
         action = "FINISH_REQUEST_CHANGES"
     elif decision == "defer":
         after["status"] = "deferred"
         _demote_completed_for_schema(after, "blocked")
-        after["decision"] = {"decision_sha256": decision_sha, "state_version": before["state_version"], "approved": False}
+        after["decision"] = {"decision_sha256": decision_sha, "state_version": generated_decision["state_version"], "approved": False}
         after["gates"]["finish"] = {"status": "deferred", "decision_sha256": decision_sha, "state_version": before["state_version"], "notes": canonical_json(notes)}
         action = "FINISH_DEFERRED"
     else:
         after["status"] = "rejected"
         _demote_completed_for_schema(after, "rejected")
-        after["decision"] = {"decision_sha256": decision_sha, "state_version": before["state_version"], "approved": False}
+        after["decision"] = {"decision_sha256": decision_sha, "state_version": generated_decision["state_version"], "approved": False}
         after["gates"]["finish"] = {"status": "rejected", "decision_sha256": decision_sha, "state_version": before["state_version"], "notes": canonical_json(notes)}
         action = "FINISH_REJECTED"
     return _commit(path, before, after, action, artifact_sha256=decision_sha, event_reason=notes)

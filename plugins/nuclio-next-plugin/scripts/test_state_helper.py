@@ -113,11 +113,33 @@ class StateHelperTests(unittest.TestCase):
         self.helper.record_implementation(self.state_path, version + 1, impl("T2", head="head-2"))
         self.helper.import_task_review(self.state_path, version + 2, pass_review("T2", review_sha256=A_HASH))
 
+    def completion_identity(self):
+        return {
+            "contract_sha256": A_HASH,
+            "context_fingerprint": B_HASH,
+            "task_heads": {"T1": "head-1", "T2": "head-2"},
+            "implementation_range": {"base": "base-1", "head": "head-2"},
+            "acceptance_index_sha256": B_HASH,
+        }
+
+    def completion_packet(self, **overrides):
+        packet = self.completion_identity()
+        packet.update(overrides)
+        return packet
+
+    def completion_pass(self, **overrides):
+        completion = {"verdict": "PASS", "proposal_sha256": C_HASH, "mutation_map_sha256": D_HASH, **self.completion_identity()}
+        completion.update(overrides)
+        return completion
+
+    def current_decision_sha(self):
+        return self.read_state()["decision"]["decision_sha256"]
+
     def start_completion_pass(self):
         self.complete_all_tasks()
         version = self.read_state()["state_version"]
-        self.helper.start_completion(self.state_path, version, {"implementation_range": {"base": "base-1", "head": "head-2"}, "acceptance_index_sha256": B_HASH})
-        return self.helper.record_completion(self.state_path, version + 1, {"verdict": "PASS", "proposal_sha256": C_HASH, "mutation_map_sha256": D_HASH, "acceptance_index_sha256": B_HASH, "implementation_range": {"base": "base-1", "head": "head-2"}})
+        self.helper.start_completion(self.state_path, version, self.completion_packet())
+        return self.helper.record_completion(self.state_path, version + 1, self.completion_pass())
 
     def assert_error(self, fn, code):
         before = self.state_path.read_bytes() if self.state_path.exists() else b""
@@ -172,13 +194,14 @@ class StateHelperTests(unittest.TestCase):
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "DISPATCH_IMPLEMENTER")
         self.complete_all_tasks()
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "RUN_COMPLETION_REVIEW")
-        self.helper.start_completion(self.state_path, 8, {"implementation_range": {"base": "base-1", "head": "head-2"}, "acceptance_index_sha256": B_HASH})
+        self.helper.start_completion(self.state_path, 8, self.completion_packet())
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "RUN_COMPLETION_REVIEW")
-        self.helper.record_completion(self.state_path, 9, {"verdict": "PASS", "proposal_sha256": C_HASH, "mutation_map_sha256": D_HASH, "acceptance_index_sha256": B_HASH, "implementation_range": {"base": "base-1", "head": "head-2"}})
+        self.helper.record_completion(self.state_path, 9, self.completion_pass())
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "REQUEST_FINISH_DECISION")
-        self.helper.finish_decision(self.state_path, 10, "accept", {"decision_sha256": E_HASH, "finish_plan_sha256": F_HASH, "decided_at": "2026-07-18T01:00:00Z"})
+        decision_sha = self.current_decision_sha()
+        self.helper.finish_decision(self.state_path, 10, "accept", {"decision_sha256": decision_sha, "expected_decision_state_version": 9, "finish_plan_sha256": F_HASH, "decided_at": "2026-07-18T01:00:00Z"})
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "APPLY_FINISH")
-        self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": E_HASH, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True})
+        self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True})
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "COMPLETE")
 
     def test_dependency_order_packet_and_task_pass_are_enforced(self):
@@ -214,25 +237,82 @@ class StateHelperTests(unittest.TestCase):
         self.init_state(); self.approve_contract(); self.complete_t1()
         self.assert_error(lambda: self.helper.start_completion(self.state_path, 5, {"implementation_range": {"base": "base-1", "head": "head-1"}, "acceptance_index_sha256": B_HASH}), "TASKS_INCOMPLETE")
         self.helper.start_task(self.state_path, 5, "T2", D_HASH); self.helper.record_implementation(self.state_path, 6, impl("T2", head="head-2")); self.helper.import_task_review(self.state_path, 7, pass_review("T2", review_sha256=A_HASH))
-        self.helper.start_completion(self.state_path, 8, {"implementation_range": {"base": "base-1", "head": "head-2"}, "acceptance_index_sha256": B_HASH})
+        self.helper.start_completion(self.state_path, 8, self.completion_packet())
         state = self.helper.record_completion(self.state_path, 9, {"verdict": "FAIL", "blocking_owner": "owner-a", "finding_id": "CF1", "reason": "completion blocker"})
         self.assertEqual(state["status"], "repair_required")
         self.assertNotIn("decision", state)
 
+    def test_completion_fail_owner_mapped_blocker_can_be_authorized_with_shared_budget(self):
+        self.init_state(); self.approve_contract(); self.complete_all_tasks()
+        self.helper.start_completion(self.state_path, 8, self.completion_packet())
+        state = self.helper.record_completion(self.state_path, 9, {"verdict": "FAIL", "blocking_owner": "owner-a", "finding_id": "CF1", "reason": "completion blocker"})
+        self.assertEqual(state["status"], "repair_required")
+        self.assertEqual(state["blockers"][-1]["id"], "T1:CF1")
+        self.helper.authorize_fix(self.state_path, 10, "T1", ["CF1"])
+        state = self.read_state()
+        self.assertEqual(state["tasks"][0]["status"], "fixing")
+        self.assertEqual(state["fix_budgets"]["owner-a"]["used"], 1)
+        self.assertEqual(state["fix_budgets"]["owner-a"]["remaining"], 1)
+
+    def test_completion_pass_requires_full_identity_and_leaves_state_unchanged(self):
+        self.init_state(); self.approve_contract(); self.complete_all_tasks()
+        self.helper.start_completion(self.state_path, 8, self.completion_packet())
+        missing_range = self.completion_pass()
+        missing_range.pop("implementation_range")
+        self.assert_error(lambda: self.helper.record_completion(self.state_path, 9, missing_range), "INVALID_IDENTITY")
+        missing_acceptance = self.completion_pass()
+        missing_acceptance.pop("acceptance_index_sha256")
+        self.assert_error(lambda: self.helper.record_completion(self.state_path, 9, missing_acceptance), "INVALID_IDENTITY")
+
+    def test_finish_accept_requires_generated_decision_hash_and_expected_state_version(self):
+        self.init_state(); self.approve_contract(); self.start_completion_pass()
+        self.assert_error(
+            lambda: self.helper.finish_decision(
+                self.state_path,
+                10,
+                "accept",
+                {"decision_sha256": E_HASH, "expected_decision_state_version": 9, "finish_plan_sha256": F_HASH, "decided_at": "2026-07-18T03:00:00Z"},
+            ),
+            "STALE_DECISION",
+        )
+        decision_sha = self.current_decision_sha()
+        self.assert_error(
+            lambda: self.helper.finish_decision(
+                self.state_path,
+                10,
+                "accept",
+                {"decision_sha256": decision_sha, "expected_decision_state_version": 8, "finish_plan_sha256": F_HASH, "decided_at": "2026-07-18T03:00:00Z"},
+            ),
+            "STALE_DECISION",
+        )
+
+    def test_finish_request_changes_exact_token_invalidates_decision(self):
+        self.init_state(); self.approve_contract(); self.start_completion_pass()
+        decision_sha = self.current_decision_sha()
+        self.assert_error(lambda: self.helper.finish_decision(self.state_path, 10, "request changes", {"decision_sha256": decision_sha, "decided_at": "2026-07-18T03:00:00Z"}), "INVALID_FINISH_DECISION")
+        state = self.helper.finish_decision(self.state_path, 10, "request_changes", {"decision_sha256": decision_sha, "decided_at": "2026-07-18T03:00:00Z"})
+        self.assertEqual(state["status"], "ready_to_execute")
+        self.assertEqual(state["gates"]["finish"]["status"], "stale")
+        self.assertFalse(state["decision"]["approved"])
+
     def test_finish_four_decisions_stale_decision_and_archive_gate(self):
-        for decision, expected_status in [("defer", "deferred"), ("request changes", "ready_to_execute"), ("reject", "rejected"), ("accept", "folding")]:
+        for decision, expected_status in [("defer", "deferred"), ("request_changes", "ready_to_execute"), ("reject", "rejected"), ("accept", "folding")]:
             with self.subTest(decision=decision):
                 self.state_path.unlink(missing_ok=True)
                 self.init_state(); self.approve_contract(); self.start_completion_pass()
-                state = self.helper.finish_decision(self.state_path, 10, decision, {"decision_sha256": E_HASH, "finish_plan_sha256": F_HASH, "reason": "because", "decided_at": "2026-07-18T02:00:00Z"})
+                decision_sha = self.current_decision_sha()
+                metadata = {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "reason": "because", "decided_at": "2026-07-18T02:00:00Z"}
+                if decision == "accept":
+                    metadata["expected_decision_state_version"] = 9
+                state = self.helper.finish_decision(self.state_path, 10, decision, metadata)
                 self.assertEqual(state["status"], expected_status)
                 if decision == "accept":
-                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 10, {"decision_sha256": E_HASH, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True}), "VERSION_MISMATCH")
+                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 10, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True}), "VERSION_MISMATCH")
                     self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": B_HASH, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True}), "STALE_DECISION")
-                    archived = self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": E_HASH, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True})
+                    archived = self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True})
                     self.assertEqual(archived["status"], "archived")
                 else:
-                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": E_HASH, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True}), "FINISH_NOT_ACCEPTED")
+                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True}), "FINISH_NOT_ACCEPTED")
 
     def test_invalid_transition_atomic_bytes_and_resume_next_action(self):
         self.init_state(); self.approve_contract()
