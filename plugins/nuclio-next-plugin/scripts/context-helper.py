@@ -59,6 +59,10 @@ def _non_empty_string(value: Any, where: str, code: str = "INVALID_CONTEXT_ENTRY
     return value.strip()
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def normalize_context_path(value: Any) -> str:
     raw = _non_empty_string(value, "path", "INVALID_CONTEXT_PATH")
     lowered = raw.lower()
@@ -74,6 +78,8 @@ def normalize_context_path(value: Any) -> str:
         raise ProtocolError("INVALID_CONTEXT_PATH", "context path must be normalized and concrete", {"path": raw})
     if lowered in {"all docs", "all source", "full conversation", "raw logs", "unrelated tasks"} or lowered.startswith("raw/logs/"):
         raise ProtocolError("FORBIDDEN_CONTEXT", "context path names a forbidden concept", {"path": raw})
+    if (_repo_root() / normalized).is_dir():
+        raise ProtocolError("INVALID_CONTEXT_PATH", "context path must name bounded file context, not an existing directory", {"path": raw})
     return normalized
 
 

@@ -236,10 +236,16 @@ context_policy:""",
         empty = contract_text().replace("  focused:\n    - name: focused-change\n      command:\n        - python3\n        - -m\n        - unittest", "  focused: []")
         self.assert_contract_error(empty, "EMPTY_VALIDATION")
 
-    def test_rejects_path_traversal_glob_and_protected_paths(self):
-        for bad_path in ["../x.py", "plugins/**/*.py", ".git/config", ".dev-docs/changes/x.md", ".superpowers/sdd/old.md", "plugins/nuclio-next-plugin/scripts/"]:
+    def test_rejects_path_traversal_glob_protected_and_directory_paths(self):
+        for bad_path in ["../x.py", "plugins/**/*.py", ".git/config", ".dev-docs/changes/x.md", ".superpowers/sdd/old.md", "plugins/nuclio-next-plugin/scripts/", "plugins/nuclio-next-plugin/scripts"]:
             body = contract_text().replace("plugins/nuclio-next-plugin/scripts/a.py", bad_path)
             self.assert_contract_error(body, "INVALID_MUTATION_PATH")
+
+    def test_allows_future_concrete_file_path(self):
+        future_path = "plugins/nuclio-next-plugin/scripts/future-contract-helper-output.py"
+        self.assertFalse((ROOT / future_path).exists())
+        contract = self.load(contract_text().replace("plugins/nuclio-next-plugin/scripts/a.py", future_path))
+        self.assertEqual(contract["tasks"][0]["mutation_targets"][0]["path"], future_path)
 
     def test_rejects_overlap_without_handoff(self):
         body = contract_text().replace(

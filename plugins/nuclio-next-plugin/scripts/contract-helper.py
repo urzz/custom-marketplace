@@ -240,6 +240,10 @@ def _check_list(value: Any, where: str) -> list[dict[str, Any]]:
     return result
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def normalize_mutation_path(path: Any) -> str:
     raw = _non_empty_string(path, "mutation_targets.path")
     if raw.startswith(("/", "~")) or raw in {".", "./", ""}:
@@ -258,6 +262,8 @@ def normalize_mutation_path(path: Any) -> str:
         raise ProtocolError("INVALID_MUTATION_PATH", "mutation target must not touch .dev-docs/changes", {"path": raw})
     if normalized == ".superpowers/sdd" or normalized.startswith(".superpowers/sdd/"):
         raise ProtocolError("INVALID_MUTATION_PATH", "mutation target must not touch .superpowers/sdd", {"path": raw})
+    if (_repo_root() / normalized).is_dir():
+        raise ProtocolError("INVALID_MUTATION_PATH", "mutation target must name a concrete file, not an existing directory", {"path": raw})
     return normalized
 
 

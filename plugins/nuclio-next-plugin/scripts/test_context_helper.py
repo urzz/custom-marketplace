@@ -122,9 +122,15 @@ class ContextHelperTests(unittest.TestCase):
         self.assert_context_error([jit_entry(budget=0)], "INVALID_JIT_ENTRY")
         self.assert_context_error([jit_entry(budget=6)], "JIT_BUDGET_EXCEEDED", budget=5)
 
-    def test_rejects_absolute_traversal_glob_and_broad_paths(self):
-        for bad_path in ["/tmp/x", "../x", "plugins/**/*.py", "plugins", ".", "./", ".dev-docs", "src", "docs"]:
+    def test_rejects_absolute_traversal_glob_broad_and_directory_paths(self):
+        for bad_path in ["/tmp/x", "../x", "plugins/**/*.py", "plugins", ".", "./", ".dev-docs", "src", "docs", "plugins/nuclio-next-plugin/scripts/", "plugins/nuclio-next-plugin/scripts"]:
             self.assert_context_error([stable_entry(path=bad_path)], "INVALID_CONTEXT_PATH")
+
+    def test_allows_future_concrete_file_path(self):
+        future_path = "plugins/nuclio-next-plugin/scripts/future-context-helper-output.py"
+        self.assertFalse((ROOT / future_path).exists())
+        entries = self.load([stable_entry(path=future_path)])
+        self.assertEqual(entries[0]["path"], future_path)
 
     def test_rejects_unknown_fields_invalid_audience_and_mode(self):
         self.assert_context_error([stable_entry(extra="nope")], "UNKNOWN_AUTHORITY_FIELD")
