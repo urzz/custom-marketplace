@@ -59,11 +59,11 @@ def approval():
     return {"approval_id": "approval-1", "approved_at": "2026-07-18T00:00:00Z", "approved_by": "user", "token": "approve"}
 
 
-def impl(task_id="T1", head="head-1", implementation_sha256=E_HASH, packet_sha256=None):
+def impl(task_id="T1", head="head-1", implementation_sha256=E_HASH, packet_sha256=None, base_head="base-1"):
     return {
         "task_id": task_id,
         "packet_sha256": packet_sha256 or (C_HASH if task_id == "T1" else D_HASH),
-        "base_head": "base-1",
+        "base_head": base_head,
         "new_head": head,
         "implementation_sha256": implementation_sha256,
         "changed_paths": ["plugins/nuclio-next-plugin/scripts/a.py" if task_id == "T1" else "plugins/nuclio-next-plugin/scripts/b.py"],
@@ -224,14 +224,23 @@ class StateHelperTests(unittest.TestCase):
         self.helper.authorize_fix(self.state_path, 6, "T1", ["F1"])
         state = self.read_state()
         self.assertEqual(state["fix_budgets"]["owner-a"]["used"], 1)
-        self.assert_error(lambda: self.helper.record_fix(self.state_path, 7, impl(head="head-1")), "NO_PROGRESS")
-        self.helper.record_fix(self.state_path, 7, impl(head="head-1-fixed", implementation_sha256=A_HASH))
+        self.assert_error(lambda: self.helper.record_fix(self.state_path, 7, impl(head="head-1", base_head="head-1")), "NO_PROGRESS")
+        self.helper.record_fix(self.state_path, 7, impl(head="head-1-fixed", implementation_sha256=A_HASH, base_head="head-1"))
         self.assert_error(lambda: self.helper.import_task_review(self.state_path, 8, fail_review(owner="owner-b", finding_id="FX")), "CROSS_OWNER_FINDING")
         self.helper.import_task_review(self.state_path, 8, fail_review(finding_id="F2", fingerprint="fp-2"))
         self.helper.needs_fix(self.state_path, 9, "T1", ["F2"])
         self.helper.authorize_fix(self.state_path, 10, "T1", ["F2"])
         self.assertEqual(self.read_state()["fix_budgets"]["owner-a"]["remaining"], 0)
         self.assert_error(lambda: self.helper.authorize_fix(self.state_path, 11, "T1", ["F2"]), "BUDGET_EXHAUSTED")
+
+    def test_record_fix_requires_base_head_to_match_current_task_head(self):
+        self.init_state(); self.approve_contract(); self.helper.start_task(self.state_path, 2, "T1", C_HASH); self.helper.record_implementation(self.state_path, 3, impl())
+        self.helper.import_task_review(self.state_path, 4, fail_review())
+        self.helper.authorize_fix(self.state_path, 5, "T1", ["F1"])
+        self.assert_error(lambda: self.helper.record_fix(self.state_path, 6, impl(head="head-1-fixed", implementation_sha256=A_HASH, base_head="stale-unrelated-head")), "STALE_HEAD")
+        state = self.helper.record_fix(self.state_path, 6, impl(head="head-1-fixed", implementation_sha256=A_HASH, base_head="head-1"))
+        self.assertEqual(state["tasks"][0]["status"], "reviewing")
+        self.assertEqual(self.helper._metadata(state)["heads"]["T1"], "head-1-fixed")
 
     def test_completion_requires_all_tasks_and_handles_pass_fail(self):
         self.init_state(); self.approve_contract(); self.complete_t1()
@@ -253,6 +262,26 @@ class StateHelperTests(unittest.TestCase):
         self.assertEqual(state["tasks"][0]["status"], "fixing")
         self.assertEqual(state["fix_budgets"]["owner-a"]["used"], 1)
         self.assertEqual(state["fix_budgets"]["owner-a"]["remaining"], 1)
+
+    def test_completion_fail_only_blocks_mapped_owner_and_repair_resumes_completion(self):
+        self.init_state(); self.approve_contract(); self.complete_all_tasks()
+        self.helper.start_completion(self.state_path, 8, self.completion_packet())
+        state = self.helper.record_completion(self.state_path, 9, {"verdict": "FAIL", "blocking_owner": "owner-a", "task_id": "T1", "finding_id": "CF1", "reason": "completion blocker"})
+        self.assertEqual(state["status"], "repair_required")
+        self.assertEqual(state["tasks"][0]["status"], "blocked")
+        self.assertEqual(state["tasks"][1]["status"], "completed")
+        self.assertEqual(self.helper.next_action(state)["action"], "DISPATCH_FIXER")
+        self.assertNotIn("completion_identity", self.helper._metadata(state))
+        self.helper.authorize_fix(self.state_path, 10, "T1", ["CF1"])
+        self.helper.record_fix(self.state_path, 11, impl(head="head-1-repaired", implementation_sha256=A_HASH, base_head="head-1"))
+        self.helper.import_task_review(self.state_path, 12, pass_review("T1", review_sha256=B_HASH))
+        repaired = self.read_state()
+        self.assertEqual(repaired["tasks"][0]["status"], "completed")
+        self.assertEqual(repaired["tasks"][1]["status"], "completed")
+        self.assertEqual(repaired["status"], "executing")
+        self.assertEqual(self.helper.next_action(repaired)["action"], "RUN_COMPLETION_REVIEW")
+        refreshed_packet = self.completion_packet(task_heads={"T1": "head-1-repaired", "T2": "head-2"}, implementation_range={"base": "base-1", "head": "head-1-repaired"})
+        self.helper.start_completion(self.state_path, 13, refreshed_packet)
 
     def test_completion_pass_requires_full_identity_and_leaves_state_unchanged(self):
         self.init_state(); self.approve_contract(); self.complete_all_tasks()

@@ -122,8 +122,8 @@ def validate_state_shape(state: Any) -> None:
     for task in state["tasks"]:
         if not isinstance(task, dict) or task.get("status") not in TASK_STATUSES:
             raise ProtocolError("INVALID_STATE", "task status is invalid")
-    if state["status"] in {"repair_required", "context_stale", "deferred", "rejected"} and any(task["status"] == "completed" for task in state["tasks"]):
-        raise ProtocolError("INVALID_STATE", "schema forbids completed tasks in repair/stale/deferred/rejected states")
+    if state["status"] in {"context_stale", "deferred", "rejected"} and any(task["status"] == "completed" for task in state["tasks"]):
+        raise ProtocolError("INVALID_STATE", "schema forbids completed tasks in stale/deferred/rejected states")
 
 
 def _write_state_atomic(path: str | Path, state: dict[str, Any]) -> None:
@@ -339,7 +339,7 @@ def next_action(state_or_path: dict[str, Any] | str | Path) -> dict[str, Any]:
         else:
             action = "HALT"
     elif status == "repair_required":
-        action = "DISPATCH_FIXER" if state.get("blockers") else "HALT"
+        action = "DISPATCH_FIXER" if any(task["status"] in {"blocked", "fixing"} for task in state["tasks"]) and state.get("blockers") else "RUN_COMPLETION_REVIEW" if all(task["status"] == "completed" for task in state["tasks"]) else "HALT"
     elif status == "completing":
         action = "RUN_COMPLETION_REVIEW"
     elif status == "decision_pending":
@@ -579,6 +579,9 @@ def record_fix(path: str | Path, expected_version: int, evidence: dict[str, Any]
         raise ProtocolError("TASK_NOT_FIXING", "task is not accepting fix evidence")
     metadata = _metadata(before)
     old_head = metadata.get("heads", {}).get(task_id)
+    base_head = _non_empty(evidence.get("base_head"), "base_head")
+    if not old_head or base_head != old_head:
+        raise ProtocolError("STALE_HEAD", "fix base_head must match current Task head", {"task_id": task_id, "current_task_head": old_head, "base_head": base_head})
     new_head = _non_empty(evidence.get("new_head"), "new_head")
     impl_sha = _require_sha(evidence.get("implementation_sha256"), "implementation_sha256")
     if old_head == new_head and task.get("implementation_sha256") == impl_sha:
@@ -651,10 +654,14 @@ def record_completion(path: str | Path, expected_version: int, completion: dict[
             raise ProtocolError("INVALID_COMPLETION", "completion blocker task_id does not belong to owner")
         blocker = {"id": f"{task_id}:{finding_id}", "task_id": task_id, "severity": "blocking", "reason": reason, "owner": owner, "source_gate": "COMPLETION"}
         after["status"] = "repair_required"
-        _demote_completed_for_schema(after)
         _task_state(after, task_id)["status"] = "blocked"
         after["blockers"].append(blocker)
         after.pop("decision", None)
+        metadata = _metadata(after)
+        metadata.pop("completion_packet", None)
+        metadata.pop("completion_identity", None)
+        metadata.pop("completion", None)
+        _update_initial_metadata(after, metadata)
         return _commit(path, before, after, "COMPLETION_FAILED", event_reason={"task_id": task_id, "finding_id": finding_id, "owner": owner})
     if verdict != "PASS":
         raise ProtocolError("INVALID_COMPLETION", "completion verdict must be PASS or FAIL")
