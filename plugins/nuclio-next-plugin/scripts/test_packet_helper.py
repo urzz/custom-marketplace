@@ -16,9 +16,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import jsonschema
+
 ROOT = Path(__file__).resolve().parents[3]
 HELPER = ROOT / "plugins" / "nuclio-next-plugin" / "scripts" / "packet-helper.py"
 STATE_HELPER = ROOT / "plugins" / "nuclio-next-plugin" / "scripts" / "state-helper.py"
+SCHEMA = ROOT / "plugins" / "nuclio-next-plugin" / "schemas" / "packet.schema.json"
 A_HASH = "a" * 64
 B_HASH = "b" * 64
 C_HASH = "c" * 64
@@ -47,7 +50,7 @@ def contract():
         "change_id": "change-alpha",
         "contract_version": "v1",
         "sha256": A_HASH,
-        "acceptance": ["A1", "A2"],
+        "acceptance": [{"id": "AC-object", "text": "object id acceptance"}, "string acceptance", {"text": "object without id"}],
         "tasks": [
             {
                 "id": "T1",
@@ -101,6 +104,7 @@ def state(all_completed=False):
         "context": {"path": ".dev-docs/context.jsonl", "fingerprint": B_HASH, "entries": ["all-context"]},
         "tasks": tasks,
         "gates": {"contract": {"status": "approved"}, "finish": {"status": "none"}},
+        "history": [{"event": "INITIALIZED", "reason": json.dumps({"heads": {"T1": "1111111", "T2": "2222222"}})}],
     }
 
 
@@ -113,18 +117,47 @@ def completed_tasks():
 
 
 def acceptance_index():
-    return [{"id": "A1", "accepted": True, "evidence": "tests"}, {"id": "A2", "accepted": True, "evidence": "review"}]
+    return [{"id": "AC-object", "accepted": True, "evidence": "tests"}, {"id": "A2", "accepted": True, "evidence": "review"}, {"id": "A3", "accepted": True, "evidence": "contract"}]
+
+
+def finish_plan():
+    return {
+        "decision_sha256": F_HASH,
+        "finish_plan_sha256": D_HASH,
+        "knowledge_proposal": {"summary": "retain validated decisions"},
+        "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}],
+        "archive_targets": [{"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH}],
+        "archive_intent": "archive change-local evidence after finish approval",
+    }
 
 
 class PacketHelperTests(unittest.TestCase):
     def setUp(self):
         self.helper = load_helper()
+        self.schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+        self.validator = jsonschema.Draft202012Validator(self.schema)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name)
 
+    def assert_schema_valid(self, packet):
+        errors = sorted(self.validator.iter_errors(packet), key=lambda error: list(error.absolute_path))
+        self.assertEqual(errors, [], [error.message for error in errors])
+
+    def test_all_four_generated_packet_roles_conform_to_authoritative_schema(self):
+        packets = [
+            self.helper.worker_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef1", [{"path": "handoff.json", "state": "absent"}], 7),
+            self.helper.reviewer_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef2", mutation_map(), {"evidence_paths": ["evidence/t1.json"]}, [{"path": "iface.py", "state": "present", "sha256": A_HASH}], 7),
+            self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {"evidence_paths": ["validation.json"]}, ["risk-1"], 7),
+            self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, finish_plan(), [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7),
+        ]
+        for packet in packets:
+            with self.subTest(role=packet["role"]):
+                self.assert_schema_valid(packet)
+
     def test_worker_packet_is_minimal_and_binds_current_task_only(self):
         packet = self.helper.worker_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef1", [{"path": "handoff.json", "state": "absent"}], 7)
+        self.assert_schema_valid(packet)
         self.assertEqual(packet["role"], "worker")
         self.assertEqual(packet["contract_sha256"], A_HASH)
         self.assertEqual(packet["context_fingerprint"], B_HASH)
@@ -138,6 +171,7 @@ class PacketHelperTests(unittest.TestCase):
 
     def test_reviewer_packet_is_read_only_and_has_no_fix_or_gate_authority(self):
         packet = self.helper.reviewer_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef2", mutation_map(), {"evidence_paths": ["evidence/t1.json"]}, [{"path": "iface.py", "state": "present", "sha256": A_HASH}], 7)
+        self.assert_schema_valid(packet)
         self.assertEqual(packet["role"], "reviewer")
         self.assertEqual(packet["ownership"], [{"path": "plugins/nuclio-next-plugin/scripts/a.py", "mode": "read"}])
         self.assertIn("review-ref", packet["review_targets"])
@@ -148,6 +182,7 @@ class PacketHelperTests(unittest.TestCase):
 
     def test_completion_packet_requires_full_range_all_tasks_and_acceptance(self):
         packet = self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {"evidence_paths": ["validation.json"]}, ["risk-1"], 7)
+        self.assert_schema_valid(packet)
         self.assertEqual(packet["role"], "completion")
         self.assertEqual(packet["range"], {"base_head": "abcdef1", "expected_dirty_state": "clean", "new_head": "abcdef9"})
         self.assertEqual(packet["task_heads"], {"T1": "1111111", "T2": "2222222"})
@@ -164,6 +199,27 @@ class PacketHelperTests(unittest.TestCase):
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), bad_acceptance, {}, [], 7)
         self.assertEqual(ctx.exception.code, "INCOMPLETE_ACCEPTANCE")
+        for label, bad in {
+            "missing": acceptance_index()[:2],
+            "duplicate": acceptance_index() + [acceptance_index()[0]],
+            "extra": acceptance_index() + [{"id": "AX", "accepted": True}],
+        }.items():
+            with self.subTest(label=label), self.assertRaises(self.helper.ProtocolError) as ctx:
+                self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), bad, {}, [], 7)
+            self.assertEqual(ctx.exception.code, "INCOMPLETE_ACCEPTANCE")
+        missing_evidence = completed_tasks()
+        missing_evidence[1].pop("evidence_sha256")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), missing_evidence, acceptance_index(), {}, [], 7)
+        self.assertIn(ctx.exception.code, {"TASKS_INCOMPLETE", "INVALID_IDENTITY"})
+        stale_tasks = completed_tasks(); stale_tasks[1]["head"] = "3333333"
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), stale_tasks, acceptance_index(), {}, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_HEAD")
+        drift_state = state(all_completed=True); drift_state["history"][0]["reason"] = json.dumps({"heads": {"T1": "1111111", "T2": "3333333"}})
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.completion_packet(self.repo, contract(), context(), drift_state, "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {}, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_HEAD")
 
     def test_generated_completion_packet_starts_state_helper_completion(self):
         state_helper = load_state_helper()
@@ -173,7 +229,7 @@ class PacketHelperTests(unittest.TestCase):
             "state_version": 7,
             "change_id": "change-alpha",
             "status": "executing",
-            "contract": {"path": ".dev-docs/contract.yaml", "sha256": A_HASH, "version": "v1"},
+            "contract": {"path": ".dev-docs/contract.yaml", "sha256": A_HASH, "version": "v1", "acceptance": contract()["acceptance"]},
             "context": {"path": ".dev-docs/context.jsonl", "fingerprint": B_HASH, "entries": ["all-context"]},
             "gates": {"contract": {"status": "approved", "artifact_sha256": A_HASH, "context_fingerprint": B_HASH, "state_version": 1}, "finish": {"status": "none"}},
             "tasks": [{"id": "T1", "status": "completed", "ownership": ["plugins/nuclio-next-plugin/scripts/a.py"], "packet_sha256": C_HASH}, {"id": "T2", "status": "completed", "ownership": ["plugins/nuclio-next-plugin/scripts/b.py"], "packet_sha256": D_HASH}],
@@ -189,16 +245,29 @@ class PacketHelperTests(unittest.TestCase):
         self.assertEqual(metadata["completion_identity"]["task_heads"], {"T1": "1111111", "T2": "2222222"})
 
     def test_finish_packet_binds_decision_plan_and_has_no_product_fix_authority(self):
-        plan = {"decision_sha256": F_HASH, "finish_plan_sha256": D_HASH, "knowledge_targets": [{"path": "dev-docs/notes.md", "before_sha256": None}]}
+        plan = finish_plan()
         completion = {"completion_identity": {"completion_sha256": C_HASH}}
-        packet = self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, completion, plan, [{"path": "dev-docs/notes.md", "state": "absent"}], 7)
+        packet = self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, completion, plan, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+        self.assert_schema_valid(packet)
         self.assertEqual(packet["role"], "finish")
         self.assertEqual(packet["completion_sha256"], C_HASH)
         self.assertEqual(packet["decision_sha256"], F_HASH)
         self.assertEqual(packet["finish_plan_sha256"], D_HASH)
+        self.assertEqual(packet["knowledge_proposal"], {"summary": "retain validated decisions"})
+        self.assertEqual(packet["knowledge_targets"], [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}])
+        self.assertEqual(packet["archive_targets"], [{"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH}])
+        self.assertEqual(packet["archive_intent"], "archive change-local evidence after finish approval")
         self.assertNotIn("ownership", packet)
         self.assertNotIn("checks", packet)
         self.assertNotIn("fix", json.dumps(packet))
+        overreach = finish_plan(); overreach["knowledge_targets"] = [{"path": "plugins/nuclio-next-plugin/scripts/a.py", "before_sha256": None}]
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, completion, overreach, [], 7)
+        self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
+        missing = finish_plan(); missing.pop("archive_intent")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, completion, missing, [], 7)
+        self.assertEqual(ctx.exception.code, "INVALID_INPUT")
 
     def test_stale_contract_context_state_and_head_fail_closed(self):
         stale_contract = contract(); stale_contract["sha256"] = C_HASH

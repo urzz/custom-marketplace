@@ -78,12 +78,38 @@ def make_rename_repo(commit_rename=True):
     return temp, repo, base, head
 
 
+def make_copy_repo(commit_copy=True):
+    temp = tempfile.TemporaryDirectory()
+    repo = Path(temp.name)
+    git(repo, "init")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    (repo / "old.txt").write_text("same\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "copy.txt").write_text("same\n", encoding="utf-8")
+    git(repo, "add", ".")
+    if commit_copy:
+        git(repo, "commit", "-m", "copy")
+        head = git(repo, "rev-parse", "HEAD")
+    else:
+        head = base
+    return temp, repo, base, head
+
+
 def state():
-    return {"state_version": 9, "tasks": [{"id": "T1", "status": "completed"}, {"id": "T2", "status": "completed"}]}
+    return {
+        "state_version": 9,
+        "contract": {"acceptance": ["first acceptance", {"id": "AC-2", "text": "second acceptance"}]},
+        "mutation_map_sha256": D_HASH,
+        "tasks": [{"id": "T1", "status": "completed"}, {"id": "T2", "status": "completed"}],
+        "history": [{"event": "INITIALIZED", "reason": json.dumps({"heads": {"T1": "1111111", "T2": "2222222"}})}],
+    }
 
 
 def acceptance():
-    return [{"id": "A1", "accepted": True}, {"id": "A2", "accepted": True}]
+    return [{"id": "A1", "accepted": True}, {"id": "AC-2", "accepted": True}]
 
 
 def completed():
@@ -91,7 +117,7 @@ def completed():
 
 
 def decision():
-    return {"Completion Verdict": {"result": "pass"}, "Remaining Risks": [], "Knowledge Proposal": [{"path": "dev-docs/notes.md"}], "Archive Decision": {"target": "archive"}}
+    return {"Completion Verdict": {"result": "pass"}, "Remaining Risks": [], "Knowledge Proposal": [{"path": ".dev-docs/knowledge/notes.md"}], "Archive Decision": {"target": "archive"}}
 
 
 class EvidenceHelperTests(unittest.TestCase):
@@ -154,6 +180,19 @@ class EvidenceHelperTests(unittest.TestCase):
         self.assertEqual(destination_only["mutation_map"]["result"], "blocked")
         self.assertIn("old.txt", [blocker["path"] for blocker in destination_only["mutation_map"]["blockers"]])
 
+    def test_mutation_map_represents_committed_and_dirty_copy_as_source_delete_destination_create(self):
+        temp, repo, base, head = make_copy_repo(commit_copy=True); self.addCleanup(temp.cleanup)
+        committed = self.helper.mutation_map(repo, base, head, [{"path": "old.txt", "mode": "delete"}, {"path": "copy.txt", "mode": "create"}])
+        entries = {entry["path"]: entry for entry in committed["mutation_map"]["entries"]}
+        self.assertEqual(committed["mutation_map"]["result"], "ok")
+        self.assertEqual(entries["old.txt"]["mode"], "delete")
+        self.assertEqual(entries["copy.txt"]["mode"], "create")
+        temp2, repo2, base2, head2 = make_copy_repo(commit_copy=False); self.addCleanup(temp2.cleanup)
+        dirty = self.helper.mutation_map(repo2, base2, head2, [{"path": "old.txt", "mode": "delete"}, {"path": "copy.txt", "mode": "create"}])
+        dirty_entries = {entry["path"]: entry for entry in dirty["mutation_map"]["entries"]}
+        self.assertEqual(dirty["mutation_map"]["result"], "ok")
+        self.assertEqual(dirty_entries["copy.txt"]["mode"], "create")
+
     def test_validate_task_evidence_rejects_reviewer_overreach_bypass(self):
         temp, repo, base, head = make_repo(); self.addCleanup(temp.cleanup)
         blocked = self.helper.mutation_map(repo, base, head, [{"path": "owned.txt", "mode": "modify"}])
@@ -165,6 +204,8 @@ class EvidenceHelperTests(unittest.TestCase):
     def test_completion_identity_requires_all_tasks_and_full_acceptance(self):
         identity = self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), completed())
         self.assertRegex(identity["completion_identity"]["completion_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(identity["completion_identity"]["task_evidence"], {"T1": A_HASH, "T2": B_HASH})
+        self.assertEqual(identity["completion_identity"]["mutation_map_sha256"], D_HASH)
         bad_acceptance = acceptance(); bad_acceptance[0]["accepted"] = False
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", bad_acceptance, completed())
@@ -173,11 +214,23 @@ class EvidenceHelperTests(unittest.TestCase):
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), incomplete)
         self.assertEqual(ctx.exception.code, "TASKS_INCOMPLETE")
+        no_evidence = completed(); no_evidence[0].pop("evidence_sha256")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), no_evidence)
+        self.assertEqual(ctx.exception.code, "INVALID_IDENTITY")
+        extra_acceptance = acceptance() + [{"id": "AX", "accepted": True}]
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", extra_acceptance, completed())
+        self.assertEqual(ctx.exception.code, "INCOMPLETE_ACCEPTANCE")
+        stale = state(); stale["history"][0]["reason"] = json.dumps({"heads": {"T1": "1111111", "T2": "3333333"}})
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.completion_identity(stale, A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), completed())
+        self.assertEqual(ctx.exception.code, "STALE_HEAD")
 
     def test_decision_hash_is_stable_external_and_requires_four_sections(self):
         identity = self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), completed())
         first = self.helper.decision_hash(decision(), identity)
-        shuffled = {"Archive Decision": {"target": "archive"}, "Knowledge Proposal": [{"path": "dev-docs/notes.md"}], "Remaining Risks": [], "Completion Verdict": {"result": "pass"}}
+        shuffled = {"Archive Decision": {"target": "archive"}, "Knowledge Proposal": [{"path": ".dev-docs/knowledge/notes.md"}], "Remaining Risks": [], "Completion Verdict": {"result": "pass"}}
         second = self.helper.decision_hash(shuffled, identity)
         self.assertEqual(first["decision_sha256"], second["decision_sha256"])
         self.assertNotIn("decision_sha256", json.dumps(decision()))
@@ -187,14 +240,18 @@ class EvidenceHelperTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "INVALID_DECISION")
 
     def test_finish_apply_journal_requires_target_binding_and_archive_outcome(self):
-        plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "knowledge_targets": [{"path": "dev-docs/notes.md", "before_sha256": None}], "archive_targets": [{"path": "dev-docs/archive.json", "before_sha256": A_HASH}]}
-        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "entries": [{"path": "dev-docs/notes.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"}, {"path": "dev-docs/archive.json", "before_sha256": A_HASH, "after_sha256": D_HASH, "apply_result": "applied", "archive_result": "archived"}]}
+        plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}], "archive_targets": [{"path": ".dev-docs/archive/archive.json", "before_sha256": A_HASH}]}
+        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "entries": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"}, {"path": ".dev-docs/archive/archive.json", "before_sha256": A_HASH, "after_sha256": D_HASH, "apply_result": "applied", "archive_result": "archived"}]}
         valid = self.helper.validate_finish_apply(C_HASH, plan, journal)
         self.assertTrue(valid["valid"])
         over = json.loads(json.dumps(journal))
-        over["entries"].append({"path": "dev-docs/extra.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"})
+        over["entries"].append({"path": ".dev-docs/knowledge/extra.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"})
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.validate_finish_apply(C_HASH, plan, over)
+        self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
+        product = json.loads(json.dumps(plan)); product["knowledge_targets"] = [{"path": "plugins/nuclio-next-plugin/scripts/a.py", "before_sha256": None}]
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, product, journal)
         self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
         bad_archive = json.loads(json.dumps(journal))
         bad_archive["entries"][1]["archive_result"] = "not_applicable"
@@ -206,6 +263,22 @@ class EvidenceHelperTests(unittest.TestCase):
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.validate_finish_apply(C_HASH, plan, bad_knowledge)
         self.assertEqual(ctx.exception.code, "INVALID_FINISH_JOURNAL")
+        unchanged = json.loads(json.dumps(journal)); unchanged["entries"][0]["apply_result"] = "unchanged"
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, unchanged)
+        self.assertEqual(ctx.exception.code, "INVALID_FINISH_JOURNAL")
+        missing = json.loads(json.dumps(journal)); missing["entries"] = missing["entries"][:1]
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, missing)
+        self.assertEqual(ctx.exception.code, "MISSING_FINISH_TARGET")
+        mismatch = json.loads(json.dumps(journal)); mismatch["entries"][1]["before_sha256"] = B_HASH
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, mismatch)
+        self.assertEqual(ctx.exception.code, "STALE_TARGET")
+        stale_intent = json.loads(json.dumps(journal)); stale_intent["archive_intent"] = "old intent"
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, stale_intent)
+        self.assertEqual(ctx.exception.code, "STALE_DECISION")
         stale = json.loads(json.dumps(journal)); stale["approval_identity"] = "old"
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.validate_finish_apply(C_HASH, plan, stale)
@@ -219,8 +292,8 @@ class EvidenceHelperTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["mutation_map"]["result"], "ok")
-        finish_plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "knowledge_targets": [{"path": "dev-docs/notes.md", "before_sha256": None}], "archive_targets": []}
-        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "entries": [{"path": "dev-docs/notes.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"}]}
+        finish_plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}], "archive_targets": []}
+        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "entries": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"}]}
         proc2 = subprocess.run([sys.executable, str(HELPER), "validate-finish-apply", "--decision-sha256", C_HASH, "--finish-plan-json", json.dumps(finish_plan), "--journal-json", json.dumps(journal)], text=True, capture_output=True)
         self.assertEqual(proc2.returncode, 0, proc2.stderr)
         self.assertTrue(json.loads(proc2.stdout)["valid"])

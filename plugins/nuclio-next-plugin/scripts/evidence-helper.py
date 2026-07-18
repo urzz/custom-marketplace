@@ -212,52 +212,67 @@ def _target_map(targets: list[Any]) -> dict[str, str]:
     return result
 
 
-def _dirty_paths(repo: Path) -> dict[str, str]:
-    proc = _git(repo, ["status", "--porcelain=v1", "--untracked-files=all"])
+def _dirty_paths(repo: Path, head: str) -> dict[str, str]:
+    diff = subprocess.run(["git", "-C", str(repo), "diff", "--name-status", "-z", "--find-renames", "--find-copies-harder", head], capture_output=True)
+    if diff.returncode != 0:
+        raise ProtocolError("GIT_ERROR", "git command failed", {"command": ["diff", "--name-status", "-z", head], "stderr": diff.stderr.decode("utf-8", "replace").strip()})
+    fields = [item.decode("utf-8", "surrogateescape") for item in diff.stdout.split(b"\0") if item]
     paths: dict[str, str] = {}
-    for line in proc.stdout.splitlines():
-        if not line:
-            continue
-        status = line[:2]
-        raw_path = line[3:]
-        if " -> " in raw_path or status[0] == "R" or status[1] == "R" or status[0] == "C" or status[1] == "C":
-            parts = raw_path.split(" -> ", 1)
-            if len(parts) != 2:
-                raise ProtocolError("INVALID_GIT_STATUS", "rename/copy status must include source and destination")
-            source = normalize_path(parts[0].strip().strip('"'), "dirty rename source")
-            destination = normalize_path(parts[1].strip().strip('"'), "dirty rename destination")
+    index = 0
+    while index < len(fields):
+        code = fields[index]
+        if code.startswith(("R", "C")):
+            if index + 2 >= len(fields):
+                raise ProtocolError("INVALID_GIT_DIFF", "dirty rename/copy diff must include source and destination")
+            source = normalize_path(fields[index + 1], "dirty rename source")
+            destination = normalize_path(fields[index + 2], "dirty rename destination")
             paths[source] = "delete"
             paths[destination] = "create"
+            index += 3
+            continue
+        if index + 1 >= len(fields):
+            raise ProtocolError("INVALID_GIT_DIFF", "dirty diff entry is missing path")
+        path = normalize_path(fields[index + 1], "dirty path")
+        if code.startswith("A"):
+            paths[path] = "create"
+        elif code.startswith("D"):
+            paths[path] = "delete"
         else:
-            path = normalize_path(raw_path.strip().strip('"'), "dirty path")
-            if status == "??" or status[0] == "A" or status[1] == "A":
-                paths[path] = "create"
-            elif status[0] == "D" or status[1] == "D":
-                paths[path] = "delete"
-            else:
-                paths[path] = "modify"
+            paths[path] = "modify"
+        index += 2
+    status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain=v1", "-z", "--untracked-files=all"], capture_output=True)
+    if status.returncode != 0:
+        raise ProtocolError("GIT_ERROR", "git command failed", {"command": ["status", "--porcelain=v1", "-z"], "stderr": status.stderr.decode("utf-8", "replace").strip()})
+    status_fields = [item.decode("utf-8", "surrogateescape") for item in status.stdout.split(b"\0") if item]
+    for field in status_fields:
+        if len(field) >= 4 and field[:2] == "??":
+            paths.setdefault(normalize_path(field[3:], "dirty untracked path"), "create")
     return paths
 
 
 def _diff_entries(repo: Path, base: str, head: str) -> dict[str, dict[str, Any]]:
-    proc = _git(repo, ["diff", "--name-status", "--find-renames", base, head])
+    proc = subprocess.run(["git", "-C", str(repo), "diff", "--name-status", "-z", "--find-renames", "--find-copies-harder", base, head], capture_output=True)
+    if proc.returncode != 0:
+        raise ProtocolError("GIT_ERROR", "git command failed", {"command": ["diff", "--name-status", "-z", base, head], "stderr": proc.stderr.decode("utf-8", "replace").strip()})
+    fields = [item.decode("utf-8", "surrogateescape") for item in proc.stdout.split(b"\0") if item]
     entries: dict[str, dict[str, Any]] = {}
-    for line in proc.stdout.splitlines():
-        if not line:
-            continue
-        parts = line.split("\t")
-        code = parts[0]
+    index = 0
+    while index < len(fields):
+        code = fields[index]
         if code.startswith(("R", "C")):
-            if len(parts) != 3:
+            if index + 2 >= len(fields):
                 raise ProtocolError("INVALID_GIT_DIFF", "rename/copy diff must include source and destination")
-            source = normalize_path(parts[1], "git diff rename source")
-            destination = normalize_path(parts[2], "git diff rename destination")
+            source = normalize_path(fields[index + 1], "git diff rename source")
+            destination = normalize_path(fields[index + 2], "git diff rename destination")
             source_before_sha = _git_blob_sha(repo, base, source)
             destination_after_sha = _git_blob_sha(repo, head, destination)
             entries[source] = {"path": source, "mode": "delete", "before": _path_sha(source, source_before_sha), "after": None, "dirty": False, "source_status": code}
             entries[destination] = {"path": destination, "mode": "create", "before": None, "after": _path_sha(destination, destination_after_sha), "dirty": False, "source_status": code}
+            index += 3
             continue
-        path = normalize_path(parts[-1], "git diff path")
+        if index + 1 >= len(fields):
+            raise ProtocolError("INVALID_GIT_DIFF", "diff entry is missing path")
+        path = normalize_path(fields[index + 1], "git diff path")
         before_sha = _git_blob_sha(repo, base, path)
         after_sha = _git_blob_sha(repo, head, path)
         if code.startswith("A"):
@@ -265,8 +280,9 @@ def _diff_entries(repo: Path, base: str, head: str) -> dict[str, dict[str, Any]]
         elif code.startswith("D"):
             mode = "delete"
         else:
-            mode = "modify" if before_sha != after_sha else "modify"
+            mode = "modify"
         entries[path] = {"path": path, "mode": mode, "before": _path_sha(path, before_sha), "after": _path_sha(path, after_sha), "dirty": False}
+        index += 2
     return entries
 
 
@@ -276,20 +292,22 @@ def mutation_map(repo_path: str | Path, base: str, head: str, mutation_targets: 
     head = _require_vcs(head, "head")
     targets = _target_map(mutation_targets)
     entries = _diff_entries(repo, base, head)
-    dirty = _dirty_paths(repo)
+    dirty = _dirty_paths(repo, head)
     for item in dirty_paths or []:
         rel = normalize_path(item, "dirty_paths[]")
         dirty.setdefault(rel, "modify")
     for path, dirty_mode in dirty.items():
         before_sha = _git_blob_sha(repo, base, path)
         after_sha = _file_sha(repo, path)
-        if before_sha is None and after_sha is not None:
+        if dirty_mode in {"create", "delete"}:
+            mode = dirty_mode
+        elif before_sha is None and after_sha is not None:
             mode = "create"
         elif before_sha is not None and after_sha is None:
             mode = "delete"
         else:
             mode = "modify"
-        entries[path] = {"path": path, "mode": mode if dirty_mode != "delete" else mode, "before": _path_sha(path, before_sha), "after": _path_sha(path, after_sha), "dirty": True}
+        entries[path] = {"path": path, "mode": mode, "before": _path_sha(path, before_sha), "after": _path_sha(path, after_sha), "dirty": True}
     ordered = [entries[path] for path in sorted(entries)]
     blockers = []
     for entry in ordered:
@@ -301,6 +319,77 @@ def mutation_map(repo_path: str | Path, base: str, head: str, mutation_targets: 
     body = {"base_head": base, "new_head": head, "entries": ordered, "changed_paths": [entry["path"] for entry in ordered], "dirty_paths": sorted(dirty), "mutation_targets": [{"path": path, "mode": mode} for path, mode in sorted(targets.items())], "blockers": blockers, "result": "blocked" if blockers else "ok"}
     body["sha256"] = sha256_value({key: body[key] for key in sorted(body) if key != "sha256"})
     return {"schema_version": 1, "kind": "mutation_map", "mutation_map": body}
+
+
+def _acceptance_ids_from_state(state: dict[str, Any]) -> list[str]:
+    contract_acceptance = state.get("contract", {}).get("acceptance")
+    if contract_acceptance is None:
+        contract_acceptance = state.get("acceptance")
+    if contract_acceptance is None:
+        metadata = {}
+        for event in state.get("history", []):
+            if event.get("event") == "INITIALIZED" and isinstance(event.get("reason"), str):
+                try:
+                    loaded = json.loads(event["reason"])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(loaded, dict):
+                    metadata = loaded
+                    break
+        contract_acceptance = metadata.get("acceptance")
+    if contract_acceptance is None:
+        raise ProtocolError("INCOMPLETE_ACCEPTANCE", "state must expose contract acceptance for exact completion identity")
+    ids: list[str] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(_require_list(contract_acceptance, "contract.acceptance"), 1):
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str) and raw["id"].strip():
+            acceptance_id = raw["id"].strip()
+        else:
+            acceptance_id = f"A{index}"
+        if acceptance_id in seen:
+            raise ProtocolError("INVALID_ACCEPTANCE", "contract acceptance ids must be unique", {"id": acceptance_id})
+        seen.add(acceptance_id)
+        ids.append(acceptance_id)
+    if not ids:
+        raise ProtocolError("INCOMPLETE_ACCEPTANCE", "contract acceptance must not be empty")
+    return ids
+
+
+def _validated_acceptance_index(state: dict[str, Any], acceptance_index: list[Any]) -> list[dict[str, Any]]:
+    expected = _acceptance_ids_from_state(state)
+    expected_set = set(expected)
+    entries: dict[str, dict[str, Any]] = {}
+    for raw in _require_list(acceptance_index, "acceptance_index"):
+        item = _require_object(raw, "acceptance_index[]")
+        acceptance_id = _non_empty(item.get("id"), "acceptance_index[].id")
+        if acceptance_id in entries:
+            raise ProtocolError("INCOMPLETE_ACCEPTANCE", "acceptance index must not contain duplicate ids", {"id": acceptance_id})
+        if acceptance_id not in expected_set:
+            raise ProtocolError("INCOMPLETE_ACCEPTANCE", "acceptance index contains unexpected id", {"id": acceptance_id, "expected": expected})
+        if item.get("accepted") is not True:
+            raise ProtocolError("INCOMPLETE_ACCEPTANCE", "acceptance index must be 100% accepted", {"item": acceptance_id})
+        entries[acceptance_id] = dict(item)
+    missing = sorted(expected_set - set(entries))
+    if missing:
+        raise ProtocolError("INCOMPLETE_ACCEPTANCE", "acceptance index must cover every contract acceptance id", {"missing": missing})
+    return [entries[item] for item in expected]
+
+
+def _state_heads(state: dict[str, Any]) -> dict[str, str] | None:
+    metadata = {}
+    for event in state.get("history", []):
+        if event.get("event") == "INITIALIZED" and isinstance(event.get("reason"), str):
+            try:
+                loaded = json.loads(event["reason"])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(loaded, dict):
+                metadata = loaded
+                break
+    raw_heads = metadata.get("heads", {}) if isinstance(metadata, dict) else {}
+    if not raw_heads:
+        return None
+    return {str(task_id): _non_empty(head, f"state.heads.{task_id}") for task_id, head in raw_heads.items()}
 
 
 def validate_task_evidence(evidence: dict[str, Any], mutation_map_doc: dict[str, Any]) -> dict[str, Any]:
@@ -320,38 +409,39 @@ def validate_task_evidence(evidence: dict[str, Any], mutation_map_doc: dict[str,
 
 def completion_identity(state: dict[str, Any], contract_sha256: str, context_fingerprint: str, base: str, head: str, acceptance_index: list[Any], completed_tasks: list[Any]) -> dict[str, Any]:
     state = _require_object(state, "state")
-    state_tasks = [str(task.get("id")) for task in _require_list(state.get("tasks"), "state.tasks")]
-    if any(task.get("status") != "completed" for task in state.get("tasks", [])):
+    if not isinstance(state.get("state_version"), int) or isinstance(state.get("state_version"), bool) or state["state_version"] < 1:
+        raise ProtocolError("INVALID_STATE_VERSION", "state.state_version must be a positive integer")
+    state_task_items = [_require_object(task, "state.tasks[]") for task in _require_list(state.get("tasks"), "state.tasks")]
+    state_tasks = [str(task.get("id")) for task in state_task_items]
+    if any(task.get("status") != "completed" for task in state_task_items):
         raise ProtocolError("TASKS_INCOMPLETE", "all tasks must be completed before completion identity")
     task_heads: dict[str, str] = {}
     evidence_ids: dict[str, str] = {}
-    for raw in completed_tasks:
+    for raw in _require_list(completed_tasks, "completed_tasks"):
         item = _require_object(raw, "completed_tasks[]")
         task_id = str(item.get("task_id", "")).strip()
+        if task_id in task_heads:
+            raise ProtocolError("INVALID_INPUT", "completed_tasks must not contain duplicate task ids", {"task_id": task_id})
         if task_id not in state_tasks:
             raise ProtocolError("UNKNOWN_TASK", "completed task is not present in state", {"task_id": task_id})
         task_heads[task_id] = _non_empty(item.get("head"), "completed_tasks[].head")
-        if "evidence_sha256" in item:
-            evidence_ids[task_id] = _require_sha(item["evidence_sha256"], "completed_tasks[].evidence_sha256")
-    if set(task_heads) != set(state_tasks):
-        raise ProtocolError("TASKS_INCOMPLETE", "completed task heads must cover every state task", {"expected": sorted(state_tasks), "actual": sorted(task_heads)})
-    accepted = []
-    for raw in acceptance_index:
-        item = _require_object(raw, "acceptance_index[]")
-        if item.get("accepted") is not True:
-            raise ProtocolError("INCOMPLETE_ACCEPTANCE", "acceptance index must be 100% accepted", {"item": item.get("id")})
-        accepted.append(item)
-    if not accepted:
-        raise ProtocolError("INCOMPLETE_ACCEPTANCE", "acceptance index must not be empty")
-    acceptance_sha = sha256_value(sorted(accepted, key=lambda item: str(item.get("id"))))
+        evidence_ids[task_id] = _require_sha(item.get("evidence_sha256"), "completed_tasks[].evidence_sha256")
+    if set(task_heads) != set(state_tasks) or set(evidence_ids) != set(state_tasks):
+        raise ProtocolError("TASKS_INCOMPLETE", "completed task heads and evidence must cover every state task", {"expected": sorted(state_tasks), "actual_heads": sorted(task_heads), "actual_evidence": sorted(evidence_ids)})
+    expected_heads = _state_heads(state)
+    if expected_heads is not None and task_heads != expected_heads:
+        raise ProtocolError("STALE_HEAD", "completed task heads must match state current heads", {"expected": expected_heads, "actual": task_heads})
+    accepted = _validated_acceptance_index(state, acceptance_index)
     identity = {
         "contract_sha256": _require_sha(contract_sha256, "contract_sha256"),
         "context_fingerprint": _require_sha(context_fingerprint, "context_fingerprint"),
-        "state_version": state.get("state_version"),
+        "state_version": state["state_version"],
         "task_heads": dict(sorted(task_heads.items())),
+        "task_evidence": dict(sorted(evidence_ids.items())),
         "task_evidence_sha256": sha256_value(dict(sorted(evidence_ids.items()))),
         "implementation_range": {"base": _require_vcs(base, "base"), "head": _require_vcs(head, "head")},
-        "acceptance_index_sha256": acceptance_sha,
+        "acceptance_index_sha256": sha256_value(accepted),
+        "mutation_map_sha256": _require_sha(state.get("completion", {}).get("mutation_map_sha256", state.get("mutation_map_sha256")), "state.mutation_map_sha256"),
     }
     identity["completion_sha256"] = sha256_value(identity)
     return {"schema_version": 1, "completion_identity": identity}
@@ -368,17 +458,33 @@ def decision_hash(decision: dict[str, Any], completion_identity_doc: dict[str, A
     return {"schema_version": 1, "decision_sha256": sha256_value(body), "decision_sections": list(DECISION_SECTIONS), "completion_sha256": completion.get("completion_sha256")}
 
 
+def _finish_target_path(value: Any, group_name: str) -> str:
+    path = normalize_path(value, f"{group_name}[].path")
+    if not path.startswith(".dev-docs/"):
+        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish targets must stay inside .dev-docs", {"path": path})
+    allowed = path.startswith(".dev-docs/knowledge/") or path.startswith(".dev-docs/archive/") or path in {".dev-docs/index.md", ".dev-docs/index.json"}
+    if not allowed:
+        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish target is not an allowed knowledge/index/archive file", {"path": path})
+    if group_name == "archive_targets" and not path.startswith(".dev-docs/archive/"):
+        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "archive targets must use .dev-docs/archive/", {"path": path})
+    if group_name == "knowledge_targets" and path.startswith(".dev-docs/archive/"):
+        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "knowledge targets must not use .dev-docs/archive/", {"path": path})
+    return path
+
+
 def _plan_targets(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     targets: dict[str, dict[str, Any]] = {}
     for group_name in ("knowledge_targets", "archive_targets"):
-        for raw in plan.get(group_name, []):
+        for raw in _require_list(plan.get(group_name, []), f"{group_name}"):
             item = _require_object(raw, f"{group_name}[]")
-            path = normalize_path(item.get("path"), f"{group_name}[].path")
+            path = _finish_target_path(item.get("path"), group_name)
             if path in targets:
                 raise ProtocolError("INVALID_FINISH_PLAN", "finish target appears more than once", {"path": path})
             targets[path] = {"path": path, "group": group_name, "before_sha256": item.get("before_sha256")}
             if targets[path]["before_sha256"] is not None:
                 _require_sha(targets[path]["before_sha256"], f"{group_name}[].before_sha256")
+    if not targets:
+        raise ProtocolError("INVALID_FINISH_PLAN", "finish plan must include at least one target")
     return targets
 
 
@@ -392,6 +498,8 @@ def validate_finish_apply(decision_sha256: str, finish_plan: dict[str, Any], jou
         raise ProtocolError("STALE_DECISION", "finish plan decision identity is stale")
     if finish_plan.get("approval_identity") != journal.get("approval_identity"):
         raise ProtocolError("STALE_APPROVAL", "finish apply approval identity is stale")
+    if _non_empty(finish_plan.get("archive_intent"), "finish_plan.archive_intent") != _non_empty(journal.get("archive_intent"), "journal.archive_intent"):
+        raise ProtocolError("STALE_DECISION", "finish apply archive intent is stale")
     targets = _plan_targets(finish_plan)
     entries = {}
     for raw in _require_list(journal.get("entries"), "journal.entries"):
@@ -410,8 +518,8 @@ def validate_finish_apply(decision_sha256: str, finish_plan: dict[str, Any], jou
         expected_before = targets[path].get("before_sha256")
         if expected_before != before:
             raise ProtocolError("STALE_TARGET", "finish journal before identity does not match approved target", {"path": path, "expected": expected_before, "actual": before})
-        if item.get("apply_result") not in {"applied", "unchanged"}:
-            raise ProtocolError("INVALID_FINISH_JOURNAL", "finish journal apply_result must be applied or unchanged", {"path": path})
+        if item.get("apply_result") != "applied":
+            raise ProtocolError("INVALID_FINISH_JOURNAL", "finish journal apply_result must be applied", {"path": path})
         archive_result = item.get("archive_result")
         if archive_result not in {"archived", "not_applicable"}:
             raise ProtocolError("INVALID_FINISH_JOURNAL", "finish journal archive_result is invalid", {"path": path})

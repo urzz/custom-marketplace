@@ -29,6 +29,11 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+try:  # pragma: no cover - exercised through tests when jsonschema is present
+    import jsonschema
+except ImportError:  # pragma: no cover
+    jsonschema = None
+
 HASH_CHARS = set("0123456789abcdef")
 
 
@@ -185,6 +190,69 @@ def _check_ownership_matches_state(state_task: dict[str, Any], ownership: list[d
         raise ProtocolError("STALE_OWNERSHIP", "task ownership in contract does not match state", {"expected": expected, "actual": actual})
 
 
+def acceptance_ids(contract: dict[str, Any]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(_require_list(contract.get("acceptance"), "contract.acceptance"), 1):
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str) and raw["id"].strip():
+            acceptance_id = raw["id"].strip()
+        else:
+            acceptance_id = f"A{index}"
+        if acceptance_id in seen:
+            raise ProtocolError("INVALID_ACCEPTANCE", "contract acceptance ids must be unique", {"id": acceptance_id})
+        seen.add(acceptance_id)
+        result.append(acceptance_id)
+    if not result:
+        raise ProtocolError("INCOMPLETE_ACCEPTANCE", "contract acceptance must not be empty")
+    return result
+
+
+def _validated_acceptance_index(contract: dict[str, Any], acceptance_index: list[Any]) -> list[dict[str, Any]]:
+    expected = acceptance_ids(contract)
+    expected_set = set(expected)
+    entries: dict[str, dict[str, Any]] = {}
+    for raw in _require_list(acceptance_index, "acceptance_index"):
+        item = _require_object(raw, "acceptance_index[]")
+        acceptance_id = _non_empty(item.get("id"), "acceptance_index[].id")
+        if acceptance_id in entries:
+            raise ProtocolError("INCOMPLETE_ACCEPTANCE", "acceptance index must not contain duplicate ids", {"id": acceptance_id})
+        if acceptance_id not in expected_set:
+            raise ProtocolError("INCOMPLETE_ACCEPTANCE", "acceptance index contains an unexpected id", {"id": acceptance_id, "expected": expected})
+        if item.get("accepted") is not True:
+            raise ProtocolError("INCOMPLETE_ACCEPTANCE", "completion packet requires 100% contract acceptance index", {"id": acceptance_id})
+        entries[acceptance_id] = dict(item)
+    missing = sorted(expected_set - set(entries))
+    if missing:
+        raise ProtocolError("INCOMPLETE_ACCEPTANCE", "acceptance index must cover every contract acceptance id", {"missing": missing})
+    return [entries[item] for item in expected]
+
+
+def _state_task_heads(state: dict[str, Any]) -> dict[str, str]:
+    metadata: dict[str, Any] = {}
+    for event in state.get("history", []):
+        if event.get("event") == "INITIALIZED" and isinstance(event.get("reason"), str):
+            try:
+                loaded = json.loads(event["reason"])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(loaded, dict):
+                metadata = loaded
+                break
+    raw_heads = metadata.get("heads", {}) if isinstance(metadata, dict) else {}
+    heads: dict[str, str] = {}
+    for task in _require_list(state.get("tasks"), "state.tasks"):
+        task_id = str(_require_object(task, "state.tasks[]").get("id"))
+        if task_id in raw_heads:
+            heads[task_id] = _non_empty(raw_heads[task_id], f"state.heads.{task_id}")
+        elif task.get("head") is not None:
+            heads[task_id] = _non_empty(task.get("head"), f"state.tasks[{task_id}].head")
+        elif task.get("task_head") is not None:
+            heads[task_id] = _non_empty(task.get("task_head"), f"state.tasks[{task_id}].task_head")
+        else:
+            raise ProtocolError("STALE_HEAD", "state is missing a completed Task head", {"task_id": task_id})
+    return heads
+
+
 def _checks(task: dict[str, Any], contract: dict[str, Any], include_change_wide: bool = False) -> dict[str, Any]:
     task_checks = _require_object(task.get("checks", {}), "task.checks") if task else {}
     validation = _require_object(contract.get("validation", {}), "contract.validation")
@@ -208,11 +276,81 @@ def _context_paths(context: Any, audience: str) -> list[str]:
     return []
 
 
+def _dev_docs_target_path(value: Any, where: str, group: str) -> str:
+    path = normalize_path(value, where)
+    if not path.startswith(".dev-docs/"):
+        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish targets must stay inside .dev-docs long-term knowledge paths", {"path": path})
+    allowed = path.startswith(".dev-docs/knowledge/") or path.startswith(".dev-docs/archive/") or path in {".dev-docs/index.md", ".dev-docs/index.json"}
+    if not allowed:
+        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish target path is not an approved long-term knowledge/index/archive file", {"path": path})
+    if group == "archive_targets" and not path.startswith(".dev-docs/archive/"):
+        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "archive targets must use .dev-docs/archive/", {"path": path})
+    if group == "knowledge_targets" and path.startswith(".dev-docs/archive/"):
+        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "knowledge targets must not use .dev-docs/archive/", {"path": path})
+    return path
+
+
+def _finish_targets(finish_plan: dict[str, Any], group: str) -> list[dict[str, Any]]:
+    result = []
+    for raw in _require_list(finish_plan.get(group), f"finish_plan.{group}"):
+        item = _require_object(raw, f"finish_plan.{group}[]")
+        before = item.get("before_sha256")
+        result.append({"path": _dev_docs_target_path(item.get("path"), f"finish_plan.{group}[].path", group), "before_sha256": _require_sha(before, f"finish_plan.{group}[].before_sha256") if before is not None else None})
+    return result
+
+
+def _finish_plan_details(finish_plan: dict[str, Any]) -> dict[str, Any]:
+    proposal = finish_plan.get("knowledge_proposal")
+    if proposal is None:
+        proposal = finish_plan.get("proposal")
+    if isinstance(proposal, str):
+        if not proposal.strip():
+            raise ProtocolError("INVALID_FINISH_PLAN", "finish plan knowledge_proposal must be non-empty")
+        proposal = proposal.strip()
+    elif isinstance(proposal, list):
+        if not proposal:
+            raise ProtocolError("INVALID_FINISH_PLAN", "finish plan knowledge_proposal must be non-empty")
+    elif isinstance(proposal, dict):
+        if not proposal:
+            raise ProtocolError("INVALID_FINISH_PLAN", "finish plan knowledge_proposal must be non-empty")
+    else:
+        raise ProtocolError("INVALID_FINISH_PLAN", "finish plan knowledge_proposal must be a non-empty string, array or object")
+    archive_intent = _non_empty(finish_plan.get("archive_intent"), "finish_plan.archive_intent")
+    knowledge_targets = _finish_targets(finish_plan, "knowledge_targets")
+    archive_targets = _finish_targets(finish_plan, "archive_targets")
+    if not knowledge_targets and not archive_targets:
+        raise ProtocolError("INVALID_FINISH_PLAN", "finish plan must include at least one approved target")
+    all_paths = [item["path"] for item in knowledge_targets + archive_targets]
+    if len(all_paths) != len(set(all_paths)):
+        raise ProtocolError("INVALID_FINISH_PLAN", "finish targets must not duplicate or overlap", {"paths": sorted(all_paths)})
+    return {"knowledge_proposal": proposal, "knowledge_targets": knowledge_targets, "archive_targets": archive_targets, "archive_intent": archive_intent}
+
+
 def _range(base: str, head: str | None = None, expected_dirty_state: str = "clean") -> dict[str, Any]:
     result = {"base_head": _non_empty(base, "base"), "expected_dirty_state": expected_dirty_state}
     if head is not None:
         result["new_head"] = _non_empty(head, "head")
     return result
+
+
+def schema_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "schemas" / "packet.schema.json"
+
+
+def validate_packet_schema(packet: dict[str, Any]) -> None:
+    if jsonschema is None:
+        return
+    schema = json.loads(schema_path().read_text(encoding="utf-8"))
+    try:
+        jsonschema.Draft202012Validator(schema).validate(packet)
+    except jsonschema.ValidationError as exc:
+        raise ProtocolError("INVALID_PACKET_SCHEMA", "generated packet does not conform to packet.schema.json", {"path": "/".join(str(part) for part in exc.absolute_path), "message": exc.message}) from exc
+
+
+def _finalize_packet(packet: dict[str, Any]) -> dict[str, Any]:
+    packet["packet_id"] = _packet_id(packet)
+    validate_packet_schema(packet)
+    return packet
 
 
 def worker_packet(repo_path: str | Path, contract: dict[str, Any], context: dict[str, Any], state: dict[str, Any], task_id: str, base: str, head: str, handoff_snapshots: list[Any], expected_state_version: int | None = None) -> dict[str, Any]:
@@ -239,8 +377,7 @@ def worker_packet(repo_path: str | Path, contract: dict[str, Any], context: dict
         "checks": _checks(task, contract),
         "handoffs": sorted(set(task.get("handoffs", {}).get("inputs", []) + worker_context)),
     }
-    packet["packet_id"] = _packet_id(packet)
-    return packet
+    return _finalize_packet(packet)
 
 
 def reviewer_packet(repo_path: str | Path, contract: dict[str, Any], context: dict[str, Any], state: dict[str, Any], task_id: str, base: str, head: str, mutation_map_doc: dict[str, Any], validation_evidence: dict[str, Any], interface_snapshots: list[Any], expected_state_version: int | None = None) -> dict[str, Any]:
@@ -270,16 +407,17 @@ def reviewer_packet(repo_path: str | Path, contract: dict[str, Any], context: di
         "review_targets": sorted(set(mutation.get("changed_paths", []) + review_context + list(validation_evidence.get("evidence_paths", [])))),
         "mutation_map_sha256": _require_sha(mutation.get("sha256"), "mutation_map.sha256"),
     }
-    packet["packet_id"] = _packet_id(packet)
-    return packet
+    return _finalize_packet(packet)
 
 
 def completion_packet(repo_path: str | Path, contract: dict[str, Any], context: dict[str, Any], state: dict[str, Any], base: str, head: str, mutation_map_doc: dict[str, Any], completed_tasks: list[Any], acceptance_index: list[Any], validation_evidence: dict[str, Any], remaining_risks: list[Any], expected_state_version: int | None = None) -> dict[str, Any]:
     _repo(repo_path)
     fresh = _fresh_inputs(contract, context, state, expected_state_version)
-    if any(task.get("status") != "completed" for task in state.get("tasks", [])):
+    state_task_items = _require_list(state.get("tasks"), "state.tasks")
+    if any(_require_object(task, "state.tasks[]").get("status") != "completed" for task in state_task_items):
         raise ProtocolError("TASKS_INCOMPLETE", "completion packet requires all state tasks completed")
-    state_ids = {str(task.get("id")) for task in state.get("tasks", [])}
+    state_ids = {str(_require_object(task, "state.tasks[]").get("id")) for task in state_task_items}
+    expected_heads = _state_task_heads(state)
     task_heads: dict[str, str] = {}
     task_evidence: dict[str, str] = {}
     for raw in _require_list(completed_tasks, "completed_tasks"):
@@ -288,20 +426,15 @@ def completion_packet(repo_path: str | Path, contract: dict[str, Any], context: 
         if task_id in task_heads:
             raise ProtocolError("INVALID_INPUT", "completed_tasks must not contain duplicate task ids", {"task_id": task_id})
         task_heads[task_id] = _non_empty(item.get("head"), "completed_tasks[].head")
-        if "evidence_sha256" in item:
-            task_evidence[task_id] = _require_sha(item["evidence_sha256"], "completed_tasks[].evidence_sha256")
+        task_evidence[task_id] = _require_sha(item.get("evidence_sha256"), "completed_tasks[].evidence_sha256")
     completed_ids = set(task_heads)
-    if completed_ids != state_ids:
-        raise ProtocolError("TASKS_INCOMPLETE", "completion packet must include every completed Task head/evidence", {"expected": sorted(state_ids), "actual": sorted(completed_ids)})
-    accepted = []
-    for raw in _require_list(acceptance_index, "acceptance_index"):
-        item = _require_object(raw, "acceptance_index[]")
-        if item.get("accepted") is not True:
-            raise ProtocolError("INCOMPLETE_ACCEPTANCE", "completion packet requires 100% contract acceptance index")
-        accepted.append(item)
-    if not accepted:
-        raise ProtocolError("INCOMPLETE_ACCEPTANCE", "completion packet requires 100% contract acceptance index")
-    acceptance_index_sha256 = sha256_value(sorted(accepted, key=lambda item: str(item.get("id"))))
+    evidence_ids = set(task_evidence)
+    if completed_ids != state_ids or evidence_ids != state_ids:
+        raise ProtocolError("TASKS_INCOMPLETE", "completion packet must include every completed Task head/evidence", {"expected": sorted(state_ids), "actual_heads": sorted(completed_ids), "actual_evidence": sorted(evidence_ids)})
+    if task_heads != expected_heads:
+        raise ProtocolError("STALE_HEAD", "completion task_heads must match state current Task heads", {"expected": expected_heads, "actual": task_heads})
+    accepted = _validated_acceptance_index(contract, acceptance_index)
+    acceptance_index_sha256 = sha256_value(accepted)
     task_evidence_sha256 = sha256_value(dict(sorted(task_evidence.items())))
     mutation = _require_object(mutation_map_doc.get("mutation_map", mutation_map_doc), "mutation_map")
     if mutation.get("blockers"):
@@ -309,8 +442,7 @@ def completion_packet(repo_path: str | Path, contract: dict[str, Any], context: 
     handoffs = []
     for task_id, task_head in sorted(task_heads.items()):
         handoffs.append(f"task:{task_id}@{task_head}")
-        if task_id in task_evidence:
-            handoffs.append(f"evidence:{task_evidence[task_id]}")
+        handoffs.append(f"evidence:{task_evidence[task_id]}")
     handoffs.extend(_context_ids(context, "completion"))
     handoffs.extend(str(item) for item in validation_evidence.get("evidence_paths", []))
     handoffs.extend(f"risk:{idx}" for idx, _ in enumerate(remaining_risks, 1))
@@ -332,8 +464,7 @@ def completion_packet(repo_path: str | Path, contract: dict[str, Any], context: 
         "handoffs": sorted(set(handoffs)),
         "mutation_map_sha256": _require_sha(mutation.get("sha256"), "mutation_map.sha256"),
     }
-    packet["packet_id"] = _packet_id(packet)
-    return packet
+    return _finalize_packet(packet)
 
 
 def finish_packet(repo_path: str | Path, contract: dict[str, Any], context: dict[str, Any], state: dict[str, Any], base: str, head: str, decision_doc: dict[str, Any], completion_identity_doc: dict[str, Any], finish_plan: dict[str, Any], knowledge_snapshots: list[Any], expected_state_version: int | None = None) -> dict[str, Any]:
@@ -342,9 +473,12 @@ def finish_packet(repo_path: str | Path, contract: dict[str, Any], context: dict
     decision = _require_object(decision_doc, "decision")
     completion = _require_object(completion_identity_doc.get("completion_identity", completion_identity_doc), "completion_identity")
     finish_plan = _require_object(finish_plan, "finish_plan")
+    details = _finish_plan_details(finish_plan)
     decision_sha = _require_sha(decision.get("decision_sha256", finish_plan.get("decision_sha256")), "decision_sha256")
+    if finish_plan.get("decision_sha256") and finish_plan["decision_sha256"] != decision_sha:
+        raise ProtocolError("STALE_DECISION", "finish plan decision identity is stale")
     completion_sha = _require_sha(completion.get("completion_sha256", state.get("completion", {}).get("proposal_sha256")), "completion_sha256")
-    plan_sha = _require_sha(finish_plan.get("finish_plan_sha256", sha256_value(finish_plan)), "finish_plan_sha256")
+    plan_sha = _require_sha(finish_plan.get("finish_plan_sha256", sha256_value({key: finish_plan[key] for key in sorted(finish_plan) if key != "finish_plan_sha256"})), "finish_plan_sha256")
     finish_context_paths = _context_paths(context, "finish")
     snapshots = list(_require_list(knowledge_snapshots, "knowledge_snapshots"))
     snapshots.extend({"path": path, "state": "present"} for path in finish_context_paths)
@@ -360,9 +494,9 @@ def finish_packet(repo_path: str | Path, contract: dict[str, Any], context: dict
         "completion_sha256": completion_sha,
         "decision_sha256": decision_sha,
         "finish_plan_sha256": plan_sha,
+        **details,
     }
-    packet["packet_id"] = _packet_id(packet)
-    return packet
+    return _finalize_packet(packet)
 
 
 def _packet_id(packet_without_or_with_id: dict[str, Any]) -> str:

@@ -20,7 +20,7 @@
       "minimum": 1
     },
     "packet_id": {
-      "$ref": "#/$defs/non_empty_string"
+      "$ref": "#/$defs/sha256"
     },
     "role": {
       "enum": [
@@ -56,7 +56,7 @@
       }
     },
     "range": {
-      "$ref": "#/$defs/implementation_range"
+      "$ref": "#/$defs/vcs_range"
     },
     "snapshots": {
       "type": "array",
@@ -79,6 +79,21 @@
         "$ref": "#/$defs/non_empty_string"
       }
     },
+    "task_heads": {
+      "$ref": "#/$defs/identity_map"
+    },
+    "implementation_range": {
+      "$ref": "#/$defs/completion_range"
+    },
+    "acceptance_index_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "task_evidence": {
+      "$ref": "#/$defs/sha_identity_map"
+    },
+    "task_evidence_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
     "mutation_map_sha256": {
       "$ref": "#/$defs/sha256"
     },
@@ -90,6 +105,18 @@
     },
     "finish_plan_sha256": {
       "$ref": "#/$defs/sha256"
+    },
+    "knowledge_proposal": {
+      "$ref": "#/$defs/non_empty_json"
+    },
+    "knowledge_targets": {
+      "$ref": "#/$defs/finish_targets"
+    },
+    "archive_targets": {
+      "$ref": "#/$defs/finish_targets"
+    },
+    "archive_intent": {
+      "$ref": "#/$defs/non_empty_string"
     }
   },
   "allOf": [
@@ -159,6 +186,11 @@
       },
       "then": {
         "required": [
+          "task_heads",
+          "implementation_range",
+          "acceptance_index_sha256",
+          "task_evidence",
+          "task_evidence_sha256",
           "mutation_map_sha256",
           "checks",
           "handoffs"
@@ -181,6 +213,10 @@
           "completion_sha256",
           "decision_sha256",
           "finish_plan_sha256",
+          "knowledge_proposal",
+          "knowledge_targets",
+          "archive_targets",
+          "archive_intent",
           "snapshots"
         ]
       }
@@ -191,6 +227,13 @@
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
+    "sha256_or_null": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "vcs_ref": {
       "type": "string",
       "pattern": "^[0-9a-f]{7,64}$"
@@ -198,6 +241,41 @@
     "non_empty_string": {
       "type": "string",
       "minLength": 1
+    },
+    "non_empty_json": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "array",
+          "minItems": 1
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": true
+        }
+      ]
+    },
+    "identity_map": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[^\\s]+$": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "sha_identity_map": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[^\\s]+$": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
     },
     "ownership_entry": {
       "type": "object",
@@ -208,7 +286,7 @@
       ],
       "properties": {
         "path": {
-          "$ref": "#/$defs/non_empty_string"
+          "$ref": "#/$defs/path"
         },
         "mode": {
           "enum": [
@@ -219,15 +297,11 @@
           ]
         },
         "sha256_before": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^[0-9a-f]{64}$"
+          "$ref": "#/$defs/sha256_or_null"
         }
       }
     },
-    "implementation_range": {
+    "vcs_range": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -249,6 +323,22 @@
         }
       }
     },
+    "completion_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "head"
+      ],
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/vcs_ref"
+        },
+        "head": {
+          "$ref": "#/$defs/vcs_ref"
+        }
+      }
+    },
     "snapshot": {
       "type": "object",
       "additionalProperties": false,
@@ -258,7 +348,7 @@
       ],
       "properties": {
         "path": {
-          "$ref": "#/$defs/non_empty_string"
+          "$ref": "#/$defs/path"
         },
         "state": {
           "enum": [
@@ -315,6 +405,42 @@
             "type": "boolean"
           }
         }
+      }
+    },
+    "finish_targets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finish_target"
+      }
+    },
+    "finish_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "before_sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/dev_docs_target_path"
+        },
+        "before_sha256": {
+          "$ref": "#/$defs/sha256_or_null"
+        }
+      }
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "pattern": "(^/|(^|/)\\.\\.(/|$)|/$|^\\.git(/|$))"
+      }
+    },
+    "dev_docs_target_path": {
+      "type": "string",
+      "pattern": "^\\.dev-docs/(knowledge/[^/].*|archive/[^/].*|index\\.(md|json))$",
+      "not": {
+        "pattern": "(^/|(^|/)\\.\\.(/|$)|/$)"
       }
     }
   }
