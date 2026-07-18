@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 HELPER = ROOT / "plugins" / "nuclio-next-plugin" / "scripts" / "packet-helper.py"
+STATE_HELPER = ROOT / "plugins" / "nuclio-next-plugin" / "scripts" / "state-helper.py"
 A_HASH = "a" * 64
 B_HASH = "b" * 64
 C_HASH = "c" * 64
@@ -28,6 +29,13 @@ F_HASH = "f" * 64
 
 def load_helper():
     spec = importlib.util.spec_from_file_location("packet_helper", HELPER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_state_helper():
+    spec = importlib.util.spec_from_file_location("state_helper", STATE_HELPER)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -142,6 +150,10 @@ class PacketHelperTests(unittest.TestCase):
         packet = self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {"evidence_paths": ["validation.json"]}, ["risk-1"], 7)
         self.assertEqual(packet["role"], "completion")
         self.assertEqual(packet["range"], {"base_head": "abcdef1", "expected_dirty_state": "clean", "new_head": "abcdef9"})
+        self.assertEqual(packet["task_heads"], {"T1": "1111111", "T2": "2222222"})
+        self.assertEqual(packet["implementation_range"], {"base": "abcdef1", "head": "abcdef9"})
+        self.assertRegex(packet["acceptance_index_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(packet["task_evidence"], {"T1": A_HASH, "T2": B_HASH})
         self.assertEqual(packet["mutation_map_sha256"], E_HASH)
         self.assertIn("change_wide", packet["checks"])
         self.assertIn("task:T1@1111111", packet["handoffs"])
@@ -152,6 +164,29 @@ class PacketHelperTests(unittest.TestCase):
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), bad_acceptance, {}, [], 7)
         self.assertEqual(ctx.exception.code, "INCOMPLETE_ACCEPTANCE")
+
+    def test_generated_completion_packet_starts_state_helper_completion(self):
+        state_helper = load_state_helper()
+        packet = self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {"evidence_paths": ["validation.json"]}, [], 7)
+        state_doc = {
+            "schema_version": 1,
+            "state_version": 7,
+            "change_id": "change-alpha",
+            "status": "executing",
+            "contract": {"path": ".dev-docs/contract.yaml", "sha256": A_HASH, "version": "v1"},
+            "context": {"path": ".dev-docs/context.jsonl", "fingerprint": B_HASH, "entries": ["all-context"]},
+            "gates": {"contract": {"status": "approved", "artifact_sha256": A_HASH, "context_fingerprint": B_HASH, "state_version": 1}, "finish": {"status": "none"}},
+            "tasks": [{"id": "T1", "status": "completed", "ownership": ["plugins/nuclio-next-plugin/scripts/a.py"], "packet_sha256": C_HASH}, {"id": "T2", "status": "completed", "ownership": ["plugins/nuclio-next-plugin/scripts/b.py"], "packet_sha256": D_HASH}],
+            "blockers": [],
+            "fix_budgets": {},
+            "history": [{"event": "INITIALIZED", "from": None, "to": "contract_pending", "state_version": 1, "artifact_sha256": A_HASH, "reason": json.dumps({"heads": {"T1": "1111111", "T2": "2222222"}})}],
+        }
+        state_path = self.repo / "state.json"
+        state_path.write_text(json.dumps(state_doc), encoding="utf-8")
+        after = state_helper.start_completion(state_path, 7, packet)
+        self.assertEqual(after["status"], "completing")
+        metadata = json.loads(after["history"][0]["reason"])
+        self.assertEqual(metadata["completion_identity"]["task_heads"], {"T1": "1111111", "T2": "2222222"})
 
     def test_finish_packet_binds_decision_plan_and_has_no_product_fix_authority(self):
         plan = {"decision_sha256": F_HASH, "finish_plan_sha256": D_HASH, "knowledge_targets": [{"path": "dev-docs/notes.md", "before_sha256": None}]}

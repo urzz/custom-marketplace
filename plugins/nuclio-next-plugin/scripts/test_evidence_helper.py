@@ -59,6 +59,25 @@ def make_repo():
     return temp, repo, base, head
 
 
+def make_rename_repo(commit_rename=True):
+    temp = tempfile.TemporaryDirectory()
+    repo = Path(temp.name)
+    git(repo, "init")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    (repo / "old.txt").write_text("same\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "mv", "old.txt", "new.txt")
+    if commit_rename:
+        git(repo, "commit", "-m", "rename")
+        head = git(repo, "rev-parse", "HEAD")
+    else:
+        head = base
+    return temp, repo, base, head
+
+
 def state():
     return {"state_version": 9, "tasks": [{"id": "T1", "status": "completed"}, {"id": "T2", "status": "completed"}]}
 
@@ -112,6 +131,29 @@ class EvidenceHelperTests(unittest.TestCase):
         self.assertIn("dirty.txt", dirty["mutation_map"]["changed_paths"])
         self.assertEqual(dirty["mutation_map"]["result"], "blocked")
 
+    def test_mutation_map_represents_committed_rename_source_delete_and_destination_create(self):
+        temp, repo, base, head = make_rename_repo(commit_rename=True); self.addCleanup(temp.cleanup)
+        mutation = self.helper.mutation_map(repo, base, head, [{"path": "old.txt", "mode": "delete"}, {"path": "new.txt", "mode": "create"}])
+        entries = {entry["path"]: entry for entry in mutation["mutation_map"]["entries"]}
+        self.assertEqual(mutation["mutation_map"]["result"], "ok")
+        self.assertEqual(entries["old.txt"]["mode"], "delete")
+        self.assertEqual(entries["new.txt"]["mode"], "create")
+        destination_only = self.helper.mutation_map(repo, base, head, [{"path": "new.txt", "mode": "modify"}])
+        self.assertEqual(destination_only["mutation_map"]["result"], "blocked")
+        self.assertIn("old.txt", [blocker["path"] for blocker in destination_only["mutation_map"]["blockers"]])
+
+    def test_mutation_map_represents_dirty_rename_source_delete_and_destination_create(self):
+        temp, repo, base, head = make_rename_repo(commit_rename=False); self.addCleanup(temp.cleanup)
+        mutation = self.helper.mutation_map(repo, base, head, [{"path": "old.txt", "mode": "delete"}, {"path": "new.txt", "mode": "create"}])
+        entries = {entry["path"]: entry for entry in mutation["mutation_map"]["entries"]}
+        self.assertEqual(mutation["mutation_map"]["result"], "ok")
+        self.assertTrue(entries["old.txt"]["dirty"])
+        self.assertEqual(entries["old.txt"]["mode"], "delete")
+        self.assertEqual(entries["new.txt"]["mode"], "create")
+        destination_only = self.helper.mutation_map(repo, base, head, [{"path": "new.txt", "mode": "modify"}])
+        self.assertEqual(destination_only["mutation_map"]["result"], "blocked")
+        self.assertIn("old.txt", [blocker["path"] for blocker in destination_only["mutation_map"]["blockers"]])
+
     def test_validate_task_evidence_rejects_reviewer_overreach_bypass(self):
         temp, repo, base, head = make_repo(); self.addCleanup(temp.cleanup)
         blocked = self.helper.mutation_map(repo, base, head, [{"path": "owned.txt", "mode": "modify"}])
@@ -154,6 +196,16 @@ class EvidenceHelperTests(unittest.TestCase):
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.validate_finish_apply(C_HASH, plan, over)
         self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
+        bad_archive = json.loads(json.dumps(journal))
+        bad_archive["entries"][1]["archive_result"] = "not_applicable"
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, bad_archive)
+        self.assertEqual(ctx.exception.code, "INVALID_FINISH_JOURNAL")
+        bad_knowledge = json.loads(json.dumps(journal))
+        bad_knowledge["entries"][0]["archive_result"] = "archived"
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, bad_knowledge)
+        self.assertEqual(ctx.exception.code, "INVALID_FINISH_JOURNAL")
         stale = json.loads(json.dumps(journal)); stale["approval_identity"] = "old"
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.validate_finish_apply(C_HASH, plan, stale)

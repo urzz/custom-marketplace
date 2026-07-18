@@ -220,26 +220,43 @@ def _dirty_paths(repo: Path) -> dict[str, str]:
             continue
         status = line[:2]
         raw_path = line[3:]
-        if " -> " in raw_path:
-            raw_path = raw_path.split(" -> ", 1)[1]
-        path = normalize_path(raw_path.strip().strip('"'), "dirty path")
-        if status == "??" or status[0] == "A" or status[1] == "A":
-            paths[path] = "create"
-        elif status[0] == "D" or status[1] == "D":
-            paths[path] = "delete"
+        if " -> " in raw_path or status[0] == "R" or status[1] == "R" or status[0] == "C" or status[1] == "C":
+            parts = raw_path.split(" -> ", 1)
+            if len(parts) != 2:
+                raise ProtocolError("INVALID_GIT_STATUS", "rename/copy status must include source and destination")
+            source = normalize_path(parts[0].strip().strip('"'), "dirty rename source")
+            destination = normalize_path(parts[1].strip().strip('"'), "dirty rename destination")
+            paths[source] = "delete"
+            paths[destination] = "create"
         else:
-            paths[path] = "modify"
+            path = normalize_path(raw_path.strip().strip('"'), "dirty path")
+            if status == "??" or status[0] == "A" or status[1] == "A":
+                paths[path] = "create"
+            elif status[0] == "D" or status[1] == "D":
+                paths[path] = "delete"
+            else:
+                paths[path] = "modify"
     return paths
 
 
 def _diff_entries(repo: Path, base: str, head: str) -> dict[str, dict[str, Any]]:
-    proc = _git(repo, ["diff", "--name-status", base, head])
+    proc = _git(repo, ["diff", "--name-status", "--find-renames", base, head])
     entries: dict[str, dict[str, Any]] = {}
     for line in proc.stdout.splitlines():
         if not line:
             continue
         parts = line.split("\t")
         code = parts[0]
+        if code.startswith(("R", "C")):
+            if len(parts) != 3:
+                raise ProtocolError("INVALID_GIT_DIFF", "rename/copy diff must include source and destination")
+            source = normalize_path(parts[1], "git diff rename source")
+            destination = normalize_path(parts[2], "git diff rename destination")
+            source_before_sha = _git_blob_sha(repo, base, source)
+            destination_after_sha = _git_blob_sha(repo, head, destination)
+            entries[source] = {"path": source, "mode": "delete", "before": _path_sha(source, source_before_sha), "after": None, "dirty": False, "source_status": code}
+            entries[destination] = {"path": destination, "mode": "create", "before": None, "after": _path_sha(destination, destination_after_sha), "dirty": False, "source_status": code}
+            continue
         path = normalize_path(parts[-1], "git diff path")
         before_sha = _git_blob_sha(repo, base, path)
         after_sha = _git_blob_sha(repo, head, path)
@@ -395,8 +412,13 @@ def validate_finish_apply(decision_sha256: str, finish_plan: dict[str, Any], jou
             raise ProtocolError("STALE_TARGET", "finish journal before identity does not match approved target", {"path": path, "expected": expected_before, "actual": before})
         if item.get("apply_result") not in {"applied", "unchanged"}:
             raise ProtocolError("INVALID_FINISH_JOURNAL", "finish journal apply_result must be applied or unchanged", {"path": path})
-        if item.get("archive_result") not in {"archived", "not_applicable"}:
+        archive_result = item.get("archive_result")
+        if archive_result not in {"archived", "not_applicable"}:
             raise ProtocolError("INVALID_FINISH_JOURNAL", "finish journal archive_result is invalid", {"path": path})
+        if targets[path]["group"] == "archive_targets" and archive_result != "archived":
+            raise ProtocolError("INVALID_FINISH_JOURNAL", "archive target requires archived archive_result", {"path": path})
+        if targets[path]["group"] == "knowledge_targets" and archive_result != "not_applicable":
+            raise ProtocolError("INVALID_FINISH_JOURNAL", "knowledge target requires not_applicable archive_result", {"path": path})
         entries[path] = item
     missing = sorted(set(targets) - set(entries))
     if missing:

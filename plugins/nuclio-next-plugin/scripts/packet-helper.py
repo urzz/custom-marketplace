@@ -280,23 +280,41 @@ def completion_packet(repo_path: str | Path, contract: dict[str, Any], context: 
     if any(task.get("status") != "completed" for task in state.get("tasks", [])):
         raise ProtocolError("TASKS_INCOMPLETE", "completion packet requires all state tasks completed")
     state_ids = {str(task.get("id")) for task in state.get("tasks", [])}
-    completed_ids = {str(item.get("task_id")) for item in _require_list(completed_tasks, "completed_tasks") if isinstance(item, dict)}
+    task_heads: dict[str, str] = {}
+    task_evidence: dict[str, str] = {}
+    for raw in _require_list(completed_tasks, "completed_tasks"):
+        item = _require_object(raw, "completed_tasks[]")
+        task_id = _non_empty(str(item.get("task_id", "")), "completed_tasks[].task_id")
+        if task_id in task_heads:
+            raise ProtocolError("INVALID_INPUT", "completed_tasks must not contain duplicate task ids", {"task_id": task_id})
+        task_heads[task_id] = _non_empty(item.get("head"), "completed_tasks[].head")
+        if "evidence_sha256" in item:
+            task_evidence[task_id] = _require_sha(item["evidence_sha256"], "completed_tasks[].evidence_sha256")
+    completed_ids = set(task_heads)
     if completed_ids != state_ids:
         raise ProtocolError("TASKS_INCOMPLETE", "completion packet must include every completed Task head/evidence", {"expected": sorted(state_ids), "actual": sorted(completed_ids)})
-    accepted = _require_list(acceptance_index, "acceptance_index")
-    if not accepted or any(not isinstance(item, dict) or item.get("accepted") is not True for item in accepted):
+    accepted = []
+    for raw in _require_list(acceptance_index, "acceptance_index"):
+        item = _require_object(raw, "acceptance_index[]")
+        if item.get("accepted") is not True:
+            raise ProtocolError("INCOMPLETE_ACCEPTANCE", "completion packet requires 100% contract acceptance index")
+        accepted.append(item)
+    if not accepted:
         raise ProtocolError("INCOMPLETE_ACCEPTANCE", "completion packet requires 100% contract acceptance index")
+    acceptance_index_sha256 = sha256_value(sorted(accepted, key=lambda item: str(item.get("id"))))
+    task_evidence_sha256 = sha256_value(dict(sorted(task_evidence.items())))
     mutation = _require_object(mutation_map_doc.get("mutation_map", mutation_map_doc), "mutation_map")
     if mutation.get("blockers"):
         raise ProtocolError("MUTATION_OVERREACH", "completion packet cannot be derived with overreach blockers", {"blockers": mutation.get("blockers")})
     handoffs = []
-    for item in completed_tasks:
-        handoffs.append(f"task:{item.get('task_id')}@{item.get('head')}")
-        if item.get("evidence_sha256"):
-            handoffs.append(f"evidence:{item['evidence_sha256']}")
+    for task_id, task_head in sorted(task_heads.items()):
+        handoffs.append(f"task:{task_id}@{task_head}")
+        if task_id in task_evidence:
+            handoffs.append(f"evidence:{task_evidence[task_id]}")
     handoffs.extend(_context_ids(context, "completion"))
     handoffs.extend(str(item) for item in validation_evidence.get("evidence_paths", []))
     handoffs.extend(f"risk:{idx}" for idx, _ in enumerate(remaining_risks, 1))
+    implementation_range = {"base": _non_empty(base, "base"), "head": _non_empty(head, "head")}
     packet = {
         "schema_version": 1,
         "role": "completion",
@@ -304,6 +322,11 @@ def completion_packet(repo_path: str | Path, contract: dict[str, Any], context: 
         "contract_sha256": fresh["contract_sha256"],
         "context_fingerprint": fresh["context_fingerprint"],
         "state_version": fresh["state_version"],
+        "task_heads": dict(sorted(task_heads.items())),
+        "implementation_range": implementation_range,
+        "acceptance_index_sha256": acceptance_index_sha256,
+        "task_evidence": dict(sorted(task_evidence.items())),
+        "task_evidence_sha256": task_evidence_sha256,
         "range": _range(base, head, expected_dirty_state="clean"),
         "checks": {"focused": contract.get("validation", {}).get("focused", []), "full": contract.get("validation", {}).get("full", []), "change_wide": contract.get("validation", {}).get("change_wide", [])},
         "handoffs": sorted(set(handoffs)),
