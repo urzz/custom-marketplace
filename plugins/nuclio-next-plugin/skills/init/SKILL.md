@@ -22,13 +22,13 @@ Use progressive disclosure instead of copying protocol detail: [authority](../..
 
 ## Workflow
 
-1. Run helper-backed inspect/detect first. Use state helper `inspect` and `next-action` when state exists; use migration helper detect/preview for explicit migration inputs.
-2. If no active state exists, draft only `.dev-docs/contract.yaml`, `.dev-docs/context.jsonl`, and `.dev-docs/state.json` bootstrap artifacts through helpers.
-3. During drafting, follow recommendation-first Grill: one question at a time, only if it changes Contract fields, at most 5 necessary questions. Simple bounded changes can be zero-question.
-4. Present a single proposal/preview summary: goals, non-goals, mutation_targets, bounded context, checks, rollback, risks, migration blockers, and helper validation result.
-5. Wait for current turn explicit approval or exact migration opt-in. Do not treat “looks good”, old chat, or artifact existence as approval.
-6. After approval, call the helper apply/validate action that records the fresh identity. If hashes, context fingerprint, state version, target non-overwrite, or path allowlist fail, STOP with the helper blocker.
-7. End every successful bootstrap/repair/apply by showing next action and STOP. Do not enter work; tell the user to call `/nuclio-next:work`.
+1. Inspect the filesystem and any existing `.dev-docs/` proposal first. If `.dev-docs/state.json` exists, run `state-helper.py inspect <state>` and `state-helper.py next-action <state>` before proposing repairs. Multiple active changes are not guessed.
+2. For first-time bootstrap or repair, this skill is the project fact-source bootstrap/repair path only. It may propose minimal project index and long-term knowledge skeleton files, not a product change Contract, change context, or change state.
+3. Present one proposal that lists the exact init writes. After current turn explicit approval, the Controller may Write only this allowlist when needed: `.dev-docs/index.md`, `.dev-docs/knowledge/product.md`, `.dev-docs/knowledge/architecture.md`, `.dev-docs/knowledge/engineering.md`, and `.dev-docs/changes/index.md`.
+4. After each approved init Write, read back the file and compute/report its SHA-256. If any target already contains user bytes that the proposal did not cover, STOP for repair instead of overwriting.
+5. If the user wants to initialize a change, STOP after bootstrap and tell them to call `/nuclio-next:work`; contract-helper and context-helper validation are work drafting surfaces only, not init apply commands.
+6. For explicit legacy migration, use only the real migration helper commands: `migration-helper.py detect --legacy-change-path <path> --target-change-path <path>`, then `migration-helper.py preview --legacy-change-path <path> --target-change-path <path>`, then after exact opt-in `migration-helper.py apply --legacy-change-path <path> --target-change-path <path> --apply --preview-identity <sha256> --approval-json <json>`.
+7. End every successful bootstrap/repair/migration by showing next action and STOP. Do not enter work; tell the user to call `/nuclio-next:work`.
 
 ## Legacy baseline wording
 

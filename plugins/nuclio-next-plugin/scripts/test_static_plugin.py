@@ -10,6 +10,7 @@ Nuclio Next static plugin contract tests.
 - [Eval trajectory assertions](#eval-trajectory-assertions)
 """
 
+import importlib.util
 import json
 import re
 import unittest
@@ -22,6 +23,7 @@ except ImportError:  # pragma: no cover - optional validation dependency
 
 ROOT = Path(__file__).resolve().parents[3]
 PLUGIN = ROOT / "plugins" / "nuclio-next-plugin"
+SCRIPTS = PLUGIN / "scripts"
 SKILLS = PLUGIN / "skills"
 MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 OLD_LIFECYCLE = {"project-init", "brief", "design", "implement", "verify", "fold"}
@@ -69,6 +71,13 @@ def all_plugin_text_files():
 
 def load_json(path):
     return json.loads(read_text(path))
+
+
+def load_helper_module(filename):
+    spec = importlib.util.spec_from_file_location(filename.replace("-", "_"), SCRIPTS / filename)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def sha(ch):
@@ -211,15 +220,72 @@ class StaticPluginTests(unittest.TestCase):
         for text, needles in {
             "init": ["inspect", "proposal", "preview", "current turn explicit approval", "STOP", "does not create product code", "does not start work", "legacy migration"],
             "work": ["state-helper.py inspect", "next-action", "multiple active changes", "at most 5", "recommendation-first", "Contract Gate hard STOP", "fresh Contract approval", "fresh implementer", "fresh read-only reviewer", "fresh completion critic", "completion.md", "decision.md", "Completion Verdict", "Remaining Risks", "Knowledge Proposal", "Archive Decision", "STOP", "does not patch product files"],
-            "finish": ["decision_pending", "Completion Verdict", "Remaining Risks", "Knowledge Proposal", "Archive Decision", "accept", "request changes", "defer", "reject", "ambiguous", "fresh accept", "finish-apply.md", "does not modify product code"],
+            "finish": ["decision_pending", "Completion Verdict", "Remaining Risks", "Knowledge Proposal", "Archive Decision", "accept", "request_changes", "defer", "reject", "ambiguous", "fresh accept", "finish-apply.md", "does not modify product code"],
         }.items():
             body = {"init": init, "work": work, "finish": finish}[text]
             for needle in needles:
                 with self.subTest(skill=text, needle=needle):
                     self.assertIn(needle, body)
         self.assertRegex(work, r"(?is)Contract Gate hard STOP.*?fresh Contract approval.*?forbid")
-        self.assertRegex(finish, r"(?is)exact token.*?accept.*?request changes.*?defer.*?reject")
+        self.assertRegex(finish, r"(?is)exact token.*?accept.*?request_changes.*?defer.*?reject")
         self.assertRegex(finish, r"(?is)fresh accept.*?Knowledge Proposal.*?Archive Decision")
+
+    def test_finish_decision_token_matches_helper_enum(self):
+        state_helper = load_helper_module("state-helper.py")
+        finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]
+        self.assertIn("request_changes", state_helper.FINISH_DECISIONS)
+        self.assertIn("`request_changes`", finish)
+        self.assertIn("--decision request_changes", finish)
+        self.assertNotIn("request changes", finish)
+        self.assertRegex(finish, r"(?is)exact token.*?accept.*?request_changes.*?defer.*?reject")
+
+    def test_init_references_only_real_init_and_migration_command_surfaces(self):
+        init = split_skill(SKILLS / "init" / "SKILL.md")[1]
+        self.assertIn("project fact-source bootstrap/repair path only", init)
+        self.assertIn(".dev-docs/index.md", init)
+        self.assertIn(".dev-docs/knowledge/product.md", init)
+        self.assertIn(".dev-docs/knowledge/architecture.md", init)
+        self.assertIn(".dev-docs/knowledge/engineering.md", init)
+        self.assertIn(".dev-docs/changes/index.md", init)
+        self.assertIn("state-helper.py inspect <state>", init)
+        self.assertIn("state-helper.py next-action <state>", init)
+        self.assertIn("migration-helper.py detect --legacy-change-path <path> --target-change-path <path>", init)
+        self.assertIn("migration-helper.py preview --legacy-change-path <path> --target-change-path <path>", init)
+        self.assertIn("migration-helper.py apply --legacy-change-path <path> --target-change-path <path> --apply --preview-identity <sha256> --approval-json <json>", init)
+        self.assertIn("contract-helper and context-helper validation are work drafting surfaces only", init)
+        self.assertNotRegex(init, r"\.dev-docs/(contract\.yaml|context\.jsonl|state\.json).*bootstrap artifacts through helpers")
+        self.assertNotIn("helper apply/validate action", init)
+
+    def test_finish_accept_apply_uses_controller_sequence_and_real_helper_flags(self):
+        finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]
+        required_in_order = [
+            "state-helper.py finish-decision <state> --expected-version <n> --decision accept --metadata-json <json>",
+            "state-helper.py next-action <state>` returns `APPLY_FINISH`",
+            "There is no separate finish applier agent or unsupported applier role",
+            "state-helper.py inspect <state>",
+            "state-helper.py next-action <state>",
+            "packet-helper.py finish --repo <repo> --contract-json <contract> --context-json <context> --state-json <state> --base <base> --head <head> --output <packet> --expected-state-version <n> --decision-json <decision> --completion-identity-json <identity> --finish-plan-json <plan> --knowledge-snapshots-json <json>",
+            "compare `before_sha256`",
+            "`before_sha256: null` as create-only absent",
+            "no untracked/out-of-packet targets",
+            "Controller Write/Edit is limited to exact approved",
+            "Do not write product files",
+            "finish-apply.md",
+            "evidence-helper.py validate-finish-apply --decision-sha256 <sha256> --finish-plan-json <plan> --journal-json <journal>",
+            "Only an ok JSON result permits setting `verified: true` and `journal_sha256`",
+            "state-helper.py record-finish-apply <state> --expected-version <n> --journal-json <journal>",
+            "partial write failure",
+            "do not invent rollback",
+        ]
+        cursor = -1
+        for needle in required_in_order:
+            with self.subTest(needle=needle):
+                next_cursor = finish.find(needle, cursor + 1)
+                self.assertGreater(next_cursor, cursor, needle)
+                cursor = next_cursor
+        self.assertNotRegex(finish, r"(?i)dispatch .*finish applier")
+        self.assertNotRegex(finish, r"(?i)fresh finish applier")
+        self.assertNotIn("rollback", finish.lower().replace("do not invent rollback", ""))
 
 
 if __name__ == "__main__":

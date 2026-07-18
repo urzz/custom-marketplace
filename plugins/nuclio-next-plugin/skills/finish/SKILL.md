@@ -34,20 +34,30 @@ Explain that fresh accept is the only path that can apply the exact `Knowledge P
 Accept only an exact token for the current identity:
 
 - `accept`
-- `request changes`
+- `request_changes`
 - `defer`
 - `reject`
 
-Any other answer is ambiguous, including “looks good”, “continue”, “可以”, or “LGTM”. Ask one clarification question: choose exact token `accept`, `request changes`, `defer`, or `reject`.
+Any other answer is ambiguous, including “looks good”, “continue”, “可以”, or “LGTM”. Ask one clarification question: choose exact token `accept`, `request_changes`, `defer`, or `reject`.
 
 ## Side effects
 
-- `request changes`: record the decision through helper, return to work or Contract revision, preserve completion evidence, and do not modify product code, long-term knowledge, journal, or archive.
-- `defer`: record reason/freshness baseline through helper, keep all knowledge/archive bytes unchanged, and STOP for later resume freshness checks.
-- `reject`: record rejection, do not apply Knowledge Proposal, do not archive as accepted, do not keep implicit approval, and STOP.
-- `accept`: only after helper records fresh Finish approval, derive the finish packet and apply exactly listed knowledge targets, archive targets, index updates, and `finish-apply.md` journal. Revalidate before/after hashes, finish_plan_sha256, decision_sha256, and archive ordering.
+- `request_changes`: run `state-helper.py finish-decision <state> --expected-version <n> --decision request_changes --metadata-json <json>`, return to work or Contract revision, preserve completion evidence, and do not modify product code, long-term knowledge, journal, or archive.
+- `defer`: run `state-helper.py finish-decision <state> --expected-version <n> --decision defer --metadata-json <json>` with the reason/freshness baseline, keep all knowledge/archive bytes unchanged, and STOP for later resume freshness checks.
+- `reject`: run `state-helper.py finish-decision <state> --expected-version <n> --decision reject --metadata-json <json>`, do not apply Knowledge Proposal, do not archive as accepted, do not keep implicit approval, and STOP.
+- `accept`: the Controller may act as the finish applier only after fresh accept is recorded with `state-helper.py finish-decision <state> --expected-version <n> --decision accept --metadata-json <json>` and `state-helper.py next-action <state>` returns `APPLY_FINISH`. There is no separate finish applier agent or unsupported applier role.
 
-If any hash/apply/archive/journal validation fails, fail closed and keep a recoverable blocker. If any target was written without verified journal, HALT for manual handling; do not claim completion.
+## Accept apply sequence
+
+1. Re-run `state-helper.py inspect <state>` and `state-helper.py next-action <state>` immediately before the first write.
+2. Derive a fresh finish packet with `packet-helper.py finish --repo <repo> --contract-json <contract> --context-json <context> --state-json <state> --base <base> --head <head> --output <packet> --expected-state-version <n> --decision-json <decision> --completion-identity-json <identity> --finish-plan-json <plan> --knowledge-snapshots-json <json>`.
+3. Before each target write, re-run `state-helper.py inspect <state>` and `state-helper.py next-action <state>`, read the finish packet target, compare `before_sha256` against the current file bytes, treat `before_sha256: null` as create-only absent, and ensure there are no untracked/out-of-packet targets.
+4. Controller Write/Edit is limited to exact approved `.dev-docs/knowledge/`, `.dev-docs/index.md`, `.dev-docs/index.json`, and `.dev-docs/archive/` targets in finish packet order. Do not write product files.
+5. Immediately after each Write/Edit, read back the target, compute the after SHA-256, and append the target entry to the change-local `.dev-docs/changes/<change-id>/finish-apply.md` journal evidence.
+6. Validate the journal with `evidence-helper.py validate-finish-apply --decision-sha256 <sha256> --finish-plan-json <plan> --journal-json <journal>`. Only an ok JSON result permits setting `verified: true` and `journal_sha256` in the journal payload.
+7. Record archive completion only with `state-helper.py record-finish-apply <state> --expected-version <n> --journal-json <journal>` after validation succeeds.
+
+If any hash/apply/archive/journal validation fails, STOP with a manual blocker and do not falsely archive. If a partial write failure occurs, do not invent rollback and do not claim completion; keep the evidence for manual handling.
 
 ## Legacy baseline wording
 
