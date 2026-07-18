@@ -24,11 +24,11 @@ The core hierarchy is:
 
 Some plugins may also include shared references, subagent definitions, and helper scripts. The Nuclio plugin uses plugin-level `references/`, `agents/`, and `scripts/`. The dev-stack `skill-forge` skill uses skill-local `references/`, `agents/`, and `scripts/`, plus plugin-level bounded agents.
 
-The marketplace currently registers three plugins:
+当前 marketplace 注册三个插件：
 
-- `openclaw-plugin`: provides `/openclaw-skill-creator`.
-- `dev-stack`: provides `/skill-forge`.
-- `nuclio`: provides `/nuclio:project-init`, `/nuclio:brief`, `/nuclio:design`, `/nuclio:implement`, `/nuclio:verify`, and `/nuclio:fold`.
+- `openclaw-plugin`：提供 `/openclaw-skill-creator`。
+- `dev-stack`：提供 `/skill-forge` 和 `/commit`。
+- `nuclio`：提供 `/nuclio:project-init`、`/nuclio:brief`、`/nuclio:design`、`/nuclio:implement`、`/nuclio:verify` 和 `/nuclio:fold`。
 
 ## Key Files
 
@@ -82,7 +82,9 @@ For Nuclio changes, keep all of the following in sync:
 - `plugins/nuclio-plugin/scripts/*.py`
 - Nuclio eval prompts under `.superpowers/sdd/nuclio-*.md`
 
-For dev-stack skill-forge changes, keep all of the following in sync:
+Dev-stack skill 的通用同步原则：修改任一 skill 时，保持对应 `plugins/dev-stack/skills/<skill-name>/SKILL.md`、一层 `references/`、插件元数据、README / CLAUDE 说明与本地校验命令一致。`/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时必须同步这些文件，但它不使用 skill-forge 的 file-backed review-state、bounded agents 或 helper scripts。
+
+Dev-stack `skill-forge` 变更还需要保持以下专用文件同步：
 
 - `plugins/dev-stack/skills/skill-forge/SKILL.md`
 - `plugins/dev-stack/skills/skill-forge/references/*.md`
@@ -90,7 +92,7 @@ For dev-stack skill-forge changes, keep all of the following in sync:
 - `plugins/dev-stack/skills/skill-forge/agents/skill-creator-eval.md`
 - `plugins/dev-stack/skills/skill-forge/scripts/*.py`
 
-For dev-stack skill-forge, `plugins/dev-stack/skills/skill-forge/scripts/review-state-helper.py` is the only writer of file-backed review state. Bounded implementer and fixer agents are limited to `Read, Edit, Write, Grep, Glob, Bash`; bounded reviewer and final-reviewer agents are limited to `Read, Grep, Glob, Bash`; the skill-local eval agent remains simulation-only and flag-gated.
+对于 dev-stack `skill-forge`，`plugins/dev-stack/skills/skill-forge/scripts/review-state-helper.py` 是 file-backed review state 的唯一写入者。Bounded implementer 和 fixer agents 仅限 `Read, Edit, Write, Grep, Glob, Bash`；bounded reviewer 和 final-reviewer agents 仅限 `Read, Grep, Glob, Bash`；skill-local eval agent 仍保持 simulation-only 且由 flag gate 控制。
 
 Nuclio's current lifecycle is `project-init → brief → design → implement → verify → fold`. Implement is a native lightweight SDD controller that dispatches one fresh worker per Task and a fresh reviewer; Verify is change-wide and approval-gated; Fold is proposal-first and approval-first before writing long-term `.dev-docs` knowledge.
 

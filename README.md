@@ -5,7 +5,7 @@
 当前仓库包含：
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator` 技能，用于帮助用户起草 OpenClaw skill。
-- `dev-stack`：提供 `/skill-forge` 技能，用于创建、设计和改进 Claude Code skill。
+- `dev-stack`：提供 `/skill-forge` 与 `/commit` 技能；`/skill-forge` 用于创建、设计和改进 Claude Code skill，`/commit` 用于分析当前 Git 变更、生成单个 Conventional Commit，并在安全门禁下选择性暂存和提交。
 - `nuclio`：提供 Nucl.io 文件驱动生命周期技能：`/nuclio:project-init`、`/nuclio:brief`、`/nuclio:design`、`/nuclio:implement`、`/nuclio:verify`、`/nuclio:fold`。
 
 ## 仓库结构
@@ -13,8 +13,8 @@
 - `.claude-plugin/marketplace.json`：市场清单，声明当前 marketplace 暴露的插件。
 - `plugins/<plugin-name>/.claude-plugin/plugin.json`：插件元数据。
 - `plugins/<plugin-name>/skills/<skill-name>/SKILL.md`：技能定义。
-- `plugins/<plugin-name>/skills/<skill-name>/references/`：skill 级协议、设计约束或参考资料（如 dev-stack/skill-forge 的 review-state 协议与模板）。
-- `plugins/<plugin-name>/skills/<skill-name>/scripts/`：skill 级确定性辅助脚本与测试（如 dev-stack/skill-forge 的 `review-state-helper.py`、`plan-task-query.py` 与 unittest）。
+- `plugins/<plugin-name>/skills/<skill-name>/references/`：skill 级协议、设计约束或参考资料（如 dev-stack/skill-forge 的 review-state 协议与模板；`plugins/dev-stack/skills/commit/references/` 存放 `/commit` 的变更分析和提交策略）。
+- `plugins/<plugin-name>/skills/<skill-name>/scripts/`：skill 级确定性辅助脚本与测试（如 dev-stack/skill-forge 的 `review-state-helper.py`、`plan-task-query.py` 与 unittest；`/commit` 当前不使用 skill-forge agents、scripts 或 review-state helper）。
 - `plugins/<plugin-name>/references/`：插件级共享协议、设计约束或参考资料（如 Nuclio）。
 - `plugins/<plugin-name>/agents/`：插件级有界子代理定义（如 dev-stack/skill-forge 的 bounded implementer/reviewer/fixer/final reviewer，以及 Nuclio agents）。
 - `plugins/<plugin-name>/scripts/`：插件级确定性辅助脚本与测试（如 Nuclio state/task helper）。
@@ -32,6 +32,8 @@
 ```text
 plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 ```
+
+Dev-stack 的 `/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由一层 references 维护变更分析与提交策略；修改 `/commit` 时需保持这些文件同步，且不要把它绑定到 skill-forge 的 agents、scripts 或 review-state helper。
 
 Nuclio 的 skill 行为还需要与以下内容保持一致：
 
