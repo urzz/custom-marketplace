@@ -1,0 +1,178 @@
+"""
+Evidence helper tests.
+
+## Contents
+
+- [Fixture builders](#fixture-builders)
+- [Snapshot and mutation map tests](#snapshot-and-mutation-map-tests)
+- [Completion decision and finish tests](#completion-decision-and-finish-tests)
+- [CLI trajectory tests](#cli-trajectory-tests)
+"""
+
+import importlib.util
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+HELPER = ROOT / "plugins" / "nuclio-next-plugin" / "scripts" / "evidence-helper.py"
+A_HASH = "a" * 64
+B_HASH = "b" * 64
+C_HASH = "c" * 64
+D_HASH = "d" * 64
+
+
+def load_helper():
+    spec = importlib.util.spec_from_file_location("evidence_helper", HELPER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def git(repo, *args):
+    proc = subprocess.run(["git", "-C", str(repo), *args], text=True, capture_output=True)
+    if proc.returncode != 0:
+        raise AssertionError(proc.stderr)
+    return proc.stdout.strip()
+
+
+def make_repo():
+    temp = tempfile.TemporaryDirectory()
+    repo = Path(temp.name)
+    git(repo, "init")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    (repo / "owned.txt").write_text("old\n", encoding="utf-8")
+    (repo / "delete.txt").write_text("gone\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "owned.txt").write_text("new\n", encoding="utf-8")
+    (repo / "new.txt").write_text("created\n", encoding="utf-8")
+    (repo / "delete.txt").unlink()
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "head")
+    head = git(repo, "rev-parse", "HEAD")
+    return temp, repo, base, head
+
+
+def state():
+    return {"state_version": 9, "tasks": [{"id": "T1", "status": "completed"}, {"id": "T2", "status": "completed"}]}
+
+
+def acceptance():
+    return [{"id": "A1", "accepted": True}, {"id": "A2", "accepted": True}]
+
+
+def completed():
+    return [{"task_id": "T1", "head": "1111111", "evidence_sha256": A_HASH}, {"task_id": "T2", "head": "2222222", "evidence_sha256": B_HASH}]
+
+
+def decision():
+    return {"Completion Verdict": {"result": "pass"}, "Remaining Risks": [], "Knowledge Proposal": [{"path": "dev-docs/notes.md"}], "Archive Decision": {"target": "archive"}}
+
+
+class EvidenceHelperTests(unittest.TestCase):
+    def setUp(self):
+        self.helper = load_helper()
+
+    def test_snapshot_covers_present_absent_and_deleted_file_states(self):
+        temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)
+        snap = self.helper.snapshot(repo, ["owned.txt", "missing.txt", "already-deleted.txt"], ["already-deleted.txt"])
+        states = {entry["path"]: entry["state"] for entry in snap["snapshots"]}
+        self.assertEqual(states["owned.txt"], "present")
+        self.assertEqual(states["missing.txt"], "absent")
+        self.assertEqual(states["already-deleted.txt"], "deleted")
+        self.assertRegex(snap["snapshot_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_fingerprint_binds_contract_context_state_task_head_and_detects_drift(self):
+        fp = self.helper.fingerprint(A_HASH, B_HASH, 5, "abcdef1", [{"path": "x", "state": "absent"}])
+        expected = fp["identity"].copy()
+        again = self.helper.fingerprint(A_HASH, B_HASH, 5, "abcdef1", [{"path": "x", "state": "absent"}], expected)
+        self.assertEqual(again["identity"]["fingerprint"], expected["fingerprint"])
+        expected["task_head"] = "stale"
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.fingerprint(A_HASH, B_HASH, 5, "abcdef1", [{"path": "x", "state": "absent"}], expected)
+        self.assertEqual(ctx.exception.code, "STALE_FINGERPRINT")
+
+    def test_mutation_map_allows_subset_and_blocks_overreach_and_dirty_paths(self):
+        temp, repo, base, head = make_repo(); self.addCleanup(temp.cleanup)
+        targets = [{"path": "owned.txt", "mode": "modify"}, {"path": "new.txt", "mode": "create"}, {"path": "delete.txt", "mode": "delete"}]
+        mutation = self.helper.mutation_map(repo, base, head, targets)
+        self.assertEqual(mutation["mutation_map"]["result"], "ok")
+        self.assertEqual(sorted(mutation["mutation_map"]["changed_paths"]), ["delete.txt", "new.txt", "owned.txt"])
+        over = self.helper.mutation_map(repo, base, head, [{"path": "owned.txt", "mode": "modify"}])
+        self.assertEqual(over["mutation_map"]["result"], "blocked")
+        self.assertTrue(any(blocker["id"] == "MUTATION_OVERREACH" for blocker in over["mutation_map"]["blockers"]))
+        (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        dirty = self.helper.mutation_map(repo, base, head, targets)
+        self.assertIn("dirty.txt", dirty["mutation_map"]["changed_paths"])
+        self.assertEqual(dirty["mutation_map"]["result"], "blocked")
+
+    def test_validate_task_evidence_rejects_reviewer_overreach_bypass(self):
+        temp, repo, base, head = make_repo(); self.addCleanup(temp.cleanup)
+        blocked = self.helper.mutation_map(repo, base, head, [{"path": "owned.txt", "mode": "modify"}])
+        evidence = {"task_id": "T1", "changed_paths": blocked["mutation_map"]["changed_paths"], "mutation_map_sha256": blocked["mutation_map"]["sha256"], "reviewer_verdict": "PASS"}
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_task_evidence(evidence, blocked)
+        self.assertEqual(ctx.exception.code, "MUTATION_OVERREACH")
+
+    def test_completion_identity_requires_all_tasks_and_full_acceptance(self):
+        identity = self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), completed())
+        self.assertRegex(identity["completion_identity"]["completion_sha256"], r"^[0-9a-f]{64}$")
+        bad_acceptance = acceptance(); bad_acceptance[0]["accepted"] = False
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", bad_acceptance, completed())
+        self.assertEqual(ctx.exception.code, "INCOMPLETE_ACCEPTANCE")
+        incomplete = completed()[:1]
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), incomplete)
+        self.assertEqual(ctx.exception.code, "TASKS_INCOMPLETE")
+
+    def test_decision_hash_is_stable_external_and_requires_four_sections(self):
+        identity = self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), completed())
+        first = self.helper.decision_hash(decision(), identity)
+        shuffled = {"Archive Decision": {"target": "archive"}, "Knowledge Proposal": [{"path": "dev-docs/notes.md"}], "Remaining Risks": [], "Completion Verdict": {"result": "pass"}}
+        second = self.helper.decision_hash(shuffled, identity)
+        self.assertEqual(first["decision_sha256"], second["decision_sha256"])
+        self.assertNotIn("decision_sha256", json.dumps(decision()))
+        bad = decision(); bad.pop("Archive Decision")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.decision_hash(bad, identity)
+        self.assertEqual(ctx.exception.code, "INVALID_DECISION")
+
+    def test_finish_apply_journal_requires_target_binding_and_archive_outcome(self):
+        plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "knowledge_targets": [{"path": "dev-docs/notes.md", "before_sha256": None}], "archive_targets": [{"path": "dev-docs/archive.json", "before_sha256": A_HASH}]}
+        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "entries": [{"path": "dev-docs/notes.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"}, {"path": "dev-docs/archive.json", "before_sha256": A_HASH, "after_sha256": D_HASH, "apply_result": "applied", "archive_result": "archived"}]}
+        valid = self.helper.validate_finish_apply(C_HASH, plan, journal)
+        self.assertTrue(valid["valid"])
+        over = json.loads(json.dumps(journal))
+        over["entries"].append({"path": "dev-docs/extra.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"})
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, over)
+        self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
+        stale = json.loads(json.dumps(journal)); stale["approval_identity"] = "old"
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, stale)
+        self.assertEqual(ctx.exception.code, "STALE_APPROVAL")
+
+    def test_cli_temporary_git_trajectory_json_envelope(self):
+        temp, repo, base, head = make_repo(); self.addCleanup(temp.cleanup)
+        targets = json.dumps([{"path": "owned.txt", "mode": "modify"}, {"path": "new.txt", "mode": "create"}, {"path": "delete.txt", "mode": "delete"}])
+        proc = subprocess.run([sys.executable, str(HELPER), "mutation-map", "--repo", str(repo), "--base", base, "--head", head, "--mutation-targets-json", targets], text=True, capture_output=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["mutation_map"]["result"], "ok")
+        finish_plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "knowledge_targets": [{"path": "dev-docs/notes.md", "before_sha256": None}], "archive_targets": []}
+        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "entries": [{"path": "dev-docs/notes.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"}]}
+        proc2 = subprocess.run([sys.executable, str(HELPER), "validate-finish-apply", "--decision-sha256", C_HASH, "--finish-plan-json", json.dumps(finish_plan), "--journal-json", json.dumps(journal)], text=True, capture_output=True)
+        self.assertEqual(proc2.returncode, 0, proc2.stderr)
+        self.assertTrue(json.loads(proc2.stdout)["valid"])
+
+
+if __name__ == "__main__":
+    unittest.main()
