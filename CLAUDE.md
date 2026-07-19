@@ -42,6 +42,7 @@ Some plugins may also include shared references, subagent definitions, and helpe
 - `plugins/<plugin-name>/schemas/`: Optional plugin-level data contracts. Nuclio uses JSON Schema for contract, context, state, packet, and evidence validation.
 - `plugins/<plugin-name>/agents/`: Optional plugin-provided bounded agents. Dev-stack provides skill-forge implementer, reviewer, fixer, and final-reviewer agents here; Nuclio provides bounded implementer, task-reviewer, fixer, and completion-critic agents.
 - `plugins/<plugin-name>/scripts/`: Optional plugin-level deterministic helper scripts and tests. Nuclio provides contract, context, state, packet, evidence, and migration helpers with unittest coverage.
+- `plugins/nuclio-plugin/docs/research/contract-workbench-redesign/`: Historical research and design inputs for the Nuclio Contract Workbench redesign. These documents preserve design rationale but are not runtime authority; canonical behavior remains under `plugins/nuclio-plugin/references/`.
 
 ## What Must Stay in Sync When Editing
 

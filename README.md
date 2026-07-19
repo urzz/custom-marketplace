@@ -18,6 +18,7 @@
 - `plugins/<plugin-name>/references/`：插件级共享协议、设计约束或参考资料（如 Nuclio）。
 - `plugins/<plugin-name>/agents/`：插件级有界子代理定义（如 dev-stack/skill-forge 的 bounded implementer/reviewer/fixer/final reviewer，以及 Nuclio agents）。
 - `plugins/<plugin-name>/scripts/`：插件级确定性辅助脚本与测试（如 Nuclio contract/context/state/packet/evidence/migration helpers）。
+- `plugins/nuclio-plugin/docs/research/contract-workbench-redesign/`：Nuclio Contract Workbench 重构的历史研究与设计材料；它们用于追溯设计依据，不是运行时行为权威，运行协议仍以 `plugins/nuclio-plugin/references/` 为准。
 
 ## 维护方式
 
