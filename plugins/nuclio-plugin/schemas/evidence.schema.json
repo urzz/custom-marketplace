@@ -1,0 +1,520 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nuclio.local/schemas/evidence.schema.json",
+  "title": "Nuclio Evidence",
+  "description": "Shape schema for stable evidence identity; raw transcripts and agent summaries are not authority fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_id",
+    "kind",
+    "change_id",
+    "contract_sha256",
+    "context_fingerprint",
+    "state_version",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "evidence_id": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "kind": {
+      "enum": [
+        "task_implementation",
+        "task_validation",
+        "task_review",
+        "mutation_map",
+        "completion",
+        "decision",
+        "finish_apply_journal"
+      ]
+    },
+    "change_id": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "contract_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "context_fingerprint": {
+      "$ref": "#/$defs/sha256"
+    },
+    "state_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "created_at": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "task_id": {
+      "type": [
+        "string",
+        "integer"
+      ]
+    },
+    "implementation": {
+      "$ref": "#/$defs/implementation_evidence"
+    },
+    "validation": {
+      "$ref": "#/$defs/validation_evidence"
+    },
+    "review": {
+      "$ref": "#/$defs/review_evidence"
+    },
+    "mutation_map": {
+      "$ref": "#/$defs/mutation_map"
+    },
+    "completion": {
+      "$ref": "#/$defs/completion_evidence"
+    },
+    "decision": {
+      "$ref": "#/$defs/decision_evidence"
+    },
+    "finish_apply_journal": {
+      "$ref": "#/$defs/finish_apply_journal"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "task_implementation"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "task_id",
+          "implementation"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "task_validation"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "task_id",
+          "validation"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "task_review"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "task_id",
+          "review"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "mutation_map"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "mutation_map"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "completion"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "completion"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "decision"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "decision"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "finish_apply_journal"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "finish_apply_journal"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "vcs_ref": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,64}$"
+    },
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "path_sha": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "nullable_path_sha": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/path_sha"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "check_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "exit_code",
+        "output_sha256"
+      ],
+      "properties": {
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "output_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "output_excerpt": {
+          "type": "string"
+        }
+      }
+    },
+    "implementation_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_head",
+        "new_head",
+        "changed_paths",
+        "ownership_sha256",
+        "checks"
+      ],
+      "properties": {
+        "base_head": {
+          "$ref": "#/$defs/vcs_ref"
+        },
+        "new_head": {
+          "$ref": "#/$defs/vcs_ref"
+        },
+        "changed_paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "ownership_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check_result"
+          }
+        }
+      }
+    },
+    "validation_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checks",
+        "result"
+      ],
+      "properties": {
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/check_result"
+          }
+        },
+        "result": {
+          "enum": [
+            "success",
+            "failure",
+            "blocked"
+          ]
+        }
+      }
+    },
+    "review_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_package_sha256",
+        "findings"
+      ],
+      "properties": {
+        "review_package_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "severity",
+              "summary"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/non_empty_string"
+              },
+              "severity": {
+                "enum": [
+                  "info",
+                  "warning",
+                  "blocking"
+                ]
+              },
+              "summary": {
+                "$ref": "#/$defs/non_empty_string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mutation_map": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entries",
+        "sha256"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "mode",
+              "before",
+              "after"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/non_empty_string"
+              },
+              "mode": {
+                "enum": [
+                  "create",
+                  "modify",
+                  "delete"
+                ]
+              },
+              "before": {
+                "$ref": "#/$defs/nullable_path_sha"
+              },
+              "after": {
+                "$ref": "#/$defs/nullable_path_sha"
+              }
+            }
+          }
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "completion_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_sha256",
+        "mutation_map_sha256",
+        "check_summary_sha256",
+        "residual_risks"
+      ],
+      "properties": {
+        "proposal_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "mutation_map_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "check_summary_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "residual_risks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        }
+      }
+    },
+    "decision_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_sha256",
+        "decision",
+        "state_version",
+        "artifact_sha256"
+      ],
+      "properties": {
+        "decision_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "decision": {
+          "enum": [
+            "approved",
+            "deferred",
+            "rejected"
+          ]
+        },
+        "state_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "finish_apply_journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_sha256",
+        "entries"
+      ],
+      "properties": {
+        "decision_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "before_sha256",
+              "after_sha256",
+              "reason"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/non_empty_string"
+              },
+              "before_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "after_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "reason": {
+                "$ref": "#/$defs/non_empty_string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

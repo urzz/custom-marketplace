@@ -18,7 +18,7 @@
     {
       "name": "nuclio",
       "source": "./plugins/nuclio-plugin",
-      "description": "Adds explicit /nuclio:* skills for a file-backed lifecycle with lightweight task implementation, change-wide verification, and approval-first knowledge folding"
+      "description": "Adds /nuclio:init, /nuclio:work, and /nuclio:finish for a file-backed Contract Workbench with explicit mutation and knowledge gates"
     }
   ]
 }

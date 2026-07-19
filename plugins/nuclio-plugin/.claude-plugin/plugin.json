@@ -1,7 +1,7 @@
 {
   "name": "nuclio",
-  "description": "Nucl.io personal AI-coding harness with explicit project init, brief, design, lightweight task implementation, change-wide verify, and approval-first fold workflows",
-  "version": "0.2.0",
+  "description": "Use when a project needs an init/work/finish file-backed Contract Workbench with explicit Contract and Finish gates before product mutation or long-term knowledge updates",
+  "version": "1.0.0",
   "author": {
     "name": "Jade Liu",
     "email": "[redacted-email]"

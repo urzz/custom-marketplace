@@ -1,0 +1,448 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nuclio.local/schemas/state.schema.json",
+  "title": "Nuclio State",
+  "description": "Shape schema for .dev-docs/changes/<change-id>/state.json; helper scripts validate transition legality, freshness, dirty state and artifact identity fail closed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "state_version",
+    "change_id",
+    "status",
+    "contract",
+    "context",
+    "gates",
+    "tasks",
+    "blockers",
+    "fix_budgets",
+    "history"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "state_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "change_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "idle",
+        "drafting_contract",
+        "contract_pending",
+        "ready_to_execute",
+        "executing",
+        "completing",
+        "decision_pending",
+        "folding",
+        "archived",
+        "repair_required",
+        "context_stale",
+        "deferred",
+        "rejected"
+      ]
+    },
+    "contract": {
+      "$ref": "#/$defs/artifact_identity"
+    },
+    "context": {
+      "$ref": "#/$defs/context_identity"
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "finish"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/gate_ledger"
+        },
+        "finish": {
+          "$ref": "#/$defs/gate_ledger"
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task_state"
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/blocker"
+      }
+    },
+    "fix_budgets": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "maximum",
+          "used",
+          "remaining"
+        ],
+        "properties": {
+          "maximum": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "used": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remaining": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "completion": {
+      "$ref": "#/$defs/completion_identity"
+    },
+    "decision": {
+      "$ref": "#/$defs/decision_identity"
+    },
+    "history": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/history_event"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "archived",
+              "folding"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "completion",
+          "decision"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "repair_required",
+              "context_stale",
+              "deferred",
+              "rejected"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tasks": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifact_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "version"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "version": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "context_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "fingerprint",
+        "entries"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/sha256"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "gate_ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "none",
+            "pending",
+            "approved",
+            "deferred",
+            "rejected",
+            "stale"
+          ]
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_fingerprint": {
+          "$ref": "#/$defs/sha256"
+        },
+        "state_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "approval_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "approved_at": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "decision_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "notes": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "approved"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "artifact_sha256",
+              "state_version",
+              "approval_id",
+              "approved_at"
+            ]
+          }
+        }
+      ]
+    },
+    "task_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "ownership",
+        "packet_sha256"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "ready",
+            "implementing",
+            "reviewing",
+            "fixing",
+            "completed",
+            "blocked",
+            "rejected"
+          ]
+        },
+        "ownership": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "packet_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "implementation_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "review_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "severity",
+        "reason"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "blocking"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "owner": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "completion_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_sha256",
+        "mutation_map_sha256",
+        "state_version"
+      ],
+      "properties": {
+        "proposal_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "mutation_map_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "state_version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "decision_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_sha256",
+        "state_version",
+        "approved"
+      ],
+      "properties": {
+        "decision_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "state_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "approved": {
+          "type": "boolean"
+        }
+      }
+    },
+    "history_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "from",
+        "to",
+        "state_version"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "state_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reason": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    }
+  }
+}

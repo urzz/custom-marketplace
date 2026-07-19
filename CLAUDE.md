@@ -28,7 +28,7 @@ Some plugins may also include shared references, subagent definitions, and helpe
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator`。
 - `dev-stack`：提供 `/skill-forge` 和 `/commit`。
-- `nuclio`：提供 `/nuclio:project-init`、`/nuclio:brief`、`/nuclio:design`、`/nuclio:implement`、`/nuclio:verify` 和 `/nuclio:fold`。
+- `nuclio`：提供 `/nuclio:init`、`/nuclio:work` 和 `/nuclio:finish`。
 
 ## Key Files
 
@@ -38,9 +38,10 @@ Some plugins may also include shared references, subagent definitions, and helpe
 - `plugins/<plugin-name>/skills/<skill-name>/references/`: Optional skill-local references. Dev-stack uses this for the skill-forge review-state protocol, templates, and validation checklist.
 - `plugins/<plugin-name>/skills/<skill-name>/agents/`: Optional skill-local agents. Dev-stack uses this for `skills/skill-forge/agents/skill-creator-eval.md`.
 - `plugins/<plugin-name>/skills/<skill-name>/scripts/`: Optional skill-local deterministic helper scripts and tests. Dev-stack uses this for `review-state-helper.py`, `plan-task-query.py`, and unittest coverage.
-- `plugins/<plugin-name>/references/`: Optional plugin-level shared references. Nuclio uses this for lifecycle, file protocol, context manifest, lightweight SDD, grill protocol, and roadmap guidance.
-- `plugins/<plugin-name>/agents/`: Optional plugin-provided bounded agents. Dev-stack provides skill-forge implementer, reviewer, fixer, and final-reviewer agents here; Nuclio also provides bounded workflow agents.
-- `plugins/<plugin-name>/scripts/`: Optional plugin-level deterministic helper scripts and tests. Nuclio provides `state-helper.py`, `task-helper.py`, and unittest coverage.
+- `plugins/<plugin-name>/references/`: Optional plugin-level shared references. Nuclio uses this for authority, lifecycle, contract, context, execution, finish, migration, grill, and eval guidance.
+- `plugins/<plugin-name>/schemas/`: Optional plugin-level data contracts. Nuclio uses JSON Schema for contract, context, state, packet, and evidence validation.
+- `plugins/<plugin-name>/agents/`: Optional plugin-provided bounded agents. Dev-stack provides skill-forge implementer, reviewer, fixer, and final-reviewer agents here; Nuclio provides bounded implementer, task-reviewer, fixer, and completion-critic agents.
+- `plugins/<plugin-name>/scripts/`: Optional plugin-level deterministic helper scripts and tests. Nuclio provides contract, context, state, packet, evidence, and migration helpers with unittest coverage.
 
 ## What Must Stay in Sync When Editing
 
@@ -79,8 +80,9 @@ For Nuclio changes, keep all of the following in sync:
 - `plugins/nuclio-plugin/skills/*/SKILL.md`
 - `plugins/nuclio-plugin/references/*.md`
 - `plugins/nuclio-plugin/agents/*.md`
+- `plugins/nuclio-plugin/schemas/*.json`
 - `plugins/nuclio-plugin/scripts/*.py`
-- Nuclio eval prompts under `.superpowers/sdd/nuclio-*.md`
+- Nuclio behavior eval cases in `plugins/nuclio-plugin/references/eval-prompts.md`
 
 Dev-stack skill 的通用同步原则：修改任一 skill 时，保持对应 `plugins/dev-stack/skills/<skill-name>/SKILL.md`、一层 `references/`、插件元数据、README / CLAUDE 说明与本地校验命令一致。`/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时必须同步这些文件，但它不使用 skill-forge 的 file-backed review-state、bounded agents 或 helper scripts。
 
@@ -94,7 +96,7 @@ Dev-stack `skill-forge` 变更还需要保持以下专用文件同步：
 
 对于 dev-stack `skill-forge`，`plugins/dev-stack/skills/skill-forge/scripts/review-state-helper.py` 是 file-backed review state 的唯一写入者。Bounded implementer 和 fixer agents 仅限 `Read, Edit, Write, Grep, Glob, Bash`；bounded reviewer 和 final-reviewer agents 仅限 `Read, Grep, Glob, Bash`；skill-local eval agent 仍保持 simulation-only 且由 flag gate 控制。
 
-Nuclio's current lifecycle is `project-init → brief → design → implement → verify → fold`. Implement is a native lightweight SDD controller that dispatches one fresh worker per Task and a fresh reviewer; Verify is change-wide and approval-gated; Fold is proposal-first and approval-first before writing long-term `.dev-docs` knowledge.
+Nuclio's canonical lifecycle is `init → work → finish`. Work owns Contract drafting, the fresh Contract Gate, bounded per-Task implementer/reviewer/fixer execution, and mandatory change-wide completion; Finish is decision-first and requires a fresh exact `accept` before applying long-term `.dev-docs` knowledge or archive targets.
 
 ## Common Commands
 
@@ -140,4 +142,4 @@ claude --version
 - The repository currently has no application code, test code, package manager manifest, or build scripts; do not assume any npm / pnpm / bun workflow exists.
 - This is a marketplace/plugin repository. Prefer preserving the existing hierarchy of “marketplace manifest → plugin metadata → skill directory”, with optional plugin-level references, agents, and scripts when a plugin needs them.
 - Dev-stack skill-forge review state is file-backed only under ignored `.skill-forge/<run>/` directories. It is not a daemon, runtime service, background worker, or external state store.
-- Nuclio MVP deliberately does not add runtime hooks, daemon behavior, MCP server integration, project-local `.claude/` installation, or `.nuclio/` runtime state. Its current source of truth is the file-backed `.dev-docs` protocol documented under `plugins/nuclio-plugin/references/`.
+- Nuclio deliberately does not add runtime hooks, daemon behavior, MCP server integration, project-local `.claude/` installation, or `.nuclio/` runtime state. Its source of truth is the file-backed `.dev-docs/changes/<change-id>/` Contract Workbench protocol documented under `plugins/nuclio-plugin/references/`.

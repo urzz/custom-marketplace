@@ -1,9 +1,0 @@
-{
-  "name": "nuclio-next",
-  "description": "Use when a project needs an independent development-stage init/work/finish file-backed Contract Workbench with explicit Contract and Finish gates before any product mutation or long-term knowledge update",
-  "version": "0.1.0",
-  "author": {
-    "name": "Jade Liu",
-    "email": "[redacted-email]"
-  }
-}

@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nuclio.local/schemas/context.schema.json",
+  "title": "Nuclio Context JSONL Entry",
+  "description": "Shape schema for each .dev-docs/changes/<change-id>/context.jsonl line; helper scripts validate path normalization, budget meaning and fingerprint identity fail closed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "audience",
+    "mode",
+    "path",
+    "reason"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "audience": {
+      "enum": [
+        "contract",
+        "worker",
+        "reviewer",
+        "completion",
+        "finish"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "stable",
+        "jit"
+      ]
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "^/"
+          },
+          {
+            "pattern": "(^|/)\\.\\.(/|$)"
+          },
+          {
+            "pattern": "[*?\\[\\]{}]"
+          },
+          {
+            "pattern": "^~"
+          },
+          {
+            "enum": [
+              ".",
+              "./",
+              "",
+              "docs",
+              "src",
+              "plugins",
+              ".dev-docs"
+            ]
+          }
+        ]
+      }
+    },
+    "reason": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "line_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "retrieval_trigger": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "budget": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "stable"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "required": [
+          "sha256"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "retrieval_trigger"
+              ]
+            },
+            {
+              "required": [
+                "budget"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "jit"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "required": [
+          "retrieval_trigger",
+          "budget"
+        ],
+        "not": {
+          "required": [
+            "sha256"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
