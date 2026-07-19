@@ -129,4 +129,4 @@ Hard unknown blocker 必须包含：
 - ownership 或文件范围写入 Task `mutation_targets`。
 - migration 选择写入 `migration_or_rollout.opt_in` 或 blocker。
 
-Controller 不得把 chat history 当作长期 authority。只有写入 `.dev-docs/contract.yaml` 并通过 helper identity 绑定的回答，才能参与 Contract Gate freshness。
+Controller 不得把 chat history 当作长期 authority。只有写入 `CHANGE_ROOT=.dev-docs/changes/<change-id>` 下的 `CHANGE_ROOT/contract.yaml` 并通过 helper identity 绑定的回答，才能参与 Contract Gate freshness。

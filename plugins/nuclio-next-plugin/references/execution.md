@@ -1,6 +1,6 @@
 # Execution
 
-本协议定义 Nuclio Next 的 `work` 执行闭环。它只消费 `authority.md`、`lifecycle.md`、`contract.md`、`context.md`、`packet.schema.json`、`evidence.schema.json` 与 `state.schema.json` 中已固定的术语：`.dev-docs/` 是唯一事实源，helper `next action` 是路由 authority，`mutation_targets` 是唯一写授权，agent claim 不能跳转状态。
+本协议定义 Nuclio Next 的 `work` 执行闭环。它只消费 `authority.md`、`lifecycle.md`、`contract.md`、`context.md`、`packet.schema.json`、`evidence.schema.json` 与 `state.schema.json` 中已固定的术语：`.dev-docs/` 是唯一事实源，`CHANGE_ROOT=.dev-docs/changes/<change-id>` 是 active change authority 根，helper `next action` 是路由 authority，`mutation_targets` 是唯一写授权，agent claim 不能跳转状态。
 
 ## Contents
 
@@ -16,10 +16,10 @@
 
 ## 执行入口
 
-`work` 只能在 helper 判断 `.dev-docs/state.json` 的 `status` 为 `ready_to_execute` 或合法的 `executing` resume 时进入执行。进入前必须重新读取并校验：
+`work` 只能在 helper 判断 `CHANGE_ROOT/state.json` 的 `status` 为 `ready_to_execute` 或合法的 `executing` resume 时进入执行。进入前必须重新读取并校验：
 
-- `.dev-docs/contract.yaml` 的 hash 与 `state.contract.sha256` 一致。
-- `.dev-docs/context.jsonl` 的 fingerprint 与 `state.context.fingerprint` 一致。
+- `CHANGE_ROOT/contract.yaml` 的 hash 与 `state.contract.sha256` 一致。
+- `CHANGE_ROOT/context.jsonl` 的 fingerprint 与 `state.context.fingerprint` 一致。
 - Contract Gate ledger 为 fresh approval，且绑定当前 `contract_sha256`、`context_fingerprint` 与 `state_version`。
 - 当前 Task 的 `mutation_targets` 与 packet `ownership` 一致。
 - 当前工作区 dirty state 与 packet `range.expected_dirty_state` 一致。
@@ -72,7 +72,7 @@ Task 不能因为 implementer、fixer 或 reviewer 的自然语言 claim 直接�
 
 如果 Contract、context fingerprint、state version、Task ownership、dirty state 或 packet snapshot 改变，旧 packet stale。stale packet 的输出只能作为诊断 context，不得作为 mutation、review 或 completion authority。
 
-Evidence 必须写入可复现 identity：`base_head`、`new_head`、`changed_paths`、`ownership_sha256`、check command、exit code、output hash 与相关 excerpt。raw transcript、terminal scrollback 和 agent summary 不得进入 authority 字段。
+Evidence 必须写入可复现 identity：`base_head`、`new_head`、`changed_paths`、`ownership_sha256`、check command、exit code、output hash 与相关 excerpt。Task evidence 位于 `CHANGE_ROOT/evidence/tasks/<task-id>/...`，completion evidence 位于 `CHANGE_ROOT/evidence/completion.md`；如 execution 需要临时研究记录，只能写入 `CHANGE_ROOT/research/`。raw transcript、terminal scrollback 和 agent summary 不得进入 authority 字段。
 
 ## 角色边界
 
@@ -87,7 +87,7 @@ Controller 不直接 patch 产品是硬边界。若执行需要 Controller 手�
 
 ## Fix budget
 
-同 owner 的 task、final、validation blocking finding 共享一个 `maximum=2` 修复预算。预算由 helper 在 `.dev-docs/state.json` 的 `fix_budgets` 中记录并计算。
+同 owner 的 task、final、validation blocking finding 共享一个 `maximum=2` 修复预算。预算由 helper 在 `CHANGE_ROOT/state.json` 的 `fix_budgets` 中记录并计算。
 
 预算规则：
 

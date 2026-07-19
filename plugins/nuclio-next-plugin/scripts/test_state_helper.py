@@ -37,13 +37,13 @@ def load_helper():
 
 
 def contract_identity(**overrides):
-    identity = {"path": ".dev-docs/contract.yaml", "sha256": A_HASH, "version": "v1", "change_id": "change-alpha"}
+    identity = {"path": ".dev-docs/changes/change-alpha/contract.yaml", "sha256": A_HASH, "version": "v1", "change_id": "change-alpha"}
     identity.update(overrides)
     return identity
 
 
 def context_identity(**overrides):
-    identity = {"path": ".dev-docs/context.jsonl", "fingerprint": B_HASH, "entries": ["contract-ref", "worker-ref"]}
+    identity = {"path": ".dev-docs/changes/change-alpha/context.jsonl", "fingerprint": B_HASH, "entries": ["contract-ref", "worker-ref"]}
     identity.update(overrides)
     return identity
 

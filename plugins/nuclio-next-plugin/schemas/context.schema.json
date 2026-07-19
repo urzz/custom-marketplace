@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nuclio-next.local/schemas/context.schema.json",
   "title": "Nuclio Next Context JSONL Entry",
-  "description": "Shape schema for each .dev-docs/context.jsonl line; helper scripts validate path normalization, budget meaning and fingerprint identity fail closed.",
+  "description": "Shape schema for each .dev-docs/changes/<change-id>/context.jsonl line; helper scripts validate path normalization, budget meaning and fingerprint identity fail closed.",
   "type": "object",
   "additionalProperties": false,
   "required": [

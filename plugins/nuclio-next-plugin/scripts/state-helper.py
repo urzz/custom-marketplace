@@ -13,8 +13,8 @@ Nuclio Next deterministic state transition helper.
 - [Completion and Finish transitions](#completion-and-finish-transitions)
 - [CLI](#cli)
 
-The helper is the only writer for `.dev-docs/state.json`. It never edits
-contract, context, evidence, product or knowledge files. Every mutation uses an
+The helper is the only writer for `.dev-docs/changes/<change-id>/state.json`.
+It never edits contract, context, evidence, product or knowledge files. Every mutation uses an
 optimistic expected state version and an atomic temporary-file replace. Invalid
 transport, stale artifact identity, illegal observation and invalid transition
 errors fail closed; budget is consumed only by a valid fixer authorization.

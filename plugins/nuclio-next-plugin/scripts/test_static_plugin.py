@@ -29,7 +29,21 @@ REFERENCES = PLUGIN / "references"
 MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 OLD_LIFECYCLE = {"project-init", "brief", "design", "implement", "verify", "fold"}
 NEW_LIFECYCLE = {"init", "work", "finish"}
-CHANGE_AUTHORITY_REFERENCES = ["authority.md", "lifecycle.md", "finish.md", "migration.md", "eval-prompts.md"]
+CHANGE_AUTHORITY_REFERENCES = ["authority.md", "lifecycle.md", "execution.md", "finish.md", "grill-protocol.md", "migration.md", "eval-prompts.md"]
+ACTIVE_ROOT_ARTIFACT_RE = re.compile(
+    r"(?<!changes/<change-id>/)\.dev-docs/"
+    r"(contract\.yaml|context\.jsonl|state\.json|completion\.md|decision\.md|finish-apply\.md)"
+)
+ACTIVE_AUTHORITY_TERMS_RE = re.compile(
+    r"\b(authority|authoritative|artifact|state|contract|context|evidence|completion|decision|finish|Gate|fresh|helper|allowed_writes|mutation_targets|writes?|writer|read|validate|identity|path|fixture)\b|"
+    r"事实源|授权|写入|读取|校验|验证|状态|合约|证据|新鲜|路径|夹具"
+)
+EXPLICIT_NEGATIVE_OR_LEGACY_RE = re.compile(
+    r"#\s*explicit negative fixture:|self\.assertNot(?:In|Regex)\(",
+    re.I,
+)
+LEGACY_SOURCE_PATH_RE = re.compile(r"\blegacy source path\b|\blegacy artifact path\b", re.I)
+LEGAL_PROJECT_LEVEL_RE = re.compile(r"\.dev-docs/(index\.md|changes/index\.md|knowledge/|archive/)")
 HEX = {
     "a": "a" * 64,
     "b": "b" * 64,
@@ -288,7 +302,7 @@ class StaticPluginTests(unittest.TestCase):
         forbidden = [
             "CHANGE_ROOT/finish-apply.md",
             ".dev-docs/changes/<change-id>/finish-apply.md",
-            ".dev-docs/finish-apply.md",
+            ".dev-docs/finish-apply.md",  # explicit negative fixture: forbidden project-root finish apply evidence
         ]
 
         entry_guard = re.search(r"(?is)## Entry guard(?P<section>.*?)(?:\n## |\Z)", finish).group("section")
@@ -327,7 +341,7 @@ class StaticPluginTests(unittest.TestCase):
                 with self.subTest(text=label, forbidden=bad_path):
                     self.assertNotIn(bad_path, text)
 
-    def test_references_and_eval_use_change_local_authority_paths(self):
+    def test_whole_plugin_contract_surfaces_use_change_local_authority_paths(self):
         required_paths = [
             "CHANGE_ROOT=.dev-docs/changes/<change-id>",
             "CHANGE_ROOT/contract.yaml",
@@ -338,21 +352,100 @@ class StaticPluginTests(unittest.TestCase):
             "CHANGE_ROOT/evidence/decision.md",
             "CHANGE_ROOT/evidence/finish-apply.md",
         ]
-        forbidden_project_root = re.compile(
-            r"(?<!changes/<change-id>/)\.dev-docs/(contract\.yaml|context\.jsonl|state\.json|completion\.md|decision\.md|finish-apply\.md)"
-        )
+        authority_corpus = "\n".join(read_text(REFERENCES / filename) for filename in CHANGE_AUTHORITY_REFERENCES)
+        for needle in required_paths:
+            with self.subTest(surface="reference corpus", needle=needle):
+                self.assertIn(needle, authority_corpus)
         for filename in CHANGE_AUTHORITY_REFERENCES:
             text = read_text(REFERENCES / filename)
             with self.subTest(reference=filename, needle="CHANGE_ROOT declaration"):
                 self.assertIn(required_paths[0], text)
-            for needle in required_paths[1:]:
-                with self.subTest(reference=filename, needle=needle):
-                    self.assertIn(needle, text)
-            for line in text.splitlines():
-                if "legacy source" in line.lower() or "旧" in line or "baseline" in line.lower():
+
+        schema_text = "\n".join(
+            json.dumps(load_json(path), ensure_ascii=False)
+            for path in sorted((PLUGIN / "schemas").glob("*.json"))
+        )
+        for needle in [
+            ".dev-docs/changes/<change-id>/contract.yaml",
+            ".dev-docs/changes/<change-id>/context.jsonl",
+            ".dev-docs/changes/<change-id>/state.json",
+        ]:
+            with self.subTest(surface="schemas", needle=needle):
+                self.assertIn(needle, schema_text)
+
+        state_helper = read_text(SCRIPTS / "state-helper.py")
+        self.assertIn(".dev-docs/changes/<change-id>/state.json", state_helper)
+        helper_fixture_text = read_text(SCRIPTS / "test_packet_helper.py") + "\n" + read_text(SCRIPTS / "test_state_helper.py")
+        for needle in [
+            ".dev-docs/changes/change-alpha/contract.yaml",
+            ".dev-docs/changes/change-alpha/context.jsonl",
+        ]:
+            with self.subTest(surface="helper fixtures", needle=needle):
+                self.assertIn(needle, helper_fixture_text)
+
+        violations = []
+        for path in all_plugin_text_files():
+            text = read_text(path)
+            for number, line in enumerate(text.splitlines(), 1):
+                if not ACTIVE_ROOT_ARTIFACT_RE.search(line):
                     continue
-                with self.subTest(reference=filename, line=line):
-                    self.assertNotRegex(line, forbidden_project_root)
+                if LEGAL_PROJECT_LEVEL_RE.search(line):
+                    continue
+                if EXPLICIT_NEGATIVE_OR_LEGACY_RE.search(line):
+                    continue
+                if path == REFERENCES / "migration.md" and LEGACY_SOURCE_PATH_RE.search(line):
+                    continue
+                if ACTIVE_AUTHORITY_TERMS_RE.search(line):
+                    violations.append(f"{path.relative_to(PLUGIN)}:{number}:{line.strip()}")
+        self.assertEqual(violations, [], "positive project-root active authority paths found")
+
+    def test_authority_scan_exemptions_do_not_hide_positive_project_root_authority(self):
+        root = ".dev-docs/"
+        positive_lines = [
+            f"Positive authority, not a negative fixture: helper reads `{root}state.json` as fresh Contract authority.",
+            f"Positive authority in migration discussion: helper validates `{root}contract.yaml` as active contract artifact.",
+            f"Positive authority, legacy mention only: `{root}context.jsonl` is the active context path.",
+            f"Positive authority with invalid wording: helper treats `{root}completion.md` as fresh completion evidence.",
+            f"Positive authority with rejection wording: helper writes `{root}decision.md` after Gate accept.",
+        ]
+        for line in positive_lines:
+            with self.subTest(line=line):
+                active = bool(ACTIVE_ROOT_ARTIFACT_RE.search(line))
+                exempt = bool(EXPLICIT_NEGATIVE_OR_LEGACY_RE.search(line))
+                legacy_source = bool(LEGACY_SOURCE_PATH_RE.search(line))
+                authority = bool(ACTIVE_AUTHORITY_TERMS_RE.search(line))
+                self.assertTrue(active)
+                self.assertTrue(authority)
+                self.assertFalse(exempt)
+                self.assertFalse(legacy_source)
+                self.assertTrue(active and not exempt and not legacy_source and authority)
+
+    def test_authority_scan_allows_structural_negative_fixture_and_legal_project_level_cases(self):
+        root = ".dev-docs/"
+        negative_fixture_lines = [
+            'forbidden = [".dev-docs/finish-apply.md"]  # explicit negative fixture: forbidden project-root finish apply evidence',
+            'self.assertNotIn(".dev-docs/state.json", rows[case_id]["allowed_writes"])',
+        ]
+        for line in negative_fixture_lines:
+            with self.subTest(kind="negative fixture", line=line):
+                self.assertTrue(ACTIVE_ROOT_ARTIFACT_RE.search(line))
+                self.assertTrue(EXPLICIT_NEGATIVE_OR_LEGACY_RE.search(line))
+
+        legal_project_level_lines = [
+            "Project index authority remains `.dev-docs/index.md` for fact-source bootstrap.",
+            "Knowledge writes may target `.dev-docs/knowledge/product.md` after fresh Finish approval.",
+            "The active change index is `.dev-docs/changes/index.md`.",
+            "Approved archive target `.dev-docs/archive/change.json` is legal after Finish accept.",
+        ]
+        for line in legal_project_level_lines:
+            with self.subTest(kind="legal project level", line=line):
+                self.assertTrue(LEGAL_PROJECT_LEVEL_RE.search(line))
+                self.assertFalse(ACTIVE_ROOT_ARTIFACT_RE.search(line))
+
+        legacy_source_line = f"Migration may read a user-selected legacy source path `{root}state.json` only to produce CHANGE_ROOT/state.json."
+        self.assertTrue(ACTIVE_ROOT_ARTIFACT_RE.search(legacy_source_line))
+        self.assertTrue(LEGACY_SOURCE_PATH_RE.search(legacy_source_line))
+        self.assertTrue(ACTIVE_AUTHORITY_TERMS_RE.search(legacy_source_line))
 
     def test_eval_owner_routing_keeps_contract_work_out_of_init(self):
         eval_prompts = read_text(REFERENCES / "eval-prompts.md")

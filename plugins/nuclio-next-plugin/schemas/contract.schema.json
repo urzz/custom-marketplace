@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nuclio-next.local/schemas/contract.schema.json",
   "title": "Nuclio Next Contract",
-  "description": "Shape schema for .dev-docs/contract.yaml after YAML parsing; helper scripts validate graph, ownership, path and budget semantics fail closed.",
+  "description": "Shape schema for .dev-docs/changes/<change-id>/contract.yaml after YAML parsing; helper scripts validate graph, ownership, path and budget semantics fail closed.",
   "type": "object",
   "additionalProperties": false,
   "required": [
