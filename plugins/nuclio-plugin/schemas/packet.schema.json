@@ -12,7 +12,8 @@
     "change_id",
     "contract_sha256",
     "context_fingerprint",
-    "state_version"
+    "state_version",
+    "output_language"
   ],
   "properties": {
     "schema_version": {
@@ -117,6 +118,9 @@
     },
     "archive_intent": {
       "$ref": "#/$defs/non_empty_string"
+    },
+    "output_language": {
+      "$ref": "#/$defs/language_tag"
     }
   },
   "allOf": [
@@ -669,7 +673,9 @@
       "additionalProperties": false,
       "required": [
         "path",
-        "before_sha256"
+        "before_sha256",
+        "target_language",
+        "language_source"
       ],
       "properties": {
         "path": {
@@ -677,6 +683,12 @@
         },
         "before_sha256": {
           "$ref": "#/$defs/sha256_or_null"
+        },
+        "target_language": {
+          "$ref": "#/$defs/language_tag"
+        },
+        "language_source": {
+          "$ref": "#/$defs/language_source"
         }
       }
     },
@@ -693,6 +705,18 @@
       "not": {
         "pattern": "(^/|(^|/)\\.\\.(/|$)|/$)"
       }
+    },
+    "language_tag": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8})*$"
+    },
+    "language_source": {
+      "enum": [
+        "contract_output_language",
+        "existing_target",
+        "user_confirmed"
+      ]
     }
   }
 }

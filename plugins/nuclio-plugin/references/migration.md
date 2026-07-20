@@ -77,7 +77,7 @@ Preview 必须包含：
 - blockers：字段级缺失、冲突、stale、ownership unknown 或 validation impossible。
 - apply plan：将要创建的新 artifacts、不会覆盖的 legacy artifacts、rollback/stop 行为。
 
-Preview 必须显式标注哪些字段不能从 legacy 推导。不能为了让 preview 看起来完整而填入 guessed authority。
+Preview 必须显式标注哪些字段不能从 legacy 推导。不能为了让 preview 看起来完整而填入 guessed authority。`contract.output_language` 只能从 legacy 中明确存在且受支持的 language authority 映射，例如 `brief.md` frontmatter 的 `output_language`；缺失、空值、格式非法或多个 source 冲突时必须产生字段级 blocker，不得根据聊天历史、当前用户语言、正文语言或文件路径猜测。
 
 ## Apply
 
@@ -109,6 +109,7 @@ Preview 至少必须覆盖以下 Nuclio 字段，且逐项说明 source 或 bloc
 - `schema_version`
 - `change_id`
 - `contract_version`
+- `output_language`
 - `intent.goals`
 - `intent.non_goals`
 - `intent.confirmed_answers`
@@ -184,6 +185,7 @@ Preview 至少必须覆盖以下 Nuclio 字段，且逐项说明 source 或 bloc
 以下字段或情况缺失时必须产生字段级 blocker，且不生成部分 authority：
 
 - 无法确定 `change_id`。
+- 无法从显式 legacy authority 映射 `output_language`。
 - 无法确定 `mutation_targets` 或 ownership。
 - 缺 acceptance 或 constraints。
 - 缺 rollback 或 validation checks。
@@ -222,7 +224,7 @@ Migration 禁止：
 - 覆盖或删除 legacy 文件。
 - 修改产品代码。
 - 从 raw transcript、chat history 或 agent summary 恢复 authority。
-- 猜测 ownership、approval、freshness、acceptance 或 validation。
+- 猜测 ownership、approval、freshness、acceptance、validation 或 output_language。
 - 将旧 workflow 名称写成 Nuclio canonical lifecycle。
 - 在 authority 字段缺失时继续执行 work。
 - 将 migration target authority 写到 project-root `.dev-docs/` change artifacts；target contract/context/state/research/evidence 必须位于 selected `CHANGE_ROOT`。

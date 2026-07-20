@@ -47,6 +47,8 @@ NEXT_ACTIONS = {
 TASK_STATUSES = {"pending", "ready", "implementing", "reviewing", "fixing", "completed", "blocked", "rejected"}
 STATE_STATUSES = {"idle", "drafting_contract", "contract_pending", "ready_to_execute", "executing", "completing", "decision_pending", "folding", "archived", "repair_required", "context_stale", "deferred", "rejected"}
 FINISH_DECISIONS = {"accept", "request_changes", "defer", "reject"}
+CONTRACT_APPROVAL_ALIASES = {"approve": "approve", "批准": "approve", "同意": "approve", "继续": "approve"}
+FINISH_DECISION_ALIASES = {"accept": "accept", "同意": "accept", "request_changes": "request_changes", "要求修改": "request_changes", "defer": "defer", "暂缓": "defer", "reject": "reject", "拒绝": "reject"}
 HASH_RE = "0123456789abcdef"
 
 
@@ -80,6 +82,13 @@ def _non_empty(value: Any, where: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ProtocolError("INVALID_INPUT", f"{where} must be a non-empty string")
     return value.strip()
+
+
+def _normalize_exact_alias(value: Any, aliases: dict[str, str], where: str, code: str, message: str) -> str:
+    token = _non_empty(value, where)
+    if token not in aliases:
+        raise ProtocolError(code, message)
+    return aliases[token]
 
 
 def _require_object(value: Any, where: str) -> dict[str, Any]:
@@ -404,11 +413,12 @@ def approve_contract(path: str | Path, expected_version: int, contract: dict[str
     approval = _require_object(approval, "approval")
     approval_id = _non_empty(approval.get("approval_id"), "approval.approval_id")
     approved_at = _non_empty(approval.get("approved_at"), "approval.approved_at")
-    if not _non_empty(approval.get("token"), "approval.token"):
-        raise ProtocolError("MISSING_APPROVAL", "explicit approval token is required")
+    approval_token = _normalize_exact_alias(approval.get("token"), CONTRACT_APPROVAL_ALIASES, "approval.token", "INVALID_CONTRACT_APPROVAL", "approval token must be exact approve/批准/同意/继续")
     after = copy.deepcopy(before)
     after["status"] = "ready_to_execute"
-    after["gates"]["contract"] = {"status": "approved", "artifact_sha256": contract_id["sha256"], "context_fingerprint": context_id["fingerprint"], "state_version": before["state_version"], "approval_id": approval_id, "approved_at": approved_at, "notes": canonical_json({k: v for k, v in approval.items() if k not in {"approval_id", "approved_at"}})}
+    notes = {k: v for k, v in approval.items() if k not in {"approval_id", "approved_at"}}
+    notes["token"] = approval_token
+    after["gates"]["contract"] = {"status": "approved", "artifact_sha256": contract_id["sha256"], "context_fingerprint": context_id["fingerprint"], "state_version": before["state_version"], "approval_id": approval_id, "approved_at": approved_at, "notes": canonical_json(notes)}
     return _commit(path, before, after, "CONTRACT_APPROVED", artifact_sha256=contract_id["sha256"])
 
 
@@ -685,8 +695,7 @@ def finish_decision(path: str | Path, expected_version: int, decision: str, meta
     _check_version(before, expected_version)
     if before["status"] != "decision_pending" or "completion" not in before or "decision" not in before:
         raise ProtocolError("DECISION_NOT_PENDING", "Finish decision is not pending")
-    if decision not in FINISH_DECISIONS:
-        raise ProtocolError("INVALID_FINISH_DECISION", "decision must be exact accept/request_changes/defer/reject")
+    decision = _normalize_exact_alias(decision, FINISH_DECISION_ALIASES, "decision", "INVALID_FINISH_DECISION", "decision must be exact accept/request_changes/defer/reject or 同意/要求修改/暂缓/拒绝")
     metadata_in = _require_object(metadata_in, "decision metadata")
     after = copy.deepcopy(before)
     generated_decision = _require_object(before.get("decision"), "generated decision")

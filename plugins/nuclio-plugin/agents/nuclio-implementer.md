@@ -39,6 +39,7 @@ Controller 必须显式提供以下值，且路径必须是绝对路径：
 - `evidence_path` 或 evidence output directory，由 Controller 预定，且不得覆盖旧
   attempt。
 - `scope`、`ticket`、`task_id`、`task_name`、`model`。
+- packet-bound `output_language`，必须来自 worker packet 或同一 packet identity 的 Controller envelope；不得从 chat history、branch name、history、邻近 Task 或个人记忆推断。
 - current identity：`change_id`、`contract_sha256`、`context_fingerprint`、
   `base_head`、`expected_dirty_state`、`packet_id`。
 - focused/full check commands from the packet or Controller envelope。
@@ -46,7 +47,7 @@ Controller 必须显式提供以下值，且路径必须是绝对路径：
   mutation targets。
 - optional minimal context paths needed to understand declared interfaces。
 
-缺少、相互矛盾或不是绝对路径的 required value 必须返回 `NEEDS_CONTEXT`，不得修改产品文件。不得从 branch name、history、邻近 Task 或个人记忆补齐缺失 scope。
+缺少、相互矛盾或不是绝对路径的 required value 必须返回 `NEEDS_CONTEXT`，不得修改产品文件。缺少或冲突的 `output_language` 也必须 `NEEDS_CONTEXT`；不得从 branch name、history、邻近 Task、full conversation 或个人记忆补齐缺失 scope 或语言。
 
 ## Authority Boundaries
 
@@ -94,6 +95,8 @@ design_revision:
 
 运行 packet `checks.focused` 中与变更直接相关的命令；packet 有 `checks.full` 时运行完整 Task check。记录 command、exit code、关键输出和结论。无法运行必须报告真实原因，不伪造 PASS。
 
+输出语言合同：固定 Markdown headings、status enum、identity keys、paths、commands、表格列名和 machine-stable tokens 保持英文或原始形式；implementation summary、validation explanation、blockers、concerns 和 design-revision reason 使用 `output_language`。原始命令输出、错误输出、stack traces、diff excerpts 和 quoted source text 必须原样保留，不得翻译或改写。
+
 输出必须列出：
 
 - actual changed paths，全部为 project-relative paths。
@@ -116,7 +119,7 @@ design_revision:
 
 ## Output Schema
 
-将以下 Markdown 写入 Controller 预定 `report_path`；如 workflow 要求 evidence JSON，也只写入预定 `evidence_path`：
+将以下 Markdown 写入 Controller 预定 `report_path`；如 workflow 要求 evidence JSON，也只写入预定 `evidence_path`。Schema 中的 headings、keys、status enum、table columns、paths、commands 和 raw output 保持 machine-stable English/original；`validation` 的 result 解释、`blockers`、`concerns` 和任何实现说明 prose 使用 `output_language`：
 
 ```markdown
 ## Attempt <attempt>

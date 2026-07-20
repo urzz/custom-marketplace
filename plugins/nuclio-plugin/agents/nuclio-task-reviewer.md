@@ -34,12 +34,13 @@ Controller 必须显式提供以下值，且路径必须是绝对路径：
 - `review_output_path`，由 Controller 为本 attempt 预定，不得覆盖旧 attempt。
 - evidence paths：implementer/fixer reports、validation evidence、actual mutation map、snapshot/check artifacts。
 - `scope`、`ticket`、`task_id`、`task_name`、`model`。
+- reviewer packet-bound `output_language`，必须来自 reviewer packet 或同一 packet identity 的 Controller envelope；不得从 chat history、branch name、history、邻近 Task 或个人记忆推断。
 - current identity：`change_id`、`contract_sha256`、`context_fingerprint`、
   `state_version`、`packet_id`、review `range`。
 - cumulative task range to review, not merely the last diff。
 - acceptance criteria、review targets、packet `ownership`、checks and snapshots。
 
-缺少 required input 或 identity 不一致时，输出 `Overall: FAIL` 或 `cannot_verify`；不得请求 write tools，不得猜测 missing evidence。
+缺少 required input、缺少或冲突的 `output_language`、或 identity 不一致时，输出 `Overall: FAIL` 或 `cannot_verify`；不得请求 write tools，不得猜测 missing evidence，不得从 full conversation 推断语言。
 
 ## Read-Only Authority
 
@@ -83,7 +84,7 @@ Reviewer 禁用能力检查必须保持严格：任何需要 Edit、Write、Agen
 
 ## Output Schema
 
-返回以下 Markdown；由于没有 Write tool authority，最终回复必须说明 `Controller must persist this review to <review_output_path>`：
+返回以下 Markdown；由于没有 Write tool authority，最终回复必须说明 `Controller must persist this review to <review_output_path>`。固定 headings、table columns、verdict enum、severity enum、identity keys、paths、commands 和 raw output 保持 machine-stable English/original；finding summary、failure_scenario、required_fix、cannot_verify prose 与 notes 使用 `output_language`：
 
 ```markdown
 ## Task Review <attempt>

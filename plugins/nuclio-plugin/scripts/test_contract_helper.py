@@ -33,6 +33,7 @@ def contract_text(extra=""):
     schema_version: 1
     change_id: change-alpha
     contract_version: v1
+    output_language: zh-CN
     intent:
       goals:
         - Ship deterministic helpers
@@ -281,6 +282,20 @@ context_policy:""",
         self.assertEqual(self.helper.build_identity(compact)["sha256"], self.helper.build_identity(noisy)["sha256"])
         changed = self.load(contract_text().replace("Helpers validate contracts", "Helpers validate changed contracts"))
         self.assertNotEqual(self.helper.build_identity(compact)["sha256"], self.helper.build_identity(changed)["sha256"])
+
+    def test_output_language_is_required_validated_summarized_and_identity_authority(self):
+        zh = self.load(contract_text().replace("output_language: zh-CN", "output_language: zh-CN"))
+        en = self.load(contract_text().replace("output_language: zh-CN", "output_language: en"))
+        self.assertEqual(zh["output_language"], "zh-CN")
+        self.assertEqual(en["output_language"], "en")
+        self.assertEqual(self.helper.build_summary(zh)["output_language"], "zh-CN")
+        self.assertNotEqual(self.helper.build_identity(zh)["sha256"], self.helper.build_identity(en)["sha256"])
+        missing = contract_text().replace("output_language: zh-CN\n", "")
+        self.assert_contract_error(missing, "INVALID_CONTRACT_SHAPE")
+        for invalid in ["", " zh-CN", "zh-CN ", "not a language tag!", "中文"]:
+            with self.subTest(invalid=invalid):
+                body = contract_text().replace("output_language: zh-CN", f"output_language: {invalid!r}")
+                self.assert_contract_error(body, "INVALID_OUTPUT_LANGUAGE")
 
     def test_cli_error_envelope(self):
         path = self.write_contract(contract_text().replace("dependencies: []", "dependencies:\n          - NOPE"))

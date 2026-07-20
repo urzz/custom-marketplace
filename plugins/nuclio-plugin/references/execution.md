@@ -67,10 +67,11 @@ Task 不能因为 implementer、fixer 或 reviewer 的自然语言 claim 直接�
 - `contract_sha256`
 - `context_fingerprint`
 - `state_version`
+- `output_language`
 - `packet_id`
 - Task `ownership` 或 completion `mutation_map_sha256`
 
-如果 Contract、context fingerprint、state version、Task ownership、dirty state 或 packet snapshot 改变，旧 packet stale。stale packet 的输出只能作为诊断 context，不得作为 mutation、review 或 completion authority。
+如果 Contract、context fingerprint、state version、Contract-bound `output_language`、Task ownership、dirty state 或 packet snapshot 改变，旧 packet stale。stale packet 的输出只能作为诊断 context，不得作为 mutation、review、fix 或 completion authority。Agent 不得从 chat history、branch、locale 或 adjacent Task reports 自行推断语言；缺少或冲突的 packet-bound `output_language` 必须 fail closed。
 
 Evidence 必须写入可复现 identity：`base_head`、`new_head`、`changed_paths`、`ownership_sha256`、check command、exit code、output hash 与相关 excerpt。Task evidence 位于 `CHANGE_ROOT/evidence/tasks/<task-id>/...`，completion evidence 位于 `CHANGE_ROOT/evidence/completion.md`；如 execution 需要临时研究记录，只能写入 `CHANGE_ROOT/research/`。raw transcript、terminal scrollback 和 agent summary 不得进入 authority 字段。
 
@@ -127,6 +128,7 @@ Completion critic packet `role` 为 `completion`，必须包含：
 - 当前 `contract_sha256`
 - 当前 `context_fingerprint`
 - 当前 `state_version`
+- 当前 Contract-bound `output_language`
 
 Completion critic 只读检查：
 
@@ -150,4 +152,4 @@ Completion critic 只读检查：
 - blocking findings、fix budget used/remaining、是否需要 HALT。
 - 所有 Tasks 完成后的 completion proposal 与 remaining risks。
 
-Controller 可以解释风险和建议，但不能把解释写成 authority。产品 mutation、长期知识写入和 archive 仍分别受 fresh Contract approval 与 fresh Finish approval 约束。
+Controller 可以解释风险和建议，但不能把解释写成 authority。面向维护者的解释 prose 使用 packet-bound `output_language`；machine fields、固定 report headings、四个 decision top-level headings、enum、hash、path、command、raw output 保持 English/original。产品 mutation、长期知识写入和 archive 仍分别受 fresh Contract approval 与 fresh Finish approval 约束。

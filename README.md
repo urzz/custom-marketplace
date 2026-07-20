@@ -39,10 +39,13 @@ Dev-stack 的 `/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主
 Nuclio 的 Contract Workbench 行为还需要与以下内容保持一致：
 
 - `plugins/nuclio-plugin/skills/{init,work,finish}/SKILL.md`
-- `plugins/nuclio-plugin/references/*.md`
+- `plugins/nuclio-plugin/references/*.md`，特别是 `output-language.md` 与 authority/lifecycle/execution/finish/eval 协议
 - `plugins/nuclio-plugin/agents/*.md`
-- `plugins/nuclio-plugin/schemas/*.json`
-- `plugins/nuclio-plugin/scripts/*.py`
+- `plugins/nuclio-plugin/schemas/*.json`，包括 Contract、packet、state、evidence 中的语言与 identity 字段
+- `plugins/nuclio-plugin/scripts/*.py`，包括 contract/context/state/packet/evidence/migration helpers 及对应 `test_*.py`
+- `plugins/nuclio-plugin/references/eval-prompts.md` 中的行为 eval cases
+
+Nuclio 的机器协议保持英文和稳定 token：schema keys、helper actions、state/decision enum、hash、路径、命令、固定 headings 与 raw output 不翻译；面向维护者的正文由 Contract-bound `output_language` 和 Finish target language metadata 控制。修改语言传播、Gate alias、packet schema、agent report、Finish apply 或 archive/knowledge 行为时，必须同步 references、schemas、helpers、tests 与 eval；不要修改 marketplace 注册来表达这类内部协议变化，也不要声称新增 runtime hook、daemon、MCP、项目本地 `.claude/` 安装或 `.nuclio/` state。
 
 ## 本地校验
 

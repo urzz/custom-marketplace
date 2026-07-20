@@ -55,8 +55,10 @@ def task_graph():
     ]
 
 
-def approval():
-    return {"approval_id": "approval-1", "approved_at": "2026-07-18T00:00:00Z", "approved_by": "user", "token": "approve"}
+def approval(token="approve", **overrides):
+    payload = {"approval_id": "approval-1", "approved_at": "2026-07-18T00:00:00Z", "approved_by": "user", "token": token}
+    payload.update(overrides)
+    return payload
 
 
 def impl(task_id="T1", head="head-1", implementation_sha256=E_HASH, packet_sha256=None, base_head="base-1"):
@@ -96,8 +98,8 @@ class StateHelperTests(unittest.TestCase):
     def read_state(self):
         return json.loads(self.state_path.read_text(encoding="utf-8"))
 
-    def approve_contract(self, expected_version=1, contract=None, context=None):
-        return self.helper.approve_contract(self.state_path, expected_version, contract or contract_identity(), context or context_identity(), approval())
+    def approve_contract(self, expected_version=1, contract=None, context=None, approval_payload=None):
+        return self.helper.approve_contract(self.state_path, expected_version, contract or contract_identity(), context or context_identity(), approval_payload or approval())
 
     def complete_t1(self):
         version = self.read_state()["state_version"]
@@ -166,6 +168,24 @@ class StateHelperTests(unittest.TestCase):
         self.assertEqual(self.helper.next_action(state)["action"], "DISPATCH_IMPLEMENTER")
         self.assert_error(lambda: self.approve_contract(expected_version=1), "VERSION_MISMATCH")
 
+    def test_contract_approval_accepts_exact_aliases_and_persists_canonical_token(self):
+        for token in ("approve", "批准", "同意", "继续", "  同意\n"):
+            with self.subTest(token=token):
+                self.state_path.unlink(missing_ok=True)
+                self.init_state()
+                state = self.approve_contract(approval_payload=approval(token=token))
+                notes = json.loads(state["gates"]["contract"]["notes"])
+                self.assertEqual(notes["token"], "approve")
+                self.assertNotIn(str(token).strip(), state["history"][-1].get("reason", ""))
+
+    def test_contract_approval_rejects_non_exact_aliases_without_mutation(self):
+        for token in ("", "我同意", "同意。", "approve.", "request changes"):
+            with self.subTest(token=token):
+                self.state_path.unlink(missing_ok=True)
+                self.init_state()
+                code = "INVALID_CONTRACT_APPROVAL" if token else "INVALID_INPUT"
+                self.assert_error(lambda: self.approve_contract(approval_payload=approval(token=token)), code)
+
     def test_stale_contract_and_context_invalidate_without_auto_approval(self):
         self.init_state()
         with self.assertRaises(self.helper.ProtocolError) as contract_ctx:
@@ -176,7 +196,7 @@ class StateHelperTests(unittest.TestCase):
         self.assertEqual(state["gates"]["contract"]["status"], "stale")
         self.init_state()
         with self.assertRaises(self.helper.ProtocolError) as context_ctx:
-            self.approve_contract(context=context_identity(fingerprint=C_HASH))
+            self.approve_contract(context=context_identity(fingerprint=C_HASH), approval_payload=approval(token="同意"))
         self.assertEqual(context_ctx.exception.code, "STALE_CONTEXT")
         self.assertEqual(self.read_state()["status"], "context_stale")
         self.assertEqual(self.read_state()["gates"]["contract"]["status"], "stale")
@@ -309,7 +329,7 @@ class StateHelperTests(unittest.TestCase):
             lambda: self.helper.finish_decision(
                 self.state_path,
                 10,
-                "accept",
+                "同意",
                 {"decision_sha256": decision_sha, "expected_decision_state_version": 8, "finish_plan_sha256": F_HASH, "decided_at": "2026-07-18T03:00:00Z"},
             ),
             "STALE_DECISION",
@@ -323,6 +343,40 @@ class StateHelperTests(unittest.TestCase):
         self.assertEqual(state["status"], "ready_to_execute")
         self.assertEqual(state["gates"]["finish"]["status"], "stale")
         self.assertFalse(state["decision"]["approved"])
+
+    def test_finish_accepts_exact_aliases_and_persists_canonical_decision(self):
+        cases = [
+            ("accept", "accept", "folding"),
+            ("同意", "accept", "folding"),
+            ("  同意\n", "accept", "folding"),
+            ("request_changes", "request_changes", "ready_to_execute"),
+            ("要求修改", "request_changes", "ready_to_execute"),
+            ("defer", "defer", "deferred"),
+            ("暂缓", "defer", "deferred"),
+            ("reject", "reject", "rejected"),
+            ("拒绝", "reject", "rejected"),
+        ]
+        for token, canonical, expected_status in cases:
+            with self.subTest(token=token):
+                self.state_path.unlink(missing_ok=True)
+                self.init_state(); self.approve_contract(); self.start_completion_pass()
+                decision_sha = self.current_decision_sha()
+                metadata = {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "reason": "because", "decided_at": "2026-07-18T02:00:00Z"}
+                if canonical == "accept":
+                    metadata["expected_decision_state_version"] = 9
+                state = self.helper.finish_decision(self.state_path, 10, token, metadata)
+                self.assertEqual(state["status"], expected_status)
+                notes = json.loads(state["gates"]["finish"]["notes"])
+                self.assertEqual(notes["decision"], canonical)
+                self.assertEqual(state["history"][-1]["reason"], self.helper.canonical_json({**metadata, "decision": canonical}))
+
+    def test_finish_rejects_non_exact_aliases_without_mutation(self):
+        for token in ("继续", "我同意", "同意。", "request changes", "accept."):
+            with self.subTest(token=token):
+                self.state_path.unlink(missing_ok=True)
+                self.init_state(); self.approve_contract(); self.start_completion_pass()
+                decision_sha = self.current_decision_sha()
+                self.assert_error(lambda: self.helper.finish_decision(self.state_path, 10, token, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "expected_decision_state_version": 9, "decided_at": "2026-07-18T03:00:00Z"}), "INVALID_FINISH_DECISION")
 
     def test_finish_four_decisions_stale_decision_and_archive_gate(self):
         for decision, expected_status in [("defer", "deferred"), ("request_changes", "ready_to_execute"), ("reject", "rejected"), ("accept", "folding")]:

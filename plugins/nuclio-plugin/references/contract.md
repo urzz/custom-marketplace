@@ -1,12 +1,13 @@
 # Contract
 
-`contract.yaml` 描述一个 change 的 approved execution contract。其 authority 规则短引用 `authority.md`：`.dev-docs/` 是事实源，artifact existence 不是 approval，Contract approval 必须 fresh，`mutation_targets` 是唯一写授权。
+`contract.yaml` 描述一个 change 的 approved execution contract。其 authority 规则短引用 `authority.md`：`.dev-docs/` 是事实源，artifact existence 不是 approval，Contract approval 必须 fresh，`mutation_targets` 是唯一写授权。机器稳定部分保持原始 protocol token，包括 schema keys、JSON/YAML 字段名、状态枚举、helper action、命令、路径、类名、错误原文与固定协议 section heading；`output_language` 只约束面向维护者的自然语言正文，不翻译这些机器字段或历史 evidence。
 
 ## 顶层字段
 
 - `schema_version`：contract schema 版本，必须存在。
 - `change_id`：稳定 change identity，必须存在且非空。
 - `contract_version`：当前 contract 修订版本，必须存在且非空；任何会影响 approval 的修改都必须提升或更新 identity。
+- `output_language`：面向维护者 Markdown 正文的唯一 change-local language authority，必须存在且为显式 language tag，例如 `zh-CN` 或 `en`。新 Contract 由 work Coordinator 根据当前请求主要语言提出默认值，用户可以在 Contract Gate 前修正；任何后续语言变化都必须走 Contract revision 与 fresh Contract Gate。旧 active Contract 缺少该字段时必须 fail closed，并要求正式 Contract revision；Coordinator、agent 或聊天历史不得静默覆盖该值。
 - `intent`：目标、非目标与已确认回答。
 - `acceptance`：非空数组，列出用户可验证的完成条件。
 - `constraints`：非空数组，列出安全、范围、文件、模型、命令或迁移限制。

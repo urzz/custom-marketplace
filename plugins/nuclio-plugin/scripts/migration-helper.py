@@ -45,7 +45,7 @@ KNOWN_LEGACY_FILES = (
 )
 REQUIRED_PREVIEW_FILES = ("brief.md", "spec.md", "design.md", "plan.yaml", "context/implement.jsonl", "context/verify.jsonl", "state.json")
 REQUIRED_PREVIEW_FIELD_TARGETS = {
-    "brief.md": ("contract.intent.goals", "contract.intent.confirmed_answers"),
+    "brief.md": ("contract.output_language", "contract.intent.goals", "contract.intent.confirmed_answers"),
     "spec.md": ("contract.acceptance", "contract.constraints"),
     "design.md": ("contract.design",),
     "plan.yaml": ("contract.tasks", "contract.validation", "contract.migration_or_rollout"),
@@ -334,6 +334,7 @@ def _empty_contract() -> dict[str, Any]:
         "schema_version": 1,
         "change_id": "",
         "contract_version": "",
+        "output_language": "",
         "intent": {"goals": [], "non_goals": [], "confirmed_answers": []},
         "acceptance": [],
         "constraints": [],
@@ -495,6 +496,32 @@ def _build_preview(legacy: Path, target: Path) -> dict[str, Any]:
     if unsupported_frontmatter:
         blockers.append(_blocker("contract.schema_version", _source_path(legacy, "brief.md"), "frontmatter.legacy_version", "unsupported legacy_version", "UNSUPPORTED_LEGACY_VERSION"))
 
+    output_language_sources = []
+    for relpath, frontmatter in (("brief.md", brief_front), ("spec.md", spec_front)):
+        if "output_language" not in frontmatter:
+            continue
+        candidate = frontmatter.get("output_language")
+        if not isinstance(candidate, str) or not candidate:
+            blockers.append(_blocker("contract.output_language", _source_path(legacy, relpath), "frontmatter.output_language", "required explicit legacy output_language authority is empty"))
+            continue
+        if candidate != candidate.strip():
+            blockers.append(_blocker("contract.output_language", _source_path(legacy, relpath), "frontmatter.output_language", "output_language must not contain leading or trailing whitespace", "INVALID_OUTPUT_LANGUAGE"))
+            continue
+        try:
+            output_language_sources.append((relpath, contract_helper._output_language(candidate)))
+        except Exception as exc:
+            blockers.append(_blocker("contract.output_language", _source_path(legacy, relpath), "frontmatter.output_language", getattr(exc, "message", str(exc)), getattr(exc, "code", "INVALID_OUTPUT_LANGUAGE")))
+    output_language_values = {value for _, value in output_language_sources}
+    if not output_language_sources:
+        blockers.append(_blocker("contract.output_language", _source_path(legacy, "brief.md"), "frontmatter.output_language", "required explicit legacy output_language authority is missing"))
+        output_language = ""
+    elif len(output_language_values) > 1:
+        blockers.append(_blocker("contract.output_language", _source_path(legacy, "brief.md"), "frontmatter.output_language", "conflicting explicit legacy output_language authorities", "FIELD_BLOCKED", "conflict"))
+        output_language = ""
+    else:
+        output_language = next(iter(output_language_values))
+    mappings.append(_field_mapping(legacy, output_language_sources[0][0] if output_language_sources else "brief.md", "frontmatter.output_language", "contract.output_language"))
+
     goals = _string_list(brief.get("goals", []))
     non_goals = _string_list(brief.get("non_goals", []))
     answers = _parse_confirmed_answers(_string_list(brief.get("confirmed_answers", [])))
@@ -561,6 +588,7 @@ def _build_preview(legacy: Path, target: Path) -> dict[str, Any]:
     contract.update({
         "change_id": str(brief_front.get("change_id", legacy.name)),
         "contract_version": str(brief_front.get("contract_version", "v1")),
+        "output_language": output_language if isinstance(output_language, str) else "",
         "intent": {"goals": goals, "non_goals": non_goals, "confirmed_answers": answers},
         "acceptance": acceptance,
         "constraints": constraints,

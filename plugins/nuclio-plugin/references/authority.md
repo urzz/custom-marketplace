@@ -6,7 +6,7 @@ Nuclio 的 authority 只来自项目内 `.dev-docs/` 文件和 deterministic hel
 
 - Project-level `.dev-docs/` 只保留 index、knowledge 和 changes/index：`.dev-docs/index.md`、`.dev-docs/index.json`、`.dev-docs/knowledge/` 与 `.dev-docs/changes/index.md`。
 - 每个 active change 必须先定义 `CHANGE_ROOT=.dev-docs/changes/<change-id>`；所有 change authority、helper state 与 evidence 都必须位于该目录下。
-- `CHANGE_ROOT/contract.yaml` 是当前 change 的目标、约束、设计边界、Task、mutation_targets、handoff、检查与 rollback 事实源。
+- `CHANGE_ROOT/contract.yaml` 是当前 change 的目标、约束、设计边界、Task、mutation_targets、handoff、检查、rollback 与 Contract-bound `output_language` 事实源。
 - `CHANGE_ROOT/context.jsonl` 是允许读取的 bounded context 事实源；它只授权读取，不授权写入。
 - `CHANGE_ROOT/state.json` 是 lifecycle、Gate ledger、Task 状态、blocker、completion、decision 与 history 的事实源。
 - `CHANGE_ROOT/research/` 只保存当前 change 的 bounded research artifact；它不能扩展 context 读授权或写授权。
@@ -17,15 +17,18 @@ Nuclio 的 authority 只来自项目内 `.dev-docs/` 文件和 deterministic hel
 
 - Artifact existence != approval。存在 contract、packet、evidence、report 或 summary 不代表用户批准。
 - Contract Gate 和 Finish Gate 是唯一日常用户 Gate，必须由当前轮 explicit approval 表达。
-- Fresh Contract approval 必须绑定 `CHANGE_ROOT/contract.yaml` artifact hash、`CHANGE_ROOT/context.jsonl` fingerprint、`CHANGE_ROOT/state.json` version 与 approval identity；产品 mutation 前必须存在该 fresh approval。
+- Fresh Contract approval 必须绑定 `CHANGE_ROOT/contract.yaml` artifact hash、`CHANGE_ROOT/context.jsonl` fingerprint、`CHANGE_ROOT/state.json` version、mutation_targets、Contract-bound `output_language` 与 approval identity；产品 mutation 前必须存在该 fresh approval。
 - Fresh Finish approval 必须绑定 `CHANGE_ROOT/evidence/completion.md` proposal、`CHANGE_ROOT/evidence/decision.md` identity、`CHANGE_ROOT/state.json` version 与 approval identity；长期知识写入、归档或 `CHANGE_ROOT/evidence/finish-apply.md` 写入前必须存在该 fresh approval。
-- 如果 contract、context、state version、mutation_targets、decision 或 relevant artifact hash 改变，旧 approval 失效，状态必须转入需要重新决策或 repair 的路径。
+- Contract Gate 只接受 helper 定义的 trim-only exact aliases `approve`、`批准`、`同意`、`继续` 并存储 canonical `approve`；Finish Gate 只接受 `accept`/`同意`、`request_changes`/`要求修改`、`defer`/`暂缓`、`reject`/`拒绝` 并存储 canonical English decision。不要把所有中文肯定词都视为 accept；Finish 中 `继续`、`可以`、`我同意` 等不是 exact accept。
+- 如果 contract、context、state version、mutation_targets、`output_language`、decision 或 relevant artifact hash 改变，旧 approval 失效，状态必须转入需要重新决策或 repair 的路径。
 
 ## 写授权与读授权
 
 - `mutation_targets` 是唯一写授权来源；implementer、fixer、helper 和 Controller 都不能写出当前 Task ownership 或当前 approved Contract 的 mutation_targets。
 - Context 条目只授权读取指定路径或片段，不授权修改，也不授权递归读取未列入内容。
-- 路径 allowlist、dirty check、snapshot/fingerprint、ownership overlap、handoff lineage、state transition 与 packet derivation 必须由 helper fail closed 校验。
+- Packet-bound `output_language` 必须由 helper 从当前 Contract 派生并传给 worker、reviewer、fixer、completion critic 与 Finish packet；agent 只能消费 packet/envelope 值，不能从 chat history、branch name、用户记忆、邻近 Task 或仓库 locale 自行推断语言。
+- Finish target language metadata 是长期 knowledge/archive 写入时的目标语言 authority：existing target 保持既有主要语言，new target 使用 Contract-bound `output_language`，unknown/missing metadata 必须 STOP。
+- 路径 allowlist、dirty check、snapshot/fingerprint、ownership overlap、handoff lineage、state transition、target language metadata 与 packet derivation 必须由 helper fail closed 校验。
 - Controller 只负责路由、展示 next action、请求用户决策和调用 helper；Controller 不能从对话或 agent claim 推导 Gate、ownership、freshness 或完成状态。
 
 ## 角色边界
@@ -44,3 +47,4 @@ Nuclio 的 authority 只来自项目内 `.dev-docs/` 文件和 deterministic hel
 - 不自动 `stash`、`reset`、`clean`、`rebase`、`push` 或批量改写用户 active changes。
 - 不把 raw logs、raw transcript、agent summary 或 chat history 作为 authority 字段。
 - 不 silent migrate legacy content；migration 必须可检测、可预览、显式 opt-in、可验证，migration target authority 必须写入 selected `CHANGE_ROOT`。
+- 不自动翻译、重写或迁移 historical archives、prior reports、accepted evidence、hash-chain inputs、archived `completion.md`/`decision.md` 或长期 knowledge，只因当前 `output_language` 改变而改写历史是禁止的。

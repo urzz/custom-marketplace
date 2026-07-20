@@ -82,6 +82,8 @@ def split_skill(path):
 def all_plugin_text_files():
     for path in PLUGIN.rglob("*"):
         if path.is_file() and "__pycache__" not in path.parts and path.suffix in {".md", ".py", ".json"}:
+            if "docs" in path.relative_to(PLUGIN).parts and "research" in path.relative_to(PLUGIN).parts:
+                continue
             yield path
 
 
@@ -168,14 +170,34 @@ class StaticPluginTests(unittest.TestCase):
             "contract_sha256": sha("a"),
             "context_fingerprint": sha("b"),
             "state_version": 7,
+            "output_language": "zh-CN",
         }
         checks = {"focused": [{"name": "focused", "command": ["python3", "-m", "unittest"]}], "full": [{"name": "full", "command": ["claude", "plugin", "validate", "plugins/nuclio-plugin", "--strict"]}]}
         return {
             "worker": {**common, "packet_id": sha("c"), "role": "worker", "task_id": "T1", "ownership": [{"path": "plugins/nuclio-plugin/skills/init/SKILL.md", "mode": "create"}], "range": {"base_head": "abcdef1", "expected_dirty_state": "clean"}, "snapshots": [{"path": "handoff.json", "state": "absent"}], "checks": checks},
             "reviewer": {**common, "packet_id": sha("d"), "role": "reviewer", "task_id": "T1", "ownership": [{"path": "plugins/nuclio-plugin/skills/init/SKILL.md", "mode": "read"}], "range": {"base_head": "abcdef1", "new_head": "abcdef2", "expected_dirty_state": "clean"}, "snapshots": [{"path": "iface.md", "state": "present", "sha256": sha("a")}], "checks": checks, "review_targets": ["plugins/nuclio-plugin/skills/init/SKILL.md"], "mutation_map_sha256": sha("e")},
             "completion": {**common, "packet_id": sha("e"), "role": "completion", "task_heads": {"T1": "abcdef2"}, "implementation_range": {"base": "abcdef1", "head": "abcdef2"}, "acceptance_index_sha256": sha("a"), "task_evidence": {"T1": sha("b")}, "task_evidence_sha256": sha("c"), "range": {"base_head": "abcdef1", "new_head": "abcdef2", "expected_dirty_state": "clean"}, "checks": {**checks, "change_wide": checks["focused"]}, "handoffs": ["task:T1@abcdef2"], "mutation_map_sha256": sha("d")},
-            "finish": {**common, "packet_id": sha("f"), "role": "finish", "range": {"base_head": "abcdef1", "new_head": "abcdef2", "expected_dirty_state": "clean"}, "snapshots": [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], "completion_sha256": sha("c"), "decision_sha256": sha("d"), "finish_plan_sha256": sha("e"), "knowledge_proposal": {"summary": "approved finish knowledge only"}, "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}], "archive_targets": [{"path": ".dev-docs/archive/change.json", "before_sha256": sha("a")}], "archive_intent": "archive only after fresh accept"},
+            "finish": {**common, "packet_id": sha("f"), "role": "finish", "range": {"base_head": "abcdef1", "new_head": "abcdef2", "expected_dirty_state": "clean"}, "snapshots": [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], "completion_sha256": sha("c"), "decision_sha256": sha("d"), "finish_plan_sha256": sha("e"), "knowledge_proposal": {"summary": "approved finish knowledge only"}, "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "target_language": "zh-CN", "language_source": "contract_output_language"}], "archive_targets": [{"path": ".dev-docs/archive/change.json", "before_sha256": sha("a"), "target_language": "en", "language_source": "existing_target"}], "archive_intent": "archive only after fresh accept"},
         }
+
+    def test_packet_fixtures_include_output_language_and_finish_target_metadata(self):
+        fixtures = self.packet_fixtures()
+        for role, packet in fixtures.items():
+            with self.subTest(role=role, field="output_language"):
+                self.assertEqual(packet["output_language"], "zh-CN")
+        finish = fixtures["finish"]
+        for group in ["knowledge_targets", "archive_targets"]:
+            for target in finish[group]:
+                with self.subTest(group=group, path=target["path"]):
+                    self.assertIn("target_language", target)
+                    self.assertIn("language_source", target)
+                    self.assertRegex(target["target_language"], r"^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8})*$")
+                    self.assertIn(target["language_source"], {"contract_output_language", "existing_target", "user_confirmed"})
+        self.assertEqual(finish["knowledge_targets"][0]["language_source"], "contract_output_language")
+        self.assertIsNone(finish["knowledge_targets"][0]["before_sha256"])
+        self.assertEqual(finish["knowledge_targets"][0]["target_language"], finish["output_language"])
+        self.assertEqual(finish["archive_targets"][0]["language_source"], "existing_target")
+        self.assertIsNotNone(finish["archive_targets"][0]["before_sha256"])
 
     def test_agent_tools_are_exact_and_reviewers_are_read_only(self):
         expected = {
@@ -465,10 +487,12 @@ class StaticPluginTests(unittest.TestCase):
         )
         expected_work_cases = {
             "work-contract-draft-new-change",
+            "output-language-contract-draft-zh-cn",
             "work-contract-draft-safe-defaults",
             "work-contract-draft-five-questions",
             "work-contract-repair-missing-context-fingerprint",
             "work-contract-approval-exact",
+            "work-contract-approval-continue-alias",
             "work-contract-revise",
             "work-contract-reject",
             "work-resume-deferred-contract-stale",
@@ -495,6 +519,94 @@ class StaticPluginTests(unittest.TestCase):
                 self.assertNotRegex(row["expected_next_action"], r"生成可审 .*contract|批准 Contract Gate|返回 drafting_contract")
         self.assertIn("`init` 只负责 project fact-source bootstrap/repair/legacy migration", eval_prompts)
         self.assertIn("STOP before work", eval_prompts)
+
+    def test_output_language_contract_is_linked_and_propagated_across_surfaces(self):
+        skills = {name: split_skill(SKILLS / name / "SKILL.md")[1] for name in NEW_LIFECYCLE}
+        agents = {path.name: split_skill(path)[1] for path in (PLUGIN / "agents").glob("nuclio-*.md")}
+        output_reference = read_text(REFERENCES / "output-language.md")
+        reference_corpus = "\n".join(read_text(REFERENCES / filename) for filename in ["authority.md", "lifecycle.md", "execution.md", "finish.md", "grill-protocol.md", "eval-prompts.md"])
+
+        for name, body in skills.items():
+            with self.subTest(surface=f"skill:{name}"):
+                self.assertIn("output-language.md", body)
+                self.assertIn("output_language", body)
+        self.assertIn("does not create change-local Contract language authority", skills["init"])
+        self.assertIn("Contract-bound `output_language`", skills["work"])
+        self.assertIn("packet-bound `output_language`", skills["work"])
+        self.assertIn("target_language", skills["finish"])
+        self.assertIn("language_source", skills["finish"])
+        self.assertIn("unknown target language", skills["finish"].lower())
+
+        for name, body in agents.items():
+            with self.subTest(surface=f"agent:{name}"):
+                self.assertIn("output_language", body)
+                self.assertRegex(body, r"不得从 chat history|do not infer language from the full conversation|不得从 full conversation 推断语言")
+        self.assertIn("This policy is canonical", output_reference)
+        self.assertIn("Contract-bound `output_language`", reference_corpus)
+        self.assertIn("packet-bound `output_language`", reference_corpus)
+        self.assertIn("Finish target language metadata", reference_corpus)
+        self.assertIn("agent 只能消费 packet/envelope 值", reference_corpus)
+
+    def test_finish_decision_alias_maps_and_docs_match_helper_boundaries(self):
+        state_helper = load_helper_module("state-helper.py")
+        self.assertEqual(state_helper.FINISH_DECISIONS, {"accept", "request_changes", "defer", "reject"})
+        self.assertEqual(state_helper.CONTRACT_APPROVAL_ALIASES, {"approve": "approve", "批准": "approve", "同意": "approve", "继续": "approve"})
+        self.assertEqual(state_helper.FINISH_DECISION_ALIASES, {"accept": "accept", "同意": "accept", "request_changes": "request_changes", "要求修改": "request_changes", "defer": "defer", "暂缓": "defer", "reject": "reject", "拒绝": "reject"})
+
+        work = split_skill(SKILLS / "work" / "SKILL.md")[1]
+        finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]
+        machine_context = "\n".join(read_text(REFERENCES / filename) for filename in ["authority.md", "lifecycle.md", "finish.md", "eval-prompts.md"])
+        for token in ["approve", "批准", "同意", "继续"]:
+            with self.subTest(gate="contract", token=token):
+                self.assertIn(token, work + machine_context)
+        for token in ["accept", "同意", "request_changes", "要求修改", "defer", "暂缓", "reject", "拒绝"]:
+            with self.subTest(gate="finish", token=token):
+                self.assertIn(token, finish + machine_context)
+        self.assertRegex(finish + machine_context, r"(?s)继续.*?(invalid|无效|不是 Finish accept|never applies|不会 apply)")
+        self.assertNotRegex(finish + machine_context, r"所有中文肯定词都等于 accept|所有中文肯定词都是 accept|all Chinese positive tokens equal accept")
+
+    def test_eval_prompts_cover_output_language_aliases_and_target_routing(self):
+        eval_prompts = read_text(REFERENCES / "eval-prompts.md")
+        rows = {}
+        for line in eval_prompts.splitlines():
+            match = re.match(r"\| `([^`]+)` \| (.*?) \| `(init|work|finish)` \| (.*?) \| (.*?) \| (.*?) \| (.*?) \|$", line)
+            if match:
+                case_id, case_input, owner, next_action, allowed_writes, forbidden_writes, assertions = match.groups()
+                rows[case_id] = {
+                    "input": case_input,
+                    "owner_skill": owner,
+                    "expected_next_action": next_action,
+                    "allowed_writes": allowed_writes,
+                    "forbidden_writes": forbidden_writes,
+                    "assertions": assertions,
+                }
+        expected_cases = {
+            "output-language-contract-draft-zh-cn": "work",
+            "output-language-worker-packet-propagation": "work",
+            "output-language-reviewer-packet-propagation": "work",
+            "output-language-fixer-packet-propagation": "work",
+            "output-language-completion-packet-propagation": "work",
+            "output-language-decision-headings-body": "work",
+            "work-contract-approval-continue-alias": "work",
+            "finish-accept-chinese-alias": "finish",
+            "finish-request-changes-chinese-alias": "finish",
+            "finish-defer-chinese-alias": "finish",
+            "finish-reject-chinese-alias": "finish",
+            "finish-continue-invalid-no-write": "finish",
+            "finish-existing-knowledge-preserve-language": "finish",
+            "finish-new-knowledge-output-language": "finish",
+            "finish-unknown-target-language-stop": "finish",
+            "finish-english-flow-regression": "finish",
+        }
+        for case_id, owner in expected_cases.items():
+            with self.subTest(case=case_id):
+                self.assertIn(case_id, rows)
+                self.assertEqual(rows[case_id]["owner_skill"], owner)
+        self.assertIn("output_language", eval_prompts)
+        self.assertIn("target language metadata", eval_prompts)
+        self.assertIn("Completion Verdict`、`Remaining Risks`、`Knowledge Proposal`、`Archive Decision", eval_prompts)
+        self.assertIn("`继续` 不能推断 accept", eval_prompts)
+        self.assertNotIn("所有中文肯定词", eval_prompts)
 
     def test_reference_eval_finish_tokens_match_helper_enum_without_spaced_machine_token(self):
         state_helper = load_helper_module("state-helper.py")

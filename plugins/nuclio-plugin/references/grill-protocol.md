@@ -21,7 +21,7 @@ Grill 必须遵守：
 
 - recommendation-first。
 - 严格一次一问。
-- 每个问题必须会改变 `contract.yaml` 的目标、非目标、acceptance、constraints、design、Task、`mutation_targets`、context_policy、validation 或 migration_or_rollout。
+- 每个问题必须会改变 `contract.yaml` 的目标、非目标、`output_language`、acceptance、constraints、design、Task、`mutation_targets`、context_policy、validation 或 migration_or_rollout。
 - 已能从项目事实推导的问题不问。
 - 已能用 safe default 表达且不扩大 mutation 的问题不问。
 - 不能为了填充模板而提问。
@@ -126,6 +126,7 @@ Hard unknown blocker 必须包含：
 - 澄清答案写入 `intent.confirmed_answers`。
 - 安全边界写入 `constraints`。
 - 技术取舍写入 `design.tradeoffs`。
+- 输出语言选择写入 top-level `output_language`；init 的 pre-Contract prose language 不能替代该字段。
 - ownership 或文件范围写入 Task `mutation_targets`。
 - migration 选择写入 `migration_or_rollout.opt_in` 或 blocker。
 

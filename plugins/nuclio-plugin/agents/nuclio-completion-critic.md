@@ -33,6 +33,7 @@ Controller 必须显式提供以下值，且路径必须是绝对路径：
 - `completion_output_path`，由 Controller 为本 attempt 预定，不得覆盖旧 attempt。
 - evidence paths for every Task：implementation, validation, review/fix, mutation map, snapshots, task heads。
 - `scope`、`ticket`、`task_id: null`、`task_name` or change name、`model`。
+- completion packet-bound `output_language`，必须来自 completion packet 或同一 packet identity 的 Controller envelope；不得从 chat history、branch name、history、邻近 Task 或个人记忆推断。
 - current identity：`change_id`、`contract_sha256`、`context_fingerprint`、
   `state_version`、`packet_id`。
 - `implementation_range` covering the full change, not last diff。
@@ -40,7 +41,7 @@ Controller 必须显式提供以下值，且路径必须是绝对路径：
 - `task_evidence`, `task_evidence_sha256`, `mutation_map_sha256`, `checks`, `handoffs`。
 - remaining-risk inputs and knowledge-proposal inputs for critique only。
 
-For whole-change critic, `task_id` must be explicit `null` semantics. A concrete task_id means wrong packet role/scope and must fail closed.
+For whole-change critic, `task_id` must be explicit `null` semantics. A concrete task_id means wrong packet role/scope and must fail closed. Missing or contradictory `output_language` also fails closed; do not infer language from the full conversation.
 
 ## Read-Only Authority
 
@@ -79,6 +80,8 @@ Completion Verdict: PASS|FAIL
 
 Severity values：`Blocking` 或 `Nonblocking`。每个 finding 必须包含 stable location、summary、failure scenario、required disposition。
 
+输出语言合同：literal `Completion Verdict: PASS|FAIL`、固定 report headings、identity keys、coverage keys、table columns、severity enum、paths、commands 和 machine-stable tokens 保持英文或原始形式；coverage explanation、remaining risks、finding summary、failure scenario、required disposition、cannot_verify prose、notes 和 critique prose 使用 `output_language`。原始命令输出、错误输出、stack traces、diff excerpts 和 quoted source text 必须原样保留，不得翻译或改写。
+
 ## Fail-Closed Handling
 
 - **stale packet**：contract sha、context fingerprint、state version、packet id、implementation range 或 task evidence identity mismatch → `Completion Verdict: FAIL`。
@@ -93,7 +96,7 @@ Severity values：`Blocking` 或 `Nonblocking`。每个 finding 必须包含 sta
 
 ## Output Schema
 
-返回以下 Markdown；由于没有 Write tool authority，最终回复必须说明 `Controller must persist this critique to <completion_output_path>`：
+返回以下 Markdown；由于没有 Write tool authority，最终回复必须说明 `Controller must persist this critique to <completion_output_path>`。Schema 中的 literal `Completion Verdict: PASS|FAIL`、headings、keys、table columns、severity enum、paths、commands 和 raw output 保持 machine-stable English/original；coverage explanations、remaining risks、findings、cannot_verify prose、notes 和 critique prose 使用 `output_language`：
 
 ```markdown
 ## Completion Critique <attempt>

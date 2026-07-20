@@ -74,6 +74,7 @@ def write_complete_legacy(change):
     legacy_version: 1
     change_id: change-alpha
     contract_version: v1
+    output_language: zh-CN
     ---
     # Goals
     - Ship migrated authority
@@ -216,7 +217,7 @@ class MigrationHelperTests(unittest.TestCase):
         self.assertTrue(preview["ready_to_apply"], preview["blockers"])
         self.assertRegex(preview["preview_identity"], r"^[0-9a-f]{64}$")
         fields = {item["target_field"]: item for item in preview["field_mappings"]}
-        for field in ["contract.intent.goals", "contract.acceptance", "contract.tasks", "contract.validation", "context.entries", "state.gates.contract", "state.evidence_retained"]:
+        for field in ["contract.output_language", "contract.intent.goals", "contract.acceptance", "contract.tasks", "contract.validation", "context.entries", "state.gates.contract", "state.evidence_retained"]:
             self.assertIn(field, fields)
             self.assertEqual(fields[field]["blocker"], None)
             self.assertIn("source_path", fields[field])
@@ -248,6 +249,27 @@ class MigrationHelperTests(unittest.TestCase):
         preview = self.helper.preview_migration(self.legacy, self.target)
         self.assertFalse(preview["ready_to_apply"])
         self.assertTrue(any(blocker["target_field"] == "context.entries" and blocker["code"] == "FIELD_BLOCKED" for blocker in preview["blockers"]))
+        self.assertFalse(self.target.exists())
+
+    def test_missing_output_language_blocks_preview_apply_and_preserves_legacy(self):
+        source_before = read_tree_bytes(self.legacy)
+        (self.legacy / "brief.md").write_text((self.legacy / "brief.md").read_text(encoding="utf-8").replace("output_language: zh-CN\n", ""), encoding="utf-8")
+        preview = self.helper.preview_migration(self.legacy, self.target)
+        self.assertFalse(preview["ready_to_apply"])
+        self.assertTrue(any(blocker["code"] == "FIELD_BLOCKED" and blocker["target_field"] == "contract.output_language" for blocker in preview["blockers"]))
+        self.assertFalse(self.target.exists())
+        self.assertEqual(source_before.keys(), read_tree_bytes(self.legacy).keys())
+        self.assertNotIn("approval_id", json.dumps(preview, ensure_ascii=False))
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.apply_migration(self.legacy, self.target, apply=True, preview_identity=preview["preview_identity"], approval=APPROVAL)
+        self.assertEqual(ctx.exception.code, "PREVIEW_BLOCKED")
+        self.assertFalse(self.target.exists())
+
+    def test_conflicting_output_language_sources_block_preview(self):
+        (self.legacy / "spec.md").write_text((self.legacy / "spec.md").read_text(encoding="utf-8").replace("legacy_version: 1\n", "legacy_version: 1\noutput_language: en\n"), encoding="utf-8")
+        preview = self.helper.preview_migration(self.legacy, self.target)
+        self.assertFalse(preview["ready_to_apply"])
+        self.assertTrue(any(blocker["target_field"] == "contract.output_language" and blocker["confidence"] == "conflict" for blocker in preview["blockers"]))
         self.assertFalse(self.target.exists())
 
     def test_missing_required_authority_returns_field_blockers_without_target_files(self):

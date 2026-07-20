@@ -117,7 +117,7 @@ def completed():
 
 
 def decision():
-    return {"Completion Verdict": {"result": "pass"}, "Remaining Risks": [], "Knowledge Proposal": [{"path": ".dev-docs/knowledge/notes.md"}], "Archive Decision": {"target": "archive"}}
+    return {"Completion Verdict": {"result": "通过", "summary": "所有任务已完成"}, "Remaining Risks": ["无剩余风险"], "Knowledge Proposal": [{"path": ".dev-docs/knowledge/notes.md", "body": "保留已验证决策"}], "Archive Decision": {"target": "archive", "body": "归档变更证据"}}
 
 
 class EvidenceHelperTests(unittest.TestCase):
@@ -230,7 +230,7 @@ class EvidenceHelperTests(unittest.TestCase):
     def test_decision_hash_is_stable_external_and_requires_four_sections(self):
         identity = self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), completed())
         first = self.helper.decision_hash(decision(), identity)
-        shuffled = {"Archive Decision": {"target": "archive"}, "Knowledge Proposal": [{"path": ".dev-docs/knowledge/notes.md"}], "Remaining Risks": [], "Completion Verdict": {"result": "pass"}}
+        shuffled = {"Archive Decision": {"target": "archive", "body": "归档变更证据"}, "Knowledge Proposal": [{"path": ".dev-docs/knowledge/notes.md", "body": "保留已验证决策"}], "Remaining Risks": ["无剩余风险"], "Completion Verdict": {"result": "通过", "summary": "所有任务已完成"}}
         second = self.helper.decision_hash(shuffled, identity)
         self.assertEqual(first["decision_sha256"], second["decision_sha256"])
         self.assertNotIn("decision_sha256", json.dumps(decision()))
@@ -240,10 +240,22 @@ class EvidenceHelperTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "INVALID_DECISION")
 
     def test_finish_apply_journal_requires_target_binding_and_archive_outcome(self):
-        plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}], "archive_targets": [{"path": ".dev-docs/archive/archive.json", "before_sha256": A_HASH}]}
-        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "entries": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"}, {"path": ".dev-docs/archive/archive.json", "before_sha256": A_HASH, "after_sha256": D_HASH, "apply_result": "applied", "archive_result": "archived"}]}
+        plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "target_language": "zh-CN", "language_source": "contract_output_language"}], "archive_targets": [{"path": ".dev-docs/archive/archive.json", "before_sha256": A_HASH, "target_language": "en", "language_source": "existing_target"}]}
+        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "entries": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "after_sha256": B_HASH, "target_language": "zh-CN", "language_source": "contract_output_language", "apply_result": "applied", "archive_result": "not_applicable"}, {"path": ".dev-docs/archive/archive.json", "before_sha256": A_HASH, "after_sha256": D_HASH, "target_language": "en", "language_source": "existing_target", "apply_result": "applied", "archive_result": "archived"}]}
         valid = self.helper.validate_finish_apply(C_HASH, plan, journal)
         self.assertTrue(valid["valid"])
+        language_mismatch = json.loads(json.dumps(journal)); language_mismatch["entries"][0]["target_language"] = "en"
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, language_mismatch)
+        self.assertEqual(ctx.exception.code, "STALE_TARGET_LANGUAGE")
+        source_mismatch = json.loads(json.dumps(journal)); source_mismatch["entries"][1]["language_source"] = "user_confirmed"
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, source_mismatch)
+        self.assertEqual(ctx.exception.code, "STALE_TARGET_LANGUAGE")
+        missing_language = json.loads(json.dumps(journal)); missing_language["entries"][0].pop("language_source")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(C_HASH, plan, missing_language)
+        self.assertEqual(ctx.exception.code, "STALE_TARGET_LANGUAGE")
         over = json.loads(json.dumps(journal))
         over["entries"].append({"path": ".dev-docs/knowledge/extra.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"})
         with self.assertRaises(self.helper.ProtocolError) as ctx:
@@ -292,8 +304,8 @@ class EvidenceHelperTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["mutation_map"]["result"], "ok")
-        finish_plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}], "archive_targets": []}
-        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "entries": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"}]}
+        finish_plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "target_language": "en", "language_source": "contract_output_language"}], "archive_targets": []}
+        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "entries": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "after_sha256": B_HASH, "target_language": "en", "language_source": "contract_output_language", "apply_result": "applied", "archive_result": "not_applicable"}]}
         proc2 = subprocess.run([sys.executable, str(HELPER), "validate-finish-apply", "--decision-sha256", C_HASH, "--finish-plan-json", json.dumps(finish_plan), "--journal-json", json.dumps(journal)], text=True, capture_output=True)
         self.assertEqual(proc2.returncode, 0, proc2.stderr)
         self.assertTrue(json.loads(proc2.stdout)["valid"])

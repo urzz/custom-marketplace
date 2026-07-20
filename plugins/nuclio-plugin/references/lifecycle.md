@@ -4,8 +4,8 @@
 
 ## 日常 Gate
 
-- Contract Gate：用户批准当前 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl` fingerprint、`CHANGE_ROOT/state.json` version 和 mutation_targets 后，才允许产品 mutation。
-- Finish Gate：用户批准 `CHANGE_ROOT/evidence/completion.md` proposal、`CHANGE_ROOT/evidence/decision.md` identity 与 `CHANGE_ROOT/state.json` version 后，才允许长期知识写入、归档或 finish apply。
+- Contract Gate：用户批准当前 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl` fingerprint、`CHANGE_ROOT/state.json` version、mutation_targets 和 Contract-bound `output_language` 后，才允许产品 mutation。helper trim-only exact aliases 为 `approve`、`批准`、`同意`、`继续`，存储 canonical `approve`。
+- Finish Gate：用户批准 `CHANGE_ROOT/evidence/completion.md` proposal、`CHANGE_ROOT/evidence/decision.md` identity 与 `CHANGE_ROOT/state.json` version 后，才允许长期知识写入、归档或 finish apply。helper trim-only exact aliases 为 `accept`/`同意`、`request_changes`/`要求修改`、`defer`/`暂缓`、`reject`/`拒绝`，存储 canonical English decision；`继续` 不是 Finish accept。
 
 除这两个日常 Gate 外，Controller 可以要求澄清或修复，但不能把对话同意、agent claim 或 artifact 存在解释为 Gate approval。
 
@@ -14,13 +14,13 @@
 | status | 含义 | 允许的 next action |
 | --- | --- | --- |
 | `idle` | 没有 active change，或上一个 change 已归档。 | 启动 init；选择或创建 change-local `CHANGE_ROOT=.dev-docs/changes/<change-id>`；读取 project context。 |
-| `drafting_contract` | 正在形成或修订 `CHANGE_ROOT/contract.yaml` 与 `CHANGE_ROOT/context.jsonl`。 | 询问澄清；生成/更新 contract draft；运行 schema 与 context 检查；转入 `contract_pending`。 |
+| `drafting_contract` | 正在形成或修订 `CHANGE_ROOT/contract.yaml` 与 `CHANGE_ROOT/context.jsonl`。 | 询问澄清；生成/更新 contract draft，包括 `output_language`；运行 schema 与 context 检查；转入 `contract_pending`。 |
 | `contract_pending` | Contract draft 已可展示，等待用户 Contract Gate decision。 | 展示摘要、风险、mutation_targets、validation；等待 explicit approve/defer/reject；不得执行 mutation。 |
 | `ready_to_execute` | 存在 fresh Contract approval，且 state/context/contract identity 未变。 | 派发 Task packet；重新校验 dirty/fingerprint；开始执行；转入 `executing`。 |
 | `executing` | 一个或多个 Task 正在实现、review 或修复。 | 按 packet 派发 fresh implementer/reviewer/fixer；记录 `CHANGE_ROOT/evidence/tasks/<task-id>/...`；更新 Task 状态；完成后转入 `completing`。 |
-| `completing` | 所有 Task 候选实现完成，正在做 change-wide completion。 | 汇总 mutation map、checks、review evidence、risk；写 `CHANGE_ROOT/evidence/completion.md` 与 `CHANGE_ROOT/evidence/decision.md` proposal；转入 `decision_pending`。 |
+| `completing` | 所有 Task 候选实现完成，正在做 change-wide completion。 | 汇总 mutation map、checks、review evidence、risk；用 packet-bound `output_language` 写 `CHANGE_ROOT/evidence/completion.md` 与 `CHANGE_ROOT/evidence/decision.md` proposal，且 decision 顶层 headings 固定为 English；转入 `decision_pending`。 |
 | `decision_pending` | Completion proposal 已可展示，等待 Finish Gate decision。 | 展示 before/after、residual risk、finish apply plan；等待 exact `accept`/`request_changes`/`defer`/`reject`；不得写长期知识或归档。 |
-| `folding` | 存在 fresh Finish approval，正在执行长期知识写入或归档。 | 应用 approved finish plan；记录 `CHANGE_ROOT/evidence/finish-apply.md` before/after evidence；归档 state；转入 `archived`。 |
+| `folding` | 存在 fresh Finish approval，正在执行长期知识写入或归档。 | 应用 approved finish plan；按 finish target language metadata 处理 existing/new targets，unknown 时 STOP；记录 `CHANGE_ROOT/evidence/finish-apply.md` before/after evidence；归档 state；转入 `archived`。 |
 | `archived` | Change 已结束且历史可追溯。 | 回到 `idle`；只允许只读审计或显式新 change。 |
 | `repair_required` | helper 发现 state、hash、ownership、dirty、schema 或 evidence 不一致。 | 停止自动推进；展示原因；执行授权 repair；必要时重新请求 Gate。 |
 | `context_stale` | context fingerprint 或 required source identity 与 approval/packet 不匹配。 | 停止执行；刷新 context；重新生成 packet 或回到 Contract Gate。 |
@@ -55,3 +55,5 @@
 - Helper schema validation、path allowlist、state transition 或 check command fail closed。
 - Agent claim 与文件 evidence 冲突，或 agent summary 被当成 authority。
 - 用户 defer/reject Gate decision，或用户要求停止。
+- Finish target language metadata 缺失、冲突或为 unknown，导致 existing/new knowledge/archive 目标无法安全确定正文语言。
+- 请求把 historical archives、prior evidence、hash-chain inputs、archived decision/completion 或已有长期知识仅因当前 `output_language` 改变而整体翻译或重写。

@@ -33,6 +33,7 @@ Controller 必须显式提供以下值，且路径必须是绝对路径：
 - `fix_report_path`，由 Controller 为本 attempt 预定，不得覆盖旧 attempt。
 - `evidence_path` 或 evidence output directory，由 Controller 预定，不得覆盖旧 attempt。
 - `scope`、`ticket`、`task_id`、`task_name`、`model`。
+- same `output_language` as the original worker packet, repeated or referenced by the helper authorization envelope for the same packet identity；不得从 chat history、branch name、history、邻近 Task 或个人记忆推断。
 - current identity：`change_id`、`contract_sha256`、`context_fingerprint`、
   `state_version`、`packet_id`、`base_head`。
 - original owner slice：packet `ownership` entries and writable mutation targets。
@@ -40,7 +41,7 @@ Controller 必须显式提供以下值，且路径必须是绝对路径：
 - shared fixer budget summary：maximum `2`, already consumed count, current attempt number。
 - pre-fix actual mutation map and relevant validation/review evidence。
 
-缺少 authorization、same-owner proof、budget identity、required paths、pre-fix mutation map 或 absolute output paths 时，返回 `NEEDS_CONTEXT`，不得写入。
+缺少 authorization、same-owner proof、budget identity、required paths、pre-fix mutation map、same `output_language` proof 或 absolute output paths 时，返回 `NEEDS_CONTEXT`，不得写入。不得从 full conversation 推断语言。
 
 ## Authority Boundaries
 
@@ -82,6 +83,8 @@ design_revision:
 
 运行 authorization/envelope 提供的 closure checks，以及 packet required focused/full checks 中与 finding 相关的命令。记录 command、exit code、关键输出和结论。不能执行时报告真实 blocker。
 
+输出语言合同：status、budget fields、finding id、severity enum、identity keys、paths、commands、table columns 和 machine-stable tokens 保持英文或原始形式；fix action、closure explanation、blockers、concerns、finding closure reason 和 design-revision reason 使用同一 `output_language`。原始命令输出、错误输出、stack traces、diff excerpts 和 quoted source text 必须原样保留，不得翻译或改写。
+
 Fixer 只能报告 closure claim：`FIXED`、`BLOCKED`、`NO_PROGRESS` 或 `NEEDS_CONTEXT`。`FIXED` 表示 bounded fix attempt claims finding closure after checks；不是 reviewer approval、Gate approval、state transition 或 budget import。
 
 ## Fail-Closed Handling
@@ -97,7 +100,7 @@ Fixer 只能报告 closure claim：`FIXED`、`BLOCKED`、`NO_PROGRESS` 或 `NEED
 
 ## Output Schema
 
-将以下 Markdown 写入 Controller 预定 `fix_report_path`；如要求 evidence JSON，只写入预定 `evidence_path`：
+将以下 Markdown 写入 Controller 预定 `fix_report_path`；如要求 evidence JSON，只写入预定 `evidence_path`。Schema 中的 headings、keys、status enum、budget fields、finding IDs、table columns、paths、commands 和 raw output 保持 machine-stable English/original；`finding_closure_claims` 的 reason、`blockers`、`concerns` 和修复说明 prose 使用同一 `output_language`：
 
 ```markdown
 ## Fix Attempt <attempt>

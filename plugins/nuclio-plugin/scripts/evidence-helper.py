@@ -75,6 +75,19 @@ def _non_empty(value: Any, where: str) -> str:
     return value.strip()
 
 
+def _language_tag(value: Any, where: str) -> str:
+    try:
+        text = _non_empty(value, where)
+    except ProtocolError as exc:
+        raise ProtocolError("INVALID_TARGET_LANGUAGE", exc.message, exc.details) from exc
+    parts = text.split("-")
+    valid = 2 <= len(parts[0]) <= 8 and parts[0].isalpha()
+    valid = valid and all(1 <= len(part) <= 8 and part.isalnum() for part in parts[1:])
+    if not valid:
+        raise ProtocolError("INVALID_TARGET_LANGUAGE", f"{where} must be a BCP-47 style language tag")
+    return text
+
+
 def _require_sha(value: Any, where: str) -> str:
     if not isinstance(value, str) or not HASH_RE.fullmatch(value):
         raise ProtocolError("INVALID_IDENTITY", f"{where} must be a lowercase sha256")
@@ -480,7 +493,16 @@ def _plan_targets(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
             path = _finish_target_path(item.get("path"), group_name)
             if path in targets:
                 raise ProtocolError("INVALID_FINISH_PLAN", "finish target appears more than once", {"path": path})
-            targets[path] = {"path": path, "group": group_name, "before_sha256": item.get("before_sha256")}
+            language_source = item.get("language_source")
+            if language_source not in {"contract_output_language", "existing_target", "user_confirmed"}:
+                raise ProtocolError("INVALID_TARGET_LANGUAGE", "finish plan target language_source is invalid", {"path": path, "language_source": language_source})
+            targets[path] = {
+                "path": path,
+                "group": group_name,
+                "before_sha256": item.get("before_sha256"),
+                "target_language": _language_tag(item.get("target_language"), f"{group_name}[].target_language"),
+                "language_source": language_source,
+            }
             if targets[path]["before_sha256"] is not None:
                 _require_sha(targets[path]["before_sha256"], f"{group_name}[].before_sha256")
     if not targets:
@@ -518,6 +540,10 @@ def validate_finish_apply(decision_sha256: str, finish_plan: dict[str, Any], jou
         expected_before = targets[path].get("before_sha256")
         if expected_before != before:
             raise ProtocolError("STALE_TARGET", "finish journal before identity does not match approved target", {"path": path, "expected": expected_before, "actual": before})
+        target_language = item.get("target_language")
+        language_source = item.get("language_source")
+        if target_language != targets[path]["target_language"] or language_source != targets[path]["language_source"]:
+            raise ProtocolError("STALE_TARGET_LANGUAGE", "finish journal language metadata does not match approved target", {"path": path, "expected": {"target_language": targets[path]["target_language"], "language_source": targets[path]["language_source"]}, "actual": {"target_language": target_language, "language_source": language_source}})
         if item.get("apply_result") != "applied":
             raise ProtocolError("INVALID_FINISH_JOURNAL", "finish journal apply_result must be applied", {"path": path})
         archive_result = item.get("archive_result")

@@ -71,6 +71,19 @@ def _non_empty(value: Any, where: str) -> str:
     return value.strip()
 
 
+def _language_tag(value: Any, where: str, code: str = "INVALID_INPUT") -> str:
+    try:
+        text = _non_empty(value, where)
+    except ProtocolError as exc:
+        raise ProtocolError(code, exc.message, exc.details) from exc
+    parts = text.split("-")
+    valid = 2 <= len(parts[0]) <= 8 and parts[0].isalpha()
+    valid = valid and all(1 <= len(part) <= 8 and part.isalnum() for part in parts[1:])
+    if not valid:
+        raise ProtocolError(code, f"{where} must be a BCP-47 style language tag")
+    return text
+
+
 def _require_sha(value: Any, where: str) -> str:
     if not isinstance(value, str) or len(value) != 64 or any(ch not in HASH_CHARS for ch in value):
         raise ProtocolError("INVALID_IDENTITY", f"{where} must be a lowercase sha256")
@@ -126,6 +139,7 @@ def _contract_identity(contract: dict[str, Any]) -> dict[str, Any]:
         "change_id": _non_empty(contract.get("change_id"), "contract.change_id"),
         "contract_sha256": _require_sha(contract.get("sha256", contract.get("contract_sha256")), "contract.sha256"),
         "contract_version": _non_empty(contract.get("version", contract.get("contract_version", "v1")), "contract.version"),
+        "output_language": _language_tag(contract.get("output_language"), "contract.output_language"),
     }
 
 
@@ -153,7 +167,7 @@ def _fresh_inputs(contract: dict[str, Any], context: dict[str, Any], state: dict
         raise ProtocolError("STALE_CONTRACT", "contract hash does not match state", {"expected": state_contract.get("sha256"), "actual": contract_id["contract_sha256"]})
     if state_context.get("fingerprint") != context_id["context_fingerprint"]:
         raise ProtocolError("STALE_CONTEXT", "context fingerprint does not match state", {"expected": state_context.get("fingerprint"), "actual": context_id["context_fingerprint"]})
-    return {"change_id": contract_id["change_id"], "contract_sha256": contract_id["contract_sha256"], "context_fingerprint": context_id["context_fingerprint"], "context_entries": context_id["entries"], "state_version": state_version}
+    return {"change_id": contract_id["change_id"], "contract_sha256": contract_id["contract_sha256"], "output_language": contract_id["output_language"], "context_fingerprint": context_id["context_fingerprint"], "context_entries": context_id["entries"], "state_version": state_version}
 
 
 def _task_contract(contract: dict[str, Any], task_id: str) -> dict[str, Any]:
@@ -290,16 +304,31 @@ def _dev_docs_target_path(value: Any, where: str, group: str) -> str:
     return path
 
 
-def _finish_targets(finish_plan: dict[str, Any], group: str) -> list[dict[str, Any]]:
+def _finish_targets(finish_plan: dict[str, Any], group: str, output_language: str) -> list[dict[str, Any]]:
     result = []
     for raw in _require_list(finish_plan.get(group), f"finish_plan.{group}"):
         item = _require_object(raw, f"finish_plan.{group}[]")
         before = item.get("before_sha256")
-        result.append({"path": _dev_docs_target_path(item.get("path"), f"finish_plan.{group}[].path", group), "before_sha256": _require_sha(before, f"finish_plan.{group}[].before_sha256") if before is not None else None})
+        path = _dev_docs_target_path(item.get("path"), f"finish_plan.{group}[].path", group)
+        language_source = item.get("language_source")
+        if language_source not in {"contract_output_language", "existing_target", "user_confirmed"}:
+            raise ProtocolError("UNKNOWN_TARGET_LANGUAGE", "finish target language_source must be declared before packet derivation", {"group": group, "source": language_source})
+        target_language = _language_tag(item.get("target_language"), f"finish_plan.{group}[].target_language", "UNKNOWN_TARGET_LANGUAGE")
+        if before is None:
+            if target_language != output_language or language_source != "contract_output_language":
+                raise ProtocolError("INVALID_TARGET_LANGUAGE", "new finish targets must use packet output_language from contract", {"group": group, "target_language": target_language, "output_language": output_language, "language_source": language_source})
+        elif language_source == "contract_output_language":
+            raise ProtocolError("INVALID_TARGET_LANGUAGE", "existing finish targets must use existing_target or user_confirmed language_source", {"group": group, "language_source": language_source})
+        result.append({
+            "path": path,
+            "before_sha256": _require_sha(before, f"finish_plan.{group}[].before_sha256") if before is not None else None,
+            "target_language": target_language,
+            "language_source": language_source,
+        })
     return result
 
 
-def _finish_plan_details(finish_plan: dict[str, Any]) -> dict[str, Any]:
+def _finish_plan_details(finish_plan: dict[str, Any], output_language: str) -> dict[str, Any]:
     proposal = finish_plan.get("knowledge_proposal")
     if proposal is None:
         proposal = finish_plan.get("proposal")
@@ -316,8 +345,8 @@ def _finish_plan_details(finish_plan: dict[str, Any]) -> dict[str, Any]:
     else:
         raise ProtocolError("INVALID_FINISH_PLAN", "finish plan knowledge_proposal must be a non-empty string, array or object")
     archive_intent = _non_empty(finish_plan.get("archive_intent"), "finish_plan.archive_intent")
-    knowledge_targets = _finish_targets(finish_plan, "knowledge_targets")
-    archive_targets = _finish_targets(finish_plan, "archive_targets")
+    knowledge_targets = _finish_targets(finish_plan, "knowledge_targets", output_language)
+    archive_targets = _finish_targets(finish_plan, "archive_targets", output_language)
     if not knowledge_targets and not archive_targets:
         raise ProtocolError("INVALID_FINISH_PLAN", "finish plan must include at least one approved target")
     all_paths = [item["path"] for item in knowledge_targets + archive_targets]
@@ -370,6 +399,7 @@ def worker_packet(repo_path: str | Path, contract: dict[str, Any], context: dict
         "contract_sha256": fresh["contract_sha256"],
         "context_fingerprint": fresh["context_fingerprint"],
         "state_version": fresh["state_version"],
+        "output_language": fresh["output_language"],
         "task_id": str(task_id),
         "ownership": ownership,
         "range": _range(base, expected_dirty_state="clean"),
@@ -399,6 +429,7 @@ def reviewer_packet(repo_path: str | Path, contract: dict[str, Any], context: di
         "contract_sha256": fresh["contract_sha256"],
         "context_fingerprint": fresh["context_fingerprint"],
         "state_version": fresh["state_version"],
+        "output_language": fresh["output_language"],
         "task_id": str(task_id),
         "ownership": [{"path": item["path"], "mode": "read"} for item in ownership],
         "range": _range(base, head, expected_dirty_state="clean"),
@@ -454,6 +485,7 @@ def completion_packet(repo_path: str | Path, contract: dict[str, Any], context: 
         "contract_sha256": fresh["contract_sha256"],
         "context_fingerprint": fresh["context_fingerprint"],
         "state_version": fresh["state_version"],
+        "output_language": fresh["output_language"],
         "task_heads": dict(sorted(task_heads.items())),
         "implementation_range": implementation_range,
         "acceptance_index_sha256": acceptance_index_sha256,
@@ -473,7 +505,7 @@ def finish_packet(repo_path: str | Path, contract: dict[str, Any], context: dict
     decision = _require_object(decision_doc, "decision")
     completion = _require_object(completion_identity_doc.get("completion_identity", completion_identity_doc), "completion_identity")
     finish_plan = _require_object(finish_plan, "finish_plan")
-    details = _finish_plan_details(finish_plan)
+    details = _finish_plan_details(finish_plan, fresh["output_language"])
     decision_sha = _require_sha(decision.get("decision_sha256", finish_plan.get("decision_sha256")), "decision_sha256")
     if finish_plan.get("decision_sha256") and finish_plan["decision_sha256"] != decision_sha:
         raise ProtocolError("STALE_DECISION", "finish plan decision identity is stale")
@@ -489,6 +521,7 @@ def finish_packet(repo_path: str | Path, contract: dict[str, Any], context: dict
         "contract_sha256": fresh["contract_sha256"],
         "context_fingerprint": fresh["context_fingerprint"],
         "state_version": fresh["state_version"],
+        "output_language": fresh["output_language"],
         "range": _range(base, head, expected_dirty_state="clean"),
         "snapshots": snapshots,
         "completion_sha256": completion_sha,

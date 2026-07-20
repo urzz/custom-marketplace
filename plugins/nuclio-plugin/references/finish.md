@@ -1,6 +1,6 @@
 # Finish
 
-Finish 定义 Nuclio 在 `work` 完成候选实现后，如何形成 completion proposal、收集用户 Finish Gate decision，并在 fresh accept 后才执行长期知识写入、journal 与 archive。Finish 不修产品代码，不自动批准失败风险，不把模糊肯定推断为 accept。
+Finish 定义 Nuclio 在 `work` 完成候选实现后，如何形成 completion proposal、收集用户 Finish Gate decision，并在 fresh accept 后才执行长期知识写入、journal 与 archive。Finish 不修产品代码，不自动批准失败风险，不把模糊肯定推断为 accept，并保持 machine protocol English 与 Contract-bound `output_language` prose 分离。
 
 ## Contents
 
@@ -29,11 +29,11 @@ Finish 只能在 helper 判定 `CHANGE_ROOT=.dev-docs/changes/<change-id>` 下�
 - `CHANGE_ROOT/evidence/decision.md` identity
 - finish apply journal target `CHANGE_ROOT/evidence/finish-apply.md`
 
-Finish Gate 的用户 decision 只对这些 identity 生效。任何 artifact hash、state version、context fingerprint、completion proposal 或 finish plan 改变，都必须重新请求 decision。
+Finish Gate 的用户 decision 只对这些 identity 生效。任何 artifact hash、state version、context fingerprint、completion proposal、Contract-bound `output_language` 或 finish plan 改变，都必须重新请求 decision。
 
 ## decision.md 四段
 
-Finish 展示给用户的 `CHANGE_ROOT/evidence/decision.md` 必须只包含以下四个顶层决策段，段名固定：
+Finish 展示给用户的 `CHANGE_ROOT/evidence/decision.md` 必须只包含以下四个顶层决策段，段名固定为 English。段内维护者 prose 使用 Contract-bound `output_language`；machine fields、hash、path、command、enum、raw output 与 quoted evidence 保持 English/original：
 
 1. `Completion Verdict`
 2. `Remaining Risks`
@@ -88,14 +88,14 @@ Archive Decision 不是 approval。只有 Finish Gate fresh accept 才能使 hel
 
 ## 允许的 decision token
 
-Finish 只接受用户以 exact token 表达的四种 decision，且 helper enum 必须逐字保持：
+Finish 只接受用户以 trim-only exact token 表达的四种 decision，且 helper enum 必须逐字保持 canonical English：
 
-- `accept`
-- `request_changes`
-- `defer`
-- `reject`
+- `accept`（alias：`同意`）
+- `request_changes`（alias：`要求修改`）
+- `defer`（alias：`暂缓`）
+- `reject`（alias：`拒绝`）
 
-这些 token 必须针对当前展示的 `CHANGE_ROOT/evidence/decision.md` identity。Controller 可以要求用户选择其中之一，但不能把“看起来不错”、“继续吧”、“可以”、“LGTM”或其它模糊肯定推断为 `accept`。
+这些 token 必须针对当前展示的 `CHANGE_ROOT/evidence/decision.md` identity。Controller 可以要求用户选择其中之一或列出的 exact alias，但不能把“看起来不错”、“继续吧”、“继续”、“可以”、“我同意”、“LGTM”或其它模糊肯定推断为 `accept`。Finish 中 `继续` 无效且不会 apply。
 
 ## accept
 
@@ -103,8 +103,8 @@ Finish 只接受用户以 exact token 表达的四种 decision，且 helper enum
 
 Fresh accept 后允许的写入仅限：
 
-- `Knowledge Proposal` 中逐项列明的 knowledge targets。
-- `Archive Decision` 中列明的 journal、state archive 或 archive target。
+- `Knowledge Proposal` 中逐项列明且带有 target language metadata 的 knowledge targets。
+- `Archive Decision` 中列明且带有 target language metadata 的 journal、state archive 或 archive target。
 - finish apply evidence 中列明的 `finish_apply_journal`，其 journal file 必须是 `CHANGE_ROOT/evidence/finish-apply.md`。
 
 Accept 不允许：
@@ -112,6 +112,8 @@ Accept 不允许：
 - 修改产品代码。
 - 新增未列明 knowledge target。
 - 覆盖未在 proposal 中列明的长期知识。
+- 在 unknown、missing 或 contradictory target language metadata 下写 existing/new knowledge 或 archive target。
+- 因当前 `output_language` 改变而自动翻译/重写 historical archives、prior evidence、hash-chain inputs、archived decision/completion 或既有长期 knowledge。
 - 改写 Contract acceptance 或 Task evidence。
 - 忽略 finish apply validation failure。
 
@@ -160,9 +162,9 @@ Reject 不能被 Controller 转换为 request_changes，也不能保留隐含 ap
 
 ## 模糊答复
 
-任何不完全等于 `accept`、`request_changes`、`defer` 或 `reject` 的答复都是 ambiguous。Controller 必须一次只问一个澄清问题：
+任何不完全等于 canonical token 或列明中文 alias 的答复都是 ambiguous。`同意` 是 exact alias for `accept`；`继续`、`可以`、`我同意`、`继续吧` 都不是 Finish accept。Controller 必须一次只问一个澄清问题：
 
-“请选择 exact Finish decision：`accept`、`request_changes`、`defer` 或 `reject`。”
+“请选择 exact Finish decision：`accept`/`同意`、`request_changes`/`要求修改`、`defer`/`暂缓` 或 `reject`/`拒绝`。”
 
 在用户给出 exact token 前：
 
@@ -174,13 +176,14 @@ Reject 不能被 Controller 转换为 request_changes，也不能保留隐含 ap
 
 ## Finish apply
 
-Fresh accept 后，helper 派生 finish packet，packet `role` 为 `finish`，包含 `completion_sha256`、`decision_sha256`、`finish_plan_sha256` 与 `snapshots`。Finish apply 的执行必须满足：
+Fresh accept 后，helper 派生 finish packet，packet `role` 为 `finish`，包含 `completion_sha256`、`decision_sha256`、`finish_plan_sha256`、Contract-bound `output_language`、target `target_language`/`language_source` metadata 与 `snapshots`。Finish apply 的执行必须满足：
 
 1. 重新校验 `CHANGE_ROOT/state.json` version、`CHANGE_ROOT/evidence/decision.md` identity、`CHANGE_ROOT/evidence/completion.md` proposal hash 与 finish plan hash。
-2. 读取所有 knowledge target 的 before identity。
-3. 按 `Archive Decision` 的 apply order 写入列明 targets。
-4. 写入 `CHANGE_ROOT/evidence/finish-apply.md` evidence，包含每个 target 的 before/after hash 与 reason。
-5. 原子更新 `CHANGE_ROOT/state.json` 到 `archived`，或在失败时停止并报告未应用步骤。
+2. 读取所有 knowledge target 的 before identity 与 target language metadata。
+3. 对 existing target 保持现有主要语言或 `user_confirmed` 语言；对 new target 使用 Contract-bound `output_language`；若 metadata missing/unknown/contradictory，STOP before write。
+4. 按 `Archive Decision` 的 apply order 写入列明 targets。
+5. 写入 `CHANGE_ROOT/evidence/finish-apply.md` evidence，包含每个 target 的 before/after hash、language metadata 与 reason；journal 的人类说明用适用语言，machine fields 保持 English。
+6. 原子更新 `CHANGE_ROOT/state.json` 到 `archived`，或在失败时停止并报告未应用步骤。
 
 如果任一步骤失败，helper 必须 fail closed。已写入但未 journal 的情况必须进入 manual handling blocker，Controller 不得声称完成。
 
@@ -191,8 +194,9 @@ Finish 阶段禁止：
 - 修产品代码或继续实现 Task。
 - 把 failed checks 自动降级为 accepted risk。
 - 在 fresh accept 前改变长期 knowledge bytes、journal 或 archive。
-- 把模糊肯定推断为 accept。
+- 把模糊肯定推断为 accept，或把 `继续` 当成 Finish accept。
 - 写出 `Knowledge Proposal` 和 `Archive Decision` 未列明的路径。
+- 在 unknown target language 下继续写入。
 - 使用 raw transcript、agent summary 或 chat history 作为 decision authority。
 - 因 artifact existence 推断 Finish approval。
 - 将 active change authority 写到 project-root `.dev-docs/` artifacts；必须使用 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl`、`CHANGE_ROOT/state.json`、`CHANGE_ROOT/research/`、`CHANGE_ROOT/evidence/completion.md`、`CHANGE_ROOT/evidence/decision.md` 与 `CHANGE_ROOT/evidence/finish-apply.md`。

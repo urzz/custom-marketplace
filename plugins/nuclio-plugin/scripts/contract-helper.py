@@ -209,10 +209,23 @@ def _require_keys(obj: dict[str, Any], required: set[str], allowed: set[str], wh
         raise ProtocolError("INVALID_CONTRACT_SHAPE", f"missing fields in {where}", {"fields": missing})
 
 
+LANGUAGE_TAG_RE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+
+
 def _non_empty_string(value: Any, where: str, code: str = "INVALID_CONTRACT_SHAPE") -> str:
     if not isinstance(value, str) or not value.strip():
         raise ProtocolError(code, f"{where} must be a non-empty string")
     return value.strip()
+
+
+def _output_language(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise ProtocolError("INVALID_OUTPUT_LANGUAGE", "output_language must be a non-empty language tag")
+    if value != value.strip():
+        raise ProtocolError("INVALID_OUTPUT_LANGUAGE", "output_language must not contain leading or trailing whitespace", {"output_language": value})
+    if not LANGUAGE_TAG_RE.fullmatch(value):
+        raise ProtocolError("INVALID_OUTPUT_LANGUAGE", "output_language must be a BCP-47 style language tag", {"output_language": value})
+    return value
 
 
 def _string_list(value: Any, where: str, min_items: int = 0) -> list[str]:
@@ -460,7 +473,7 @@ def _validate_handoffs(tasks: list[dict[str, Any]]) -> None:
 def validate_contract(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict) or not data:
         raise ProtocolError("INVALID_CONTRACT", "contract root must be a non-empty object")
-    required = {"schema_version", "change_id", "contract_version", "intent", "acceptance", "constraints", "design", "tasks", "context_policy", "validation"}
+    required = {"schema_version", "change_id", "contract_version", "output_language", "intent", "acceptance", "constraints", "design", "tasks", "context_policy", "validation"}
     allowed = required | {"migration_or_rollout"}
     _require_keys(data, required, allowed, "contract")
     if not isinstance(data["schema_version"], int) or data["schema_version"] < 1:
@@ -477,6 +490,7 @@ def validate_contract(data: Any) -> dict[str, Any]:
         "schema_version": data["schema_version"],
         "change_id": _non_empty_string(data["change_id"], "change_id"),
         "contract_version": _non_empty_string(data["contract_version"], "contract_version"),
+        "output_language": _output_language(data["output_language"]),
         "intent": _validate_intent(data["intent"]),
         "acceptance": _string_list(data["acceptance"], "acceptance", 1),
         "constraints": _string_list(data["constraints"], "constraints", 1),
@@ -549,6 +563,7 @@ def build_summary(contract: dict[str, Any]) -> dict[str, Any]:
         "approval_notice": "summary artifact is not an approval and cannot replace fresh Contract Gate approval",
         "change_id": contract["change_id"],
         "contract_version": contract["contract_version"],
+        "output_language": contract["output_language"],
         "goals": contract["intent"]["goals"],
         "non_goals": contract["intent"]["non_goals"],
         "acceptance_count": len(contract["acceptance"]),

@@ -79,10 +79,10 @@ The current convention for `SKILL.md` is:
 For Nuclio changes, keep all of the following in sync:
 
 - `plugins/nuclio-plugin/skills/*/SKILL.md`
-- `plugins/nuclio-plugin/references/*.md`
+- `plugins/nuclio-plugin/references/*.md`，including canonical `output-language.md`
 - `plugins/nuclio-plugin/agents/*.md`
 - `plugins/nuclio-plugin/schemas/*.json`
-- `plugins/nuclio-plugin/scripts/*.py`
+- `plugins/nuclio-plugin/scripts/*.py`，including contract/context/state/packet/evidence/migration helpers and tests
 - Nuclio behavior eval cases in `plugins/nuclio-plugin/references/eval-prompts.md`
 
 Dev-stack skill 的通用同步原则：修改任一 skill 时，保持对应 `plugins/dev-stack/skills/<skill-name>/SKILL.md`、一层 `references/`、插件元数据、README / CLAUDE 说明与本地校验命令一致。`/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时必须同步这些文件，但它不使用 skill-forge 的 file-backed review-state、bounded agents 或 helper scripts。
@@ -97,7 +97,7 @@ Dev-stack `skill-forge` 变更还需要保持以下专用文件同步：
 
 对于 dev-stack `skill-forge`，`plugins/dev-stack/skills/skill-forge/scripts/review-state-helper.py` 是 file-backed review state 的唯一写入者。Bounded implementer 和 fixer agents 仅限 `Read, Edit, Write, Grep, Glob, Bash`；bounded reviewer 和 final-reviewer agents 仅限 `Read, Grep, Glob, Bash`；skill-local eval agent 仍保持 simulation-only 且由 flag gate 控制。
 
-Nuclio's canonical lifecycle is `init → work → finish`. Work owns Contract drafting, the fresh Contract Gate, bounded per-Task implementer/reviewer/fixer execution, and mandatory change-wide completion; Finish is decision-first and requires a fresh exact `accept` before applying long-term `.dev-docs` knowledge or archive targets.
+Nuclio's canonical lifecycle is `init → work → finish`. Work owns Contract drafting, the fresh Contract Gate, bounded per-Task implementer/reviewer/fixer execution, and mandatory change-wide completion; Finish is decision-first and requires a fresh exact `accept` before applying long-term `.dev-docs` knowledge or archive targets. Nuclio machine protocol remains English/stable for schema keys, helper actions, state/decision enums, hashes, paths, commands, fixed headings, and raw output; maintainer-facing prose is controlled by Contract-bound `output_language` and Finish target language metadata. When changing output language propagation, Gate aliases, packet schema, agent reports, Finish apply, archive, or knowledge behavior, keep skills, `output-language.md`, references, schemas, helpers, tests, and eval cases in sync without changing marketplace registration or claiming a new runtime hook/daemon/MCP/local `.claude/` install/`.nuclio/` state mechanism.
 
 ## Common Commands
 

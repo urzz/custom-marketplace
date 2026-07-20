@@ -47,11 +47,12 @@ def load_state_helper():
     return module
 
 
-def contract():
+def contract(output_language="en"):
     return {
         "schema_version": 1,
         "change_id": "change-alpha",
         "contract_version": "v1",
+        "output_language": output_language,
         "sha256": A_HASH,
         "acceptance": [{"id": "AC-object", "text": "object id acceptance"}, "string acceptance", {"text": "object without id"}],
         "tasks": [
@@ -123,13 +124,17 @@ def acceptance_index():
     return [{"id": "AC-object", "accepted": True, "evidence": "tests"}, {"id": "A2", "accepted": True, "evidence": "review"}, {"id": "A3", "accepted": True, "evidence": "contract"}]
 
 
-def finish_plan():
+def finish_plan(new_language="en", existing_language="en", existing_source="existing_target"):
     return {
         "decision_sha256": F_HASH,
         "finish_plan_sha256": D_HASH,
         "knowledge_proposal": {"summary": "retain validated decisions"},
-        "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}],
-        "archive_targets": [{"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH}],
+        "knowledge_targets": [
+            {"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "target_language": new_language, "language_source": "contract_output_language"}
+        ],
+        "archive_targets": [
+            {"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH, "target_language": existing_language, "language_source": existing_source}
+        ],
         "archive_intent": "archive change-local evidence after finish approval",
     }
 
@@ -245,6 +250,62 @@ class PacketHelperTests(unittest.TestCase):
         for packet in packets:
             with self.subTest(role=packet["role"]):
                 self.assert_schema_valid(packet)
+                self.assertEqual(packet["output_language"], "en")
+
+    def test_output_language_propagates_to_all_roles_and_binds_packet_id(self):
+        zh_contract = contract("zh-CN")
+        zh_plan = finish_plan(new_language="zh-CN", existing_language="zh-CN", existing_source="user_confirmed")
+        packets = [
+            self.helper.worker_packet(self.repo, zh_contract, context(), state(), "T1", "abcdef1", "abcdef1", [{"path": "handoff.json", "state": "absent"}], 7),
+            self.helper.reviewer_packet(self.repo, zh_contract, context(), state(), "T1", "abcdef1", "abcdef2", mutation_map(), {"evidence_paths": ["evidence/t1.json"]}, [{"path": "iface.py", "state": "present", "sha256": A_HASH}], 7),
+            self.helper.completion_packet(self.repo, zh_contract, context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {"evidence_paths": ["validation.json"]}, ["risk-1"], 7),
+            self.helper.finish_packet(self.repo, zh_contract, context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, zh_plan, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7),
+        ]
+        for packet in packets:
+            with self.subTest(role=packet["role"]):
+                self.assertEqual(packet["output_language"], "zh-CN")
+                self.assert_schema_valid(packet)
+        en_packet = self.helper.worker_packet(self.repo, contract("en"), context(), state(), "T1", "abcdef1", "abcdef1", [{"path": "handoff.json", "state": "absent"}], 7)
+        self.assertNotEqual(packets[0]["packet_id"], en_packet["packet_id"])
+
+    def test_packet_schema_requires_language_and_rejects_invalid_language_tag(self):
+        packet = self.helper.worker_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef1", [{"path": "handoff.json", "state": "absent"}], 7)
+        missing = dict(packet)
+        missing.pop("output_language")
+        self.assert_schema_invalid(missing)
+        invalid = dict(packet)
+        invalid["output_language"] = "中文"
+        self.assert_schema_invalid(invalid)
+
+    def test_finish_targets_enforce_language_source_rules(self):
+        zh_contract = contract("zh-CN")
+        user_confirmed = finish_plan(new_language="zh-CN", existing_language="fr", existing_source="user_confirmed")
+        packet = self.helper.finish_packet(self.repo, zh_contract, context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, user_confirmed, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+        self.assertEqual(packet["knowledge_targets"][0]["target_language"], "zh-CN")
+        self.assertEqual(packet["knowledge_targets"][0]["language_source"], "contract_output_language")
+        self.assertEqual(packet["archive_targets"][0]["target_language"], "fr")
+        self.assertEqual(packet["archive_targets"][0]["language_source"], "user_confirmed")
+
+        wrong_new = finish_plan(new_language="en")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, zh_contract, context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, wrong_new, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+        self.assertEqual(ctx.exception.code, "INVALID_TARGET_LANGUAGE")
+
+        wrong_existing = finish_plan(new_language="zh-CN", existing_language="zh-CN", existing_source="contract_output_language")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, zh_contract, context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, wrong_existing, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+        self.assertEqual(ctx.exception.code, "INVALID_TARGET_LANGUAGE")
+
+    def test_finish_packet_fails_closed_for_missing_or_unknown_existing_target_language(self):
+        missing_language = finish_plan(new_language="en")
+        missing_language["archive_targets"][0].pop("target_language")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, missing_language, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+        self.assertEqual(ctx.exception.code, "UNKNOWN_TARGET_LANGUAGE")
+        unknown_source = finish_plan(new_language="en", existing_language="en", existing_source="unknown")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, unknown_source, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+        self.assertEqual(ctx.exception.code, "UNKNOWN_TARGET_LANGUAGE")
 
     def test_worker_packet_is_minimal_and_binds_current_task_only(self):
         packet = self.helper.worker_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef1", [{"path": "handoff.json", "state": "absent"}], 7)
@@ -345,8 +406,8 @@ class PacketHelperTests(unittest.TestCase):
         self.assertEqual(packet["decision_sha256"], F_HASH)
         self.assertEqual(packet["finish_plan_sha256"], D_HASH)
         self.assertEqual(packet["knowledge_proposal"], {"summary": "retain validated decisions"})
-        self.assertEqual(packet["knowledge_targets"], [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None}])
-        self.assertEqual(packet["archive_targets"], [{"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH}])
+        self.assertEqual(packet["knowledge_targets"], [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "target_language": "en", "language_source": "contract_output_language"}])
+        self.assertEqual(packet["archive_targets"], [{"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH, "target_language": "en", "language_source": "existing_target"}])
         self.assertEqual(packet["archive_intent"], "archive change-local evidence after finish approval")
         self.assertNotIn("ownership", packet)
         self.assertNotIn("checks", packet)
@@ -397,6 +458,18 @@ class PacketHelperTests(unittest.TestCase):
         )
         self.assertEqual(proc2.returncode, 2)
         self.assertEqual(json.loads(proc2.stderr)["code"], "OUTPUT_EXISTS")
+
+    def test_cli_does_not_allow_dispatch_language_override(self):
+        out = self.repo / "packet.json"
+        proc = subprocess.run(
+            [
+                sys.executable, str(HELPER), "worker", "--repo", str(self.repo), "--contract-json", json.dumps(contract("zh-CN")), "--context-json", json.dumps(context()), "--state-json", json.dumps(state()), "--base", "abcdef1", "--head", "abcdef1", "--task-id", "T1", "--output", str(out), "--expected-state-version", "7", "--output-language", "en",
+            ],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("unrecognized arguments: --output-language", proc.stderr)
 
 
 if __name__ == "__main__":
