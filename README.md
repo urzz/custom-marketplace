@@ -5,7 +5,7 @@
 当前仓库包含：
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator` 技能，用于帮助用户起草 OpenClaw skill。
-- `dev-stack`：提供 `/skill-forge` 与 `/commit` 技能；`/skill-forge` 用于创建、设计和改进 Claude Code skill，`/commit` 用于分析当前 Git 变更、生成单个 Conventional Commit，并在安全门禁下选择性暂存和提交。
+- `dev-stack`：提供 `/skill-forge` 与 `/commit` 技能；`/skill-forge` 用于创建、设计和改进 Claude Code skill，`/commit` 用于自包含分析当前 Git 变更、生成单个 Conventional Commit，并在安全门禁下选择性暂存和提交。`/commit` 不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务；最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff。
 - `nuclio`：提供 Nucl.io 文件驱动 Contract Workbench：`/nuclio:init`、`/nuclio:work`、`/nuclio:finish`。
 
 ## 仓库结构
@@ -14,7 +14,7 @@
 - `plugins/<plugin-name>/.claude-plugin/plugin.json`：插件元数据。
 - `plugins/<plugin-name>/skills/<skill-name>/SKILL.md`：技能定义。
 - `plugins/<plugin-name>/skills/<skill-name>/references/`：skill 级协议、设计约束或参考资料（如 dev-stack/skill-forge 的 review-state 协议与模板；`plugins/dev-stack/skills/commit/references/` 存放 `/commit` 的变更分析和提交策略）。
-- `plugins/<plugin-name>/skills/<skill-name>/scripts/`：skill 级确定性辅助脚本与测试（如 dev-stack/skill-forge 的 `review-state-helper.py`、`plan-task-query.py` 与 unittest；`/commit` 当前不使用 skill-forge agents、scripts 或 review-state helper）。
+- `plugins/<plugin-name>/skills/<skill-name>/scripts/`：skill 级确定性辅助脚本与测试（如 dev-stack/skill-forge 的 `review-state-helper.py`、`plan-task-query.py` 与 unittest；`/commit` 自包含执行，不使用 skill-forge agents、scripts 或 review-state helper，也不新增 runtime hook、daemon、MCP 或本地状态机制）。
 - `plugins/<plugin-name>/references/`：插件级共享协议、设计约束或参考资料（如 Nuclio）。
 - `plugins/<plugin-name>/agents/`：插件级有界子代理定义（如 dev-stack/skill-forge 的 bounded implementer/reviewer/fixer/final reviewer，以及 Nuclio agents）。
 - `plugins/<plugin-name>/scripts/`：插件级确定性辅助脚本与测试（如 Nuclio contract/context/state/packet/evidence/migration helpers）。
@@ -34,7 +34,7 @@
 plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 ```
 
-Dev-stack 的 `/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由一层 references 维护变更分析与提交策略；修改 `/commit` 时需保持这些文件同步，且不要把它绑定到 skill-forge 的 agents、scripts 或 review-state helper。
+Dev-stack 的 `/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时需同步这些文件、`plugins/dev-stack/.claude-plugin/plugin.json` 的版本、README / CLAUDE 说明与本地校验命令。`/commit` 必须维持自包含执行边界：不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，不绑定 skill-forge 的 agents、scripts 或 review-state helper，也不新增 runtime hook、daemon 或本地状态机制。最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未进入最终 staged diff 的内容不得影响最终消息。内部协议更新不应误写成 marketplace source、plugin name 或外部依赖变化。
 
 Nuclio 的 Contract Workbench 行为还需要与以下内容保持一致：
 

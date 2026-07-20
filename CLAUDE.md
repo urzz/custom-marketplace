@@ -85,7 +85,7 @@ For Nuclio changes, keep all of the following in sync:
 - `plugins/nuclio-plugin/scripts/*.py`，including contract/context/state/packet/evidence/migration helpers and tests
 - Nuclio behavior eval cases in `plugins/nuclio-plugin/references/eval-prompts.md`
 
-Dev-stack skill 的通用同步原则：修改任一 skill 时，保持对应 `plugins/dev-stack/skills/<skill-name>/SKILL.md`、一层 `references/`、插件元数据、README / CLAUDE 说明与本地校验命令一致。`/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时必须同步这些文件，但它不使用 skill-forge 的 file-backed review-state、bounded agents 或 helper scripts。
+Dev-stack skill 的通用同步原则：修改任一 skill 时，保持对应 `plugins/dev-stack/skills/<skill-name>/SKILL.md`、一层 `references/`、插件元数据、README / CLAUDE 说明与本地校验命令一致。`/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时必须同步这些文件、`plugins/dev-stack/.claude-plugin/plugin.json` 的版本、README / CLAUDE 说明与本地校验命令。`/commit` 必须维持自包含执行边界：不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，不使用 skill-forge 的 file-backed review-state、bounded agents、scripts 或 review-state helper，也不新增 runtime hook、daemon 或本地状态机制。最终 Conventional Commit 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未进入最终 staged diff 的内容不得影响最终消息。内部行为变更不得误写成 marketplace source、plugin name 或外部依赖变化。
 
 Dev-stack `skill-forge` 变更还需要保持以下专用文件同步：
 

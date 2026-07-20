@@ -1,6 +1,6 @@
 # 变更分析协议
 
-本文定义 commit skill 的完整盘点、逐路径分类与 auto-execution eligibility 协议。调用方必须先获得完整 Git 状态，再按本文对每个 changed path 生成可审查证据；本文不链接其他 reference，也不定义提交执行策略。
+本文定义 commit skill 的完整盘点、逐路径分类与 auto-execution eligibility 协议。调用方必须先获得完整 Git 状态，再按本文对每个 changed path 生成可审查证据；本文不链接其他 reference，也不定义提交执行策略。本文产出的用户请求、当前会话说明、路径状态、各状态面 diff 与 untracked 安全摘要只可用于主意图推断、逐路径分类、风险和暂存边界，不得直接成为最终 commit message 语义；最终消息只能由选择性暂存后重新读取的最终 staged diff 决定。
 
 ## Contents
 
@@ -28,7 +28,7 @@
 
 - 路径：相对仓库根目录的路径；rename 同时记录旧路径与新路径。
 - 状态：staged、unstaged、untracked、rename、delete、conflict 的组合。
-- 变更摘要：已跟踪文件使用 diff 摘要；untracked 文件使用安全摘要。
+- 变更摘要：已跟踪文件使用 diff 摘要；untracked 文件使用安全摘要；这些摘要只作为分类、风险和暂存边界证据。
 - 内容安全判断：是否疑似密钥、凭据、环境文件、私钥、证书、异常二进制、大文件、生成物或无法安全读取。
 - 意图关联证据：说明该路径如何支持、偏离或无法判断是否支持主意图。
 - 分类：恰好一个 `include`、`exclude` 或 `uncertain`。
@@ -45,7 +45,7 @@
 3. changed paths、diff 摘要与文件命名共同呈现的单一主题。
 4. 已 staged 内容与 unstaged/untracked 内容之间稳定一致的语义关系。
 
-若这些证据无法形成高置信度主题，必须标记低置信度意图并停止等待用户补充；不得为了生成 commit message 而编造业务目的。
+这些证据只用于判断本次提交的候选边界、风险和 provisional intent/message，不得直接写入最终 commit message，也不得在最终 staged diff 无法支撑时补充 type、scope、summary 或 body 语义。若这些证据无法形成高置信度主题，必须标记低置信度意图并停止等待用户补充；不得为了生成 commit message 而编造业务目的。
 
 ## 分类规则
 
@@ -66,13 +66,13 @@
 
 ## 自动执行资格
 
-`auto-execution eligibility` 是独立于分类的布尔结论，必须逐项给出证据。它只表示本轮分析能否授权 exact include set 与 exact subject/body 自动执行；自动资格不是风险接受，也不得把失败项部分自动执行。
+`auto-execution eligibility` 是独立于分类的布尔结论，必须逐项给出证据。它只表示本轮分析能否授权 exact include set 与 provisional message/intent 语义边界进入选择性暂存；自动资格不是风险接受，也不得把失败项部分自动执行。
 
 只有以下条件全部满足时，eligibility 才为 true：
 
 1. Git 状态、staged/unstaged diff 与 untracked 安全摘要完整可读，且命令结果可解析。
 2. 不存在 conflict、无法解释的状态、无法安全读取的路径或分析期间状态/diff 漂移。
-3. 主意图高置信，且 Conventional Commit 消息可信、不编造业务目的。
+3. 主意图高置信，且 provisional message/intent 可信、不编造业务目的；最终消息仍必须等待最终 staged diff 生成。
 4. 每个 changed path 都有高置信、唯一的 `include`、`exclude` 或 `uncertain` 分类。
 5. `include` 非空，`uncertain` 为空。
 6. 不存在疑似 secret、token、password、credential、`.env`、私钥、证书或认证配置。
@@ -110,4 +110,4 @@
 - mandatory-stop 列表：触发原因、路径与后续需要的最小用户确认。
 - auto-execution eligibility：布尔结论、每项资格的 pass/fail 证据、失败项对应路径或状态摘要。
 
-若没有 changed path，输出“无可提交变更”并结束；若所有路径都是 exclude 或 uncertain，不得生成可执行 commit 提案。若 mandatory-stop 或 eligibility=false，只展示必要风险摘要、路径和最小裁定问题，不泄漏敏感值。
+若没有 changed path，输出“无可提交变更”并结束；若所有路径都是 exclude 或 uncertain，不得生成可执行 commit 提案。若 mandatory-stop 或 eligibility=false，只展示必要风险摘要、路径和最小裁定问题，不泄漏敏感值。任何分析输出中的主意图、路径理由或 provisional message/intent 都不能作为最终消息语义来源；最终 Conventional Commit 的 type、scope、summary 和 body 必须在选择性暂存与 index 边界验证后，仅由最终 staged diff 支撑。
