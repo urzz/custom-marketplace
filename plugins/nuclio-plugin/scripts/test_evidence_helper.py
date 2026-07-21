@@ -425,6 +425,78 @@ class EvidenceHelperTests(unittest.TestCase):
             self.helper.validate_finish_apply(decision_doc["decision"]["decision_sha256"], plan, journal, repo)
         self.assertEqual(ctx.exception.code, "STALE_TARGET")
 
+    def test_evidence_schema_enforces_existing_task_kind_payloads(self):
+        if jsonschema is None:
+            self.skipTest("jsonschema not installed")
+        schema = json.loads((ROOT / "plugins" / "nuclio-plugin" / "schemas" / "evidence.schema.json").read_text(encoding="utf-8"))
+        validator = jsonschema.Draft202012Validator(schema)
+        base_doc = {
+            "schema_version": 1,
+            "evidence_id": "existing-kind-1",
+            "change_id": "change-1",
+            "contract_sha256": A_HASH,
+            "context_fingerprint": B_HASH,
+            "state_version": 9,
+            "created_at": "2026-07-22T00:00:00Z",
+        }
+        for kind in ("task_implementation", "task_validation", "task_review", "mutation_map"):
+            with self.subTest(kind=kind):
+                missing = {**base_doc, "kind": kind}
+                with self.assertRaises(jsonschema.ValidationError):
+                    validator.validate(missing)
+        check = {"command": ["python3", "-m", "unittest"], "exit_code": 0, "output_sha256": C_HASH}
+        valid_docs = [
+            {
+                **base_doc,
+                "evidence_id": "task-implementation-1",
+                "kind": "task_implementation",
+                "task_id": "T1",
+                "implementation": {
+                    "base_head": "abcdef1",
+                    "new_head": "abcdef9",
+                    "changed_paths": ["plugins/nuclio-plugin/scripts/evidence-helper.py"],
+                    "ownership_sha256": D_HASH,
+                    "checks": [check],
+                },
+            },
+            {
+                **base_doc,
+                "evidence_id": "task-validation-1",
+                "kind": "task_validation",
+                "task_id": "T1",
+                "validation": {"checks": [check], "result": "success"},
+            },
+            {
+                **base_doc,
+                "evidence_id": "task-review-1",
+                "kind": "task_review",
+                "task_id": "T1",
+                "review": {
+                    "review_package_sha256": E_HASH,
+                    "findings": [{"id": "R1", "severity": "blocking", "summary": "review finding"}],
+                },
+            },
+            {
+                **base_doc,
+                "evidence_id": "mutation-map-1",
+                "kind": "mutation_map",
+                "mutation_map": {
+                    "entries": [
+                        {
+                            "path": "plugins/nuclio-plugin/schemas/evidence.schema.json",
+                            "mode": "modify",
+                            "before": {"path": "plugins/nuclio-plugin/schemas/evidence.schema.json", "sha256": A_HASH},
+                            "after": {"path": "plugins/nuclio-plugin/schemas/evidence.schema.json", "sha256": B_HASH},
+                        }
+                    ],
+                    "sha256": D_HASH,
+                },
+            },
+        ]
+        for doc in valid_docs:
+            with self.subTest(valid_kind=doc["kind"]):
+                validator.validate(doc)
+
     def test_evidence_schema_rejects_cross_kind_payloads(self):
         if jsonschema is None:
             self.skipTest("jsonschema not installed")
