@@ -17,6 +17,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+try:
+    import jsonschema
+except ImportError:  # pragma: no cover - optional test dependency
+    jsonschema = None
+
 ROOT = Path(__file__).resolve().parents[3]
 HELPER = ROOT / "plugins" / "nuclio-plugin" / "scripts" / "evidence-helper.py"
 A_HASH = "a" * 64
@@ -409,10 +414,40 @@ class EvidenceHelperTests(unittest.TestCase):
         valid = self.helper.validate_finish_apply(decision_doc["decision"]["decision_sha256"], plan, journal, repo)
         self.assertTrue(valid["verified"])
         self.assertIn(".dev-docs/changes/index.md", valid["covered_paths"])
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.validate_finish_apply(decision_doc["decision"]["decision_sha256"], plan, journal)
+        self.assertEqual(ctx.exception.code, "REPO_AUTHORITY_REQUIRED")
+        proc = subprocess.run([sys.executable, str(HELPER), "validate-finish-apply", "--decision-sha256", decision_doc["decision"]["decision_sha256"], "--finish-plan-json", json.dumps(plan), "--journal-json", json.dumps(journal)], text=True, capture_output=True)
+        self.assertEqual(proc.returncode, 2)
+        self.assertNotIn('"ok":true', proc.stdout)
         (repo / entries[0]["path"]).write_text("drift\n", encoding="utf-8")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.validate_finish_apply(decision_doc["decision"]["decision_sha256"], plan, journal, repo)
         self.assertEqual(ctx.exception.code, "STALE_TARGET")
+
+    def test_evidence_schema_rejects_cross_kind_payloads(self):
+        if jsonschema is None:
+            self.skipTest("jsonschema not installed")
+        temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)
+        _change_root, completion_doc, decision_doc, plan, _completion_md, _decision_md = make_handoff(self.helper, repo)
+        for target in plan["knowledge_targets"] + plan["archive_targets"] + plan["index_targets"]:
+            path = repo / target["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"after {target['path']}\n", encoding="utf-8")
+        entries = []
+        for target in plan["knowledge_targets"] + plan["archive_targets"] + plan["index_targets"]:
+            entries.append({"path": target["path"], "before_sha256": target["before_sha256"], "after_sha256": self.helper.sha256_bytes((repo / target["path"]).read_bytes()), "reason": target["reason"], "target_language": target["target_language"], "language_source": target["language_source"], "apply_result": "applied", "archive_result": "archived" if target["path"].startswith(".dev-docs/archive/") else "not_applicable"})
+        journal_payload = {"decision_sha256": decision_doc["decision"]["decision_sha256"], "finish_plan_sha256": plan["finish_plan_sha256"], "approval_identity": "accept:2026-07-22", "archive_intent": plan["archive_intent"], "entries": entries, "verified": True}
+        journal_payload["journal_sha256"] = self.helper.self_hash(journal_payload, "journal_sha256")
+        journal_doc = evidence_doc("finish_apply_journal", journal_payload)
+        schema = json.loads((ROOT / "plugins" / "nuclio-plugin" / "schemas" / "evidence.schema.json").read_text(encoding="utf-8"))
+        validator = jsonschema.Draft202012Validator(schema)
+        for doc in (completion_doc, decision_doc, journal_doc):
+            validator.validate(doc)
+        mixed = json.loads(json.dumps(completion_doc))
+        mixed["decision"] = decision_doc["decision"]
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate(mixed)
 
     def test_cli_temporary_git_trajectory_json_envelope(self):
         temp, repo, base, head = make_repo(); self.addCleanup(temp.cleanup)

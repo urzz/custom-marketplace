@@ -842,7 +842,9 @@ def validate_finish_apply(decision_sha256: str, finish_plan: dict[str, Any], jou
         raise ProtocolError("INVALID_FINISH_JOURNAL", "finish apply journal must be marked verified")
     targets = _journal_targets(finish_plan)
     entries = {}
-    repo = _repo(repo_path) if repo_path is not None else None
+    if repo_path is None:
+        raise ProtocolError("REPO_AUTHORITY_REQUIRED", "validate-finish-apply requires repo authority to verify actual target bytes")
+    repo = _repo(repo_path)
     for raw in _require_list(journal.get("entries"), "journal.entries"):
         item = _require_object(raw, "journal.entries[]")
         item_required = {"path", "before_sha256", "after_sha256", "reason", "target_language", "language_source", "apply_result", "archive_result"}
@@ -871,10 +873,9 @@ def validate_finish_apply(decision_sha256: str, finish_plan: dict[str, Any], jou
             raise ProtocolError("INVALID_FINISH_JOURNAL", "archive target requires archived archive_result", {"path": path})
         if expected["group"] in {"knowledge_targets", "index_targets"} and archive_result != "not_applicable":
             raise ProtocolError("INVALID_FINISH_JOURNAL", "index/knowledge target requires not_applicable archive_result", {"path": path})
-        if repo is not None:
-            actual_after = _file_sha(repo, path)
-            if actual_after != after:
-                raise ProtocolError("STALE_TARGET", "finish journal after identity does not match actual repo bytes", {"path": path, "expected": after, "actual": actual_after})
+        actual_after = _file_sha(repo, path)
+        if actual_after != after:
+            raise ProtocolError("STALE_TARGET", "finish journal after identity does not match actual repo bytes", {"path": path, "expected": after, "actual": actual_after})
         entries[path] = dict(item)
     missing_targets = sorted(set(targets) - set(entries))
     if missing_targets:
@@ -953,7 +954,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--context-fingerprint", required=True)
 
     p = sub.add_parser("validate-finish-apply")
-    p.add_argument("--repo")
+    p.add_argument("--repo", required=True)
     p.add_argument("--decision-sha256", required=True)
     p.add_argument("--finish-plan-json", required=True)
     p.add_argument("--journal-json", required=True)

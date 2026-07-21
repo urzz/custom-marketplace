@@ -80,15 +80,24 @@
   "allOf": [
     {
       "if": {"properties": {"kind": {"const": "completion"}}, "required": ["kind"]},
-      "then": {"required": ["completion"]}
+      "then": {
+        "required": ["completion"],
+        "not": {"anyOf": [{"required": ["decision"]}, {"required": ["finish_apply_journal"]}]}
+      }
     },
     {
       "if": {"properties": {"kind": {"const": "decision"}}, "required": ["kind"]},
-      "then": {"required": ["decision"]}
+      "then": {
+        "required": ["decision"],
+        "not": {"anyOf": [{"required": ["completion"]}, {"required": ["finish_apply_journal"]}]}
+      }
     },
     {
       "if": {"properties": {"kind": {"const": "finish_apply_journal"}}, "required": ["kind"]},
-      "then": {"required": ["finish_apply_journal"]}
+      "then": {
+        "required": ["finish_apply_journal"],
+        "not": {"anyOf": [{"required": ["completion"]}, {"required": ["decision"]}]}
+      }
     }
   ],
   "$defs": {
