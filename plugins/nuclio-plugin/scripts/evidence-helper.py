@@ -8,7 +8,8 @@ Nuclio deterministic evidence helper.
 - [Path, repository and hash helpers](#path-repository-and-hash-helpers)
 - [Snapshot and fingerprint evidence](#snapshot-and-fingerprint-evidence)
 - [Git mutation map and task evidence validation](#git-mutation-map-and-task-evidence-validation)
-- [Completion, decision and finish validation](#completion-decision-and-finish-validation)
+- [Completion, decision and Finish handoff validation](#completion-decision-and-finish-handoff-validation)
+- [Finish readiness and apply validation](#finish-readiness-and-apply-validation)
 - [CLI](#cli)
 
 The helper emits deterministic JSON evidence identities using only the Python
@@ -35,6 +36,11 @@ HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 VCS_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F._/-]{0,127}$")
 DECISION_SECTIONS = ("Completion Verdict", "Remaining Risks", "Knowledge Proposal", "Archive Decision")
 BROAD_PATHS = {"", ".", "./", "plugins", "src", "docs", ".dev-docs", ".git"}
+SCHEMA_DIR = Path(__file__).resolve().parents[1] / "schemas"
+EVIDENCE_SCHEMA_PATH = SCHEMA_DIR / "evidence.schema.json"
+FINISH_PLAN_SCHEMA_PATH = SCHEMA_DIR / "finish-plan.schema.json"
+TARGET_GROUPS = ("knowledge_targets", "archive_targets", "index_targets")
+INDEX_TARGETS = {".dev-docs/index.md", ".dev-docs/index.json", ".dev-docs/changes/index.md"}
 
 
 class ProtocolError(Exception):
@@ -55,6 +61,12 @@ def sha256_bytes(value: bytes) -> str:
 
 def sha256_value(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def self_hash(value: dict[str, Any], self_field: str) -> str:
+    value = _require_object(value, self_field)
+    body = {key: value[key] for key in sorted(value) if key != self_field}
+    return sha256_value(body)
 
 
 def _require_object(value: Any, where: str) -> dict[str, Any]:
@@ -94,6 +106,12 @@ def _require_sha(value: Any, where: str) -> str:
     return value
 
 
+def _optional_sha(value: Any, where: str) -> str | None:
+    if value is None:
+        return None
+    return _require_sha(value, where)
+
+
 def _require_vcs(value: Any, where: str) -> str:
     text = _non_empty(value, where)
     if not VCS_RE.fullmatch(text):
@@ -115,6 +133,15 @@ def _load_json_value(raw: str, where: str) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ProtocolError("INVALID_JSON_FILE", f"{where} file is not valid JSON", {"path": raw}) from exc
+
+
+def _load_schema(path: Path) -> dict[str, Any]:
+    try:
+        return _require_object(json.loads(path.read_text(encoding="utf-8")), str(path))
+    except FileNotFoundError as exc:
+        raise ProtocolError("SCHEMA_NOT_FOUND", "required schema file is missing", {"path": str(path)}) from exc
+    except json.JSONDecodeError as exc:
+        raise ProtocolError("INVALID_SCHEMA", "required schema file is not valid JSON", {"path": str(path)}) from exc
 
 
 def _repo(path: str | Path) -> Path:
@@ -146,6 +173,13 @@ def _file_sha(repo: Path, relpath: str) -> str | None:
     if not path.is_file():
         raise ProtocolError("INVALID_PATH", "path must name a concrete file", {"path": relpath})
     return sha256_bytes(path.read_bytes())
+
+
+def _path_bytes_sha(path: str | Path) -> str:
+    file_path = Path(path)
+    if not file_path.exists() or not file_path.is_file():
+        raise ProtocolError("INPUT_NOT_FOUND", "markdown path must name an existing file", {"path": str(path)})
+    return sha256_bytes(file_path.read_bytes())
 
 
 def _git(repo: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -456,109 +490,399 @@ def completion_identity(state: dict[str, Any], contract_sha256: str, context_fin
         "acceptance_index_sha256": sha256_value(accepted),
         "mutation_map_sha256": _require_sha(state.get("completion", {}).get("mutation_map_sha256", state.get("mutation_map_sha256")), "state.mutation_map_sha256"),
     }
-    identity["completion_sha256"] = sha256_value(identity)
+    identity["completion_sha256"] = self_hash(identity, "completion_sha256")
     return {"schema_version": 1, "completion_identity": identity}
 
 
-def decision_hash(decision: dict[str, Any], completion_identity_doc: dict[str, Any]) -> dict[str, Any]:
+def decision_hash(decision: dict[str, Any], completion_identity_doc: dict[str, Any], decision_state_version: int | None = None, markdown_sha256: str | None = None) -> dict[str, Any]:
     decision = _require_object(decision, "decision")
     missing = [section for section in DECISION_SECTIONS if section not in decision]
     if missing:
         raise ProtocolError("INVALID_DECISION", "decision must contain the four fixed sections", {"missing": missing})
-    canonical_decision = {section: decision[section] for section in DECISION_SECTIONS}
     completion = completion_identity_doc.get("completion_identity", completion_identity_doc)
-    body = {"completion_identity": completion, "decision": canonical_decision}
-    return {"schema_version": 1, "decision_sha256": sha256_value(body), "decision_sections": list(DECISION_SECTIONS), "completion_sha256": completion.get("completion_sha256")}
+    if decision_state_version is None:
+        decision_state_version = completion.get("state_version", 0) + 1
+    if not isinstance(decision_state_version, int) or isinstance(decision_state_version, bool) or decision_state_version < 1:
+        raise ProtocolError("INVALID_STATE_VERSION", "decision_state_version must be a positive integer")
+    if markdown_sha256 is None:
+        markdown_sha256 = sha256_bytes(canonical_json({section: decision[section] for section in DECISION_SECTIONS}).encode("utf-8"))
+    body: dict[str, Any] = {
+        "completion_sha256": _require_sha(completion.get("completion_sha256"), "completion.completion_sha256"),
+        "decision_state_version": decision_state_version,
+        "markdown_sha256": _require_sha(markdown_sha256, "markdown_sha256"),
+    }
+    for section in DECISION_SECTIONS:
+        body[section] = decision[section]
+    body["decision_sha256"] = self_hash(body, "decision_sha256")
+    return {"schema_version": 1, "decision_sha256": body["decision_sha256"], "decision_sections": list(DECISION_SECTIONS), "completion_sha256": body["completion_sha256"], "decision_state_version": decision_state_version, "decision": body}
+
+
+def _evidence_payload(doc: dict[str, Any], kind: str) -> dict[str, Any]:
+    _load_schema(EVIDENCE_SCHEMA_PATH)
+    doc = _require_object(doc, kind)
+    if doc.get("schema_version") != 1:
+        raise ProtocolError("INVALID_EVIDENCE", "evidence schema_version must be 1", {"kind": kind})
+    if doc.get("kind") != kind:
+        raise ProtocolError("INVALID_EVIDENCE", "evidence kind mismatch", {"expected": kind, "actual": doc.get("kind")})
+    common = {"schema_version", "evidence_id", "kind", "change_id", "contract_sha256", "context_fingerprint", "state_version", "created_at", kind}
+    extras = sorted(set(doc) - common)
+    if extras:
+        raise ProtocolError("INVALID_EVIDENCE", "evidence contains unsupported fields", {"fields": extras})
+    for key in ("evidence_id", "change_id", "created_at"):
+        _non_empty(doc.get(key), f"{kind}.{key}")
+    _require_sha(doc.get("contract_sha256"), f"{kind}.contract_sha256")
+    _require_sha(doc.get("context_fingerprint"), f"{kind}.context_fingerprint")
+    if not isinstance(doc.get("state_version"), int) or isinstance(doc.get("state_version"), bool) or doc["state_version"] < 1:
+        raise ProtocolError("INVALID_STATE_VERSION", f"{kind}.state_version must be a positive integer")
+    return _require_object(doc.get(kind), kind)
+
+
+def _validate_completion_evidence(completion_doc: dict[str, Any]) -> dict[str, Any]:
+    completion = _evidence_payload(completion_doc, "completion")
+    required = {"completion_sha256", "proposal_sha256", "mutation_map_sha256", "check_summary_sha256", "task_heads", "task_evidence", "task_evidence_sha256", "implementation_range", "acceptance_index_sha256", "residual_risks", "markdown_sha256"}
+    extras = sorted(set(completion) - required)
+    missing = sorted(required - set(completion))
+    if missing or extras:
+        raise ProtocolError("INVALID_COMPLETION", "completion evidence shape mismatch", {"missing": missing, "extra": extras})
+    for key in ("completion_sha256", "proposal_sha256", "mutation_map_sha256", "check_summary_sha256", "task_evidence_sha256", "acceptance_index_sha256", "markdown_sha256"):
+        _require_sha(completion.get(key), f"completion.{key}")
+    _require_object(completion.get("task_heads"), "completion.task_heads")
+    task_evidence = _require_object(completion.get("task_evidence"), "completion.task_evidence")
+    for task_id, evidence_sha in task_evidence.items():
+        _non_empty(str(task_id), "completion.task_evidence key")
+        _require_sha(evidence_sha, f"completion.task_evidence.{task_id}")
+    if completion["task_evidence_sha256"] != sha256_value(dict(sorted(task_evidence.items()))):
+        raise ProtocolError("STALE_COMPLETION", "completion task evidence identity is stale")
+    impl = _require_object(completion.get("implementation_range"), "completion.implementation_range")
+    if set(impl) != {"base", "head"}:
+        raise ProtocolError("INVALID_COMPLETION", "completion implementation_range must contain base and head")
+    _require_vcs(impl.get("base"), "completion.implementation_range.base")
+    _require_vcs(impl.get("head"), "completion.implementation_range.head")
+    _require_list(completion.get("residual_risks"), "completion.residual_risks")
+    expected = self_hash(completion, "completion_sha256")
+    if completion["completion_sha256"] != expected:
+        raise ProtocolError("STALE_COMPLETION", "completion self hash is stale", {"expected": expected, "actual": completion["completion_sha256"]})
+    return completion
+
+
+def _validate_decision_evidence(decision_doc: dict[str, Any], completion_sha256: str, projected_state_version: int | None = None) -> dict[str, Any]:
+    decision = _evidence_payload(decision_doc, "decision")
+    required = {"decision_sha256", "completion_sha256", "decision_state_version", "markdown_sha256", *DECISION_SECTIONS}
+    extras = sorted(set(decision) - required)
+    missing = sorted(required - set(decision))
+    if missing or extras:
+        raise ProtocolError("INVALID_DECISION", "decision evidence shape mismatch", {"missing": missing, "extra": extras})
+    if _require_sha(decision.get("completion_sha256"), "decision.completion_sha256") != completion_sha256:
+        raise ProtocolError("STALE_DECISION", "decision does not bind the current completion identity")
+    if not isinstance(decision.get("decision_state_version"), int) or isinstance(decision.get("decision_state_version"), bool) or decision["decision_state_version"] < 1:
+        raise ProtocolError("INVALID_STATE_VERSION", "decision_state_version must be a positive integer")
+    if projected_state_version is not None and decision["decision_state_version"] != projected_state_version:
+        raise ProtocolError("STALE_DECISION", "decision state version is not the projected state version", {"expected": projected_state_version, "actual": decision["decision_state_version"]})
+    _require_sha(decision.get("markdown_sha256"), "decision.markdown_sha256")
+    expected = self_hash(decision, "decision_sha256")
+    if _require_sha(decision.get("decision_sha256"), "decision.decision_sha256") != expected:
+        raise ProtocolError("STALE_DECISION", "decision self hash is stale", {"expected": expected, "actual": decision.get("decision_sha256")})
+    return decision
 
 
 def _finish_target_path(value: Any, group_name: str) -> str:
     path = normalize_path(value, f"{group_name}[].path")
-    if not path.startswith(".dev-docs/"):
-        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish targets must stay inside .dev-docs", {"path": path})
-    allowed = path.startswith(".dev-docs/knowledge/") or path.startswith(".dev-docs/archive/") or path in {".dev-docs/index.md", ".dev-docs/index.json"}
-    if not allowed:
-        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish target is not an allowed knowledge/index/archive file", {"path": path})
-    if group_name == "archive_targets" and not path.startswith(".dev-docs/archive/"):
-        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "archive targets must use .dev-docs/archive/", {"path": path})
-    if group_name == "knowledge_targets" and path.startswith(".dev-docs/archive/"):
-        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "knowledge targets must not use .dev-docs/archive/", {"path": path})
+    if group_name == "knowledge_targets":
+        if not path.startswith(".dev-docs/knowledge/"):
+            raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "knowledge targets must use .dev-docs/knowledge/", {"path": path})
+    elif group_name == "archive_targets":
+        if not path.startswith(".dev-docs/archive/"):
+            raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "archive targets must use .dev-docs/archive/", {"path": path})
+    elif group_name == "index_targets":
+        if path not in INDEX_TARGETS:
+            raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "index targets must use the approved index files", {"path": path})
+    else:
+        raise ProtocolError("INVALID_FINISH_PLAN", "unknown finish target group", {"group": group_name})
+    if path.startswith(".dev-docs/changes/") and path != ".dev-docs/changes/index.md":
+        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish targets must not write change-local evidence paths", {"path": path})
     return path
 
 
-def _plan_targets(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _validate_target_item(raw: Any, group_name: str, contract_output_language: str | None = None) -> dict[str, Any]:
+    item = _require_object(raw, f"{group_name}[]")
+    required = {"path", "before_sha256", "proposed_after_summary", "reason", "source_evidence", "target_language", "language_source"}
+    missing = sorted(required - set(item))
+    extras = sorted(set(item) - required)
+    if missing or extras:
+        raise ProtocolError("INVALID_FINISH_PLAN", "finish target shape mismatch", {"group": group_name, "missing": missing, "extra": extras})
+    path = _finish_target_path(item.get("path"), group_name)
+    before = _optional_sha(item.get("before_sha256"), f"{group_name}[].before_sha256")
+    proposed_after_summary = _non_empty(item.get("proposed_after_summary"), f"{group_name}[].proposed_after_summary")
+    reason = _non_empty(item.get("reason"), f"{group_name}[].reason")
+    source_evidence = _require_sha(item.get("source_evidence"), f"{group_name}[].source_evidence")
+    target_language = _language_tag(item.get("target_language"), f"{group_name}[].target_language")
+    language_source = item.get("language_source")
+    if before is None:
+        if language_source != "contract_output_language":
+            raise ProtocolError("INVALID_TARGET_LANGUAGE", "new finish targets must use contract_output_language", {"path": path, "language_source": language_source})
+        if contract_output_language is not None and target_language != contract_output_language:
+            raise ProtocolError("INVALID_TARGET_LANGUAGE", "new target language must match contract output_language", {"path": path, "expected": contract_output_language, "actual": target_language})
+    elif language_source not in {"existing_target", "user_confirmed"}:
+        raise ProtocolError("INVALID_TARGET_LANGUAGE", "existing finish targets must use existing_target or user_confirmed", {"path": path, "language_source": language_source})
+    return {"path": path, "before_sha256": before, "proposed_after_summary": proposed_after_summary, "reason": reason, "source_evidence": source_evidence, "target_language": target_language, "language_source": language_source, "group": group_name}
+
+
+def _plan_targets(plan: dict[str, Any], contract_output_language: str | None = None) -> dict[str, dict[str, Any]]:
     targets: dict[str, dict[str, Any]] = {}
-    for group_name in ("knowledge_targets", "archive_targets"):
-        for raw in _require_list(plan.get(group_name, []), f"{group_name}"):
-            item = _require_object(raw, f"{group_name}[]")
-            path = _finish_target_path(item.get("path"), group_name)
+    for group_name in TARGET_GROUPS:
+        for raw in _require_list(plan.get(group_name, []), group_name):
+            target = _validate_target_item(raw, group_name, contract_output_language)
+            path = target["path"]
             if path in targets:
                 raise ProtocolError("INVALID_FINISH_PLAN", "finish target appears more than once", {"path": path})
-            language_source = item.get("language_source")
-            if language_source not in {"contract_output_language", "existing_target", "user_confirmed"}:
-                raise ProtocolError("INVALID_TARGET_LANGUAGE", "finish plan target language_source is invalid", {"path": path, "language_source": language_source})
-            targets[path] = {
-                "path": path,
-                "group": group_name,
-                "before_sha256": item.get("before_sha256"),
-                "target_language": _language_tag(item.get("target_language"), f"{group_name}[].target_language"),
-                "language_source": language_source,
-            }
-            if targets[path]["before_sha256"] is not None:
-                _require_sha(targets[path]["before_sha256"], f"{group_name}[].before_sha256")
+            targets[path] = target
     if not targets:
         raise ProtocolError("INVALID_FINISH_PLAN", "finish plan must include at least one target")
     return targets
 
 
-def validate_finish_apply(decision_sha256: str, finish_plan: dict[str, Any], journal: dict[str, Any]) -> dict[str, Any]:
+def validate_finish_plan(finish_plan: dict[str, Any], contract_output_language: str | None = None) -> dict[str, Any]:
+    _load_schema(FINISH_PLAN_SCHEMA_PATH)
+    plan = _require_object(finish_plan, "finish_plan")
+    required = {"schema_version", "contract_sha256", "context_fingerprint", "completion_sha256", "decision_sha256", "mutation_map_sha256", "acceptance_index_sha256", "implementation_range", "task_heads", "decision_state_version", "archive_intent", "knowledge_proposal", "knowledge_targets", "archive_targets", "index_targets", "finish_plan_sha256"}
+    missing = sorted(required - set(plan))
+    extras = sorted(set(plan) - required)
+    if missing or extras:
+        raise ProtocolError("INVALID_FINISH_PLAN", "finish plan shape mismatch", {"missing": missing, "extra": extras})
+    if plan.get("schema_version") != 1:
+        raise ProtocolError("INVALID_FINISH_PLAN", "finish plan schema_version must be 1")
+    for key in ("contract_sha256", "context_fingerprint", "completion_sha256", "decision_sha256", "mutation_map_sha256", "acceptance_index_sha256"):
+        _require_sha(plan.get(key), f"finish_plan.{key}")
+    impl = _require_object(plan.get("implementation_range"), "finish_plan.implementation_range")
+    if set(impl) != {"base", "head"}:
+        raise ProtocolError("INVALID_FINISH_PLAN", "finish plan implementation_range must contain base and head")
+    _require_vcs(impl.get("base"), "finish_plan.implementation_range.base")
+    _require_vcs(impl.get("head"), "finish_plan.implementation_range.head")
+    _require_object(plan.get("task_heads"), "finish_plan.task_heads")
+    if not isinstance(plan.get("decision_state_version"), int) or isinstance(plan.get("decision_state_version"), bool) or plan["decision_state_version"] < 1:
+        raise ProtocolError("INVALID_STATE_VERSION", "finish plan decision_state_version must be a positive integer")
+    _non_empty(plan.get("archive_intent"), "finish_plan.archive_intent")
+    if "knowledge_proposal" not in plan:
+        raise ProtocolError("INVALID_FINISH_PLAN", "finish plan must include knowledge_proposal")
+    _plan_targets(plan, contract_output_language)
+    expected = self_hash(plan, "finish_plan_sha256")
+    if _require_sha(plan.get("finish_plan_sha256"), "finish_plan.finish_plan_sha256") != expected:
+        raise ProtocolError("STALE_FINISH_PLAN", "finish plan self hash is stale", {"expected": expected, "actual": plan.get("finish_plan_sha256")})
+    return plan
+
+
+def _state_contract_output_language(state: dict[str, Any]) -> str | None:
+    contract = state.get("contract") if isinstance(state.get("contract"), dict) else {}
+    value = contract.get("output_language") or state.get("output_language")
+    if value is None:
+        return None
+    return _language_tag(value, "contract.output_language")
+
+
+def _extract_expected_identity(state: dict[str, Any], contract_sha256: str | None = None, context_fingerprint: str | None = None) -> dict[str, str | int | None]:
+    state = _require_object(state, "state")
+    state_version = state.get("state_version")
+    if not isinstance(state_version, int) or isinstance(state_version, bool) or state_version < 1:
+        raise ProtocolError("INVALID_STATE_VERSION", "state.state_version must be a positive integer")
+    return {
+        "contract_sha256": contract_sha256 or state.get("contract_sha256") or state.get("contract", {}).get("sha256"),
+        "context_fingerprint": context_fingerprint or state.get("context_fingerprint") or state.get("context", {}).get("fingerprint"),
+        "decision_state_version": state_version + 1,
+    }
+
+
+def _compare_identity(actual: dict[str, Any], expected: dict[str, Any], keys: tuple[str, ...], code: str) -> None:
+    mismatches = {key: {"expected": expected.get(key), "actual": actual.get(key)} for key in keys if expected.get(key) is not None and actual.get(key) != expected.get(key)}
+    if mismatches:
+        raise ProtocolError(code, "finish handoff identity drift", mismatches)
+
+
+def _verify_target_before(repo: Path, targets: dict[str, dict[str, Any]]) -> None:
+    for path, target in targets.items():
+        actual = _file_sha(repo, path)
+        expected = target.get("before_sha256")
+        if actual != expected:
+            raise ProtocolError("STALE_TARGET", "finish target before identity drift", {"path": path, "expected": expected, "actual": actual})
+
+
+def validate_finish_handoff(state: dict[str, Any], completion_doc: dict[str, Any], decision_doc: dict[str, Any], finish_plan: dict[str, Any], markdown_paths: dict[str, Any]) -> dict[str, Any]:
+    state = _require_object(state, "state")
+    markdown_paths = _require_object(markdown_paths, "markdown_paths")
+    completion = _validate_completion_evidence(completion_doc)
+    projected = _extract_expected_identity(state)
+    decision = _validate_decision_evidence(decision_doc, completion["completion_sha256"], projected["decision_state_version"])
+    plan = validate_finish_plan(finish_plan, _state_contract_output_language(state))
+    _compare_identity(completion_doc, projected, ("contract_sha256", "context_fingerprint"), "STALE_COMPLETION")
+    _compare_identity(decision_doc, projected, ("contract_sha256", "context_fingerprint"), "STALE_DECISION")
+    _compare_identity(plan, projected, ("contract_sha256", "context_fingerprint", "decision_state_version"), "STALE_FINISH_PLAN")
+    plan_expected = {
+        "completion_sha256": completion["completion_sha256"],
+        "decision_sha256": decision["decision_sha256"],
+        "mutation_map_sha256": completion["mutation_map_sha256"],
+        "acceptance_index_sha256": completion["acceptance_index_sha256"],
+        "implementation_range": completion["implementation_range"],
+        "task_heads": completion["task_heads"],
+    }
+    _compare_identity(plan, plan_expected, tuple(plan_expected), "STALE_FINISH_PLAN")
+    completion_md = markdown_paths.get("completion") or markdown_paths.get("completion_md")
+    decision_md = markdown_paths.get("decision") or markdown_paths.get("decision_md")
+    if _path_bytes_sha(completion_md) != completion["markdown_sha256"]:
+        raise ProtocolError("MARKDOWN_HASH_MISMATCH", "completion markdown bytes do not match completion evidence")
+    if _path_bytes_sha(decision_md) != decision["markdown_sha256"]:
+        raise ProtocolError("MARKDOWN_HASH_MISMATCH", "decision markdown bytes do not match decision evidence")
+    repo = markdown_paths.get("repo") or markdown_paths.get("repo_root")
+    targets = _plan_targets(plan, _state_contract_output_language(state))
+    if repo:
+        _verify_target_before(_repo(repo), targets)
+    return {
+        "schema_version": 1,
+        "valid": True,
+        "decision_sha256": decision["decision_sha256"],
+        "finish_plan_sha256": plan["finish_plan_sha256"],
+        "decision_state_version": decision["decision_state_version"],
+        "covered_targets": sorted(targets),
+        "handoff_sha256": sha256_value({"completion_sha256": completion["completion_sha256"], "decision_sha256": decision["decision_sha256"], "finish_plan_sha256": plan["finish_plan_sha256"]}),
+    }
+
+
+def _read_json_file(path: Path, label: str) -> dict[str, Any]:
+    if not path.exists():
+        raise ProtocolError("MISSING_FINISH_HANDOFF", "required finish handoff artifact is missing", {"artifact": label, "path": str(path)})
+    try:
+        return _require_object(json.loads(path.read_text(encoding="utf-8")), label)
+    except json.JSONDecodeError as exc:
+        raise ProtocolError("INVALID_JSON_FILE", "finish handoff artifact is not valid JSON", {"artifact": label, "path": str(path)}) from exc
+
+
+def _artifact_status(path: Path) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        return {"exists": False, "sha256": None}
+    return {"exists": True, "sha256": sha256_bytes(path.read_bytes())}
+
+
+def finish_readiness(change_root: str | Path, contract_sha256: str, context_fingerprint: str) -> dict[str, Any]:
+    change_root = Path(change_root).resolve()
+    artifacts_paths = {
+        "state_json": change_root / "state.json",
+        "completion_md": change_root / "completion.md",
+        "completion_json": change_root / "completion.json",
+        "decision_md": change_root / "decision.md",
+        "decision_json": change_root / "decision.json",
+        "finish_plan_json": change_root / "finish-plan.json",
+    }
+    artifacts = {name: _artifact_status(path) for name, path in artifacts_paths.items()}
+    base_payload = {
+        "schema_version": 1,
+        "ready": False,
+        "current_action": "rebuild_finish_handoff",
+        "artifacts": artifacts,
+        "identity_comparison": {"contract_sha256": {"expected": contract_sha256, "actual": None}, "context_fingerprint": {"expected": context_fingerprint, "actual": None}},
+        "failure_code": None,
+        "repair_hint": None,
+        "decision_sha256": None,
+        "finish_plan_sha256": None,
+        "decision_state_version": None,
+    }
+    try:
+        _require_sha(contract_sha256, "contract_sha256")
+        _require_sha(context_fingerprint, "context_fingerprint")
+        missing_artifacts = [name for name, status in artifacts.items() if not status["exists"]]
+        if missing_artifacts:
+            raise ProtocolError("MISSING_FINISH_HANDOFF", "required finish handoff artifacts are missing", {"artifacts": missing_artifacts})
+        state = _read_json_file(artifacts_paths["state_json"], "state.json")
+        completion_doc = _read_json_file(artifacts_paths["completion_json"], "completion.json")
+        decision_doc = _read_json_file(artifacts_paths["decision_json"], "decision.json")
+        finish_plan = _read_json_file(artifacts_paths["finish_plan_json"], "finish-plan.json")
+        completion_payload = completion_doc.get("completion", {}) if isinstance(completion_doc, dict) else {}
+        decision_payload = decision_doc.get("decision", {}) if isinstance(decision_doc, dict) else {}
+        base_payload["identity_comparison"] = {
+            "contract_sha256": {"expected": contract_sha256, "actual": completion_doc.get("contract_sha256")},
+            "context_fingerprint": {"expected": context_fingerprint, "actual": completion_doc.get("context_fingerprint")},
+            "completion_sha256": {"expected": completion_payload.get("completion_sha256"), "actual": decision_payload.get("completion_sha256")},
+            "decision_sha256": {"expected": decision_payload.get("decision_sha256"), "actual": finish_plan.get("decision_sha256")},
+        }
+        state = dict(state)
+        state["contract_sha256"] = contract_sha256
+        state["context_fingerprint"] = context_fingerprint
+        result = validate_finish_handoff(state, completion_doc, decision_doc, finish_plan, {"completion_md": artifacts_paths["completion_md"], "decision_md": artifacts_paths["decision_md"], "repo": change_root.parents[2] if len(change_root.parents) >= 3 else change_root})
+        base_payload.update({"ready": True, "current_action": "request_finish_acceptance", "failure_code": None, "repair_hint": None, "decision_sha256": result["decision_sha256"], "finish_plan_sha256": result["finish_plan_sha256"], "decision_state_version": result["decision_state_version"]})
+    except ProtocolError as exc:
+        base_payload["failure_code"] = exc.code
+        base_payload["repair_hint"] = "Rebuild completion.md/json, decision.md/json, and finish-plan.json from current change-local state; do not infer Finish authority from chat history."
+        if exc.code in {"STALE_COMPLETION", "STALE_DECISION", "STALE_FINISH_PLAN", "STALE_TARGET", "MARKDOWN_HASH_MISMATCH"}:
+            base_payload["current_action"] = "rebuild_stale_finish_handoff"
+        if exc.code == "MISSING_FINISH_HANDOFF":
+            base_payload["current_action"] = "rebuild_missing_finish_handoff"
+    return base_payload
+
+
+def _journal_targets(finish_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return _plan_targets(finish_plan)
+
+
+def validate_finish_apply(decision_sha256: str, finish_plan: dict[str, Any], journal: dict[str, Any], repo_path: str | Path | None = None) -> dict[str, Any]:
     decision_sha256 = _require_sha(decision_sha256, "decision_sha256")
-    finish_plan = _require_object(finish_plan, "finish_plan")
+    finish_plan = validate_finish_plan(_require_object(finish_plan, "finish_plan"))
     journal = _require_object(journal, "journal")
+    required = {"decision_sha256", "finish_plan_sha256", "approval_identity", "archive_intent", "entries", "verified", "journal_sha256"}
+    missing = sorted(required - set(journal))
+    extras = sorted(set(journal) - required)
+    if missing or extras:
+        raise ProtocolError("INVALID_FINISH_JOURNAL", "finish apply journal shape mismatch", {"missing": missing, "extra": extras})
     if _require_sha(journal.get("decision_sha256"), "journal.decision_sha256") != decision_sha256:
         raise ProtocolError("STALE_DECISION", "journal decision identity is stale")
-    if finish_plan.get("decision_sha256") and finish_plan["decision_sha256"] != decision_sha256:
+    if finish_plan["decision_sha256"] != decision_sha256:
         raise ProtocolError("STALE_DECISION", "finish plan decision identity is stale")
-    if finish_plan.get("approval_identity") != journal.get("approval_identity"):
-        raise ProtocolError("STALE_APPROVAL", "finish apply approval identity is stale")
+    if _require_sha(journal.get("finish_plan_sha256"), "journal.finish_plan_sha256") != finish_plan["finish_plan_sha256"]:
+        raise ProtocolError("STALE_FINISH_PLAN", "journal finish plan identity is stale")
+    _non_empty(journal.get("approval_identity"), "journal.approval_identity")
     if _non_empty(finish_plan.get("archive_intent"), "finish_plan.archive_intent") != _non_empty(journal.get("archive_intent"), "journal.archive_intent"):
         raise ProtocolError("STALE_DECISION", "finish apply archive intent is stale")
-    targets = _plan_targets(finish_plan)
+    if journal.get("verified") is not True:
+        raise ProtocolError("INVALID_FINISH_JOURNAL", "finish apply journal must be marked verified")
+    targets = _journal_targets(finish_plan)
     entries = {}
+    repo = _repo(repo_path) if repo_path is not None else None
     for raw in _require_list(journal.get("entries"), "journal.entries"):
         item = _require_object(raw, "journal.entries[]")
+        item_required = {"path", "before_sha256", "after_sha256", "reason", "target_language", "language_source", "apply_result", "archive_result"}
+        item_missing = sorted(item_required - set(item))
+        item_extra = sorted(set(item) - item_required)
+        if item_missing or item_extra:
+            raise ProtocolError("INVALID_FINISH_JOURNAL", "finish journal entry shape mismatch", {"missing": item_missing, "extra": item_extra})
         path = normalize_path(item.get("path"), "journal.entries[].path")
         if path not in targets:
             raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish journal writes a target not approved by Knowledge Proposal or Archive Decision", {"path": path})
         if path in entries:
             raise ProtocolError("INVALID_FINISH_JOURNAL", "duplicate finish journal path", {"path": path})
-        before = item.get("before_sha256")
-        after = item.get("after_sha256")
-        if before is not None:
-            _require_sha(before, "journal.entries[].before_sha256")
-        if after is not None:
-            _require_sha(after, "journal.entries[].after_sha256")
-        expected_before = targets[path].get("before_sha256")
-        if expected_before != before:
-            raise ProtocolError("STALE_TARGET", "finish journal before identity does not match approved target", {"path": path, "expected": expected_before, "actual": before})
-        target_language = item.get("target_language")
-        language_source = item.get("language_source")
-        if target_language != targets[path]["target_language"] or language_source != targets[path]["language_source"]:
-            raise ProtocolError("STALE_TARGET_LANGUAGE", "finish journal language metadata does not match approved target", {"path": path, "expected": {"target_language": targets[path]["target_language"], "language_source": targets[path]["language_source"]}, "actual": {"target_language": target_language, "language_source": language_source}})
+        before = _optional_sha(item.get("before_sha256"), "journal.entries[].before_sha256")
+        after = _optional_sha(item.get("after_sha256"), "journal.entries[].after_sha256")
+        expected = targets[path]
+        if expected.get("before_sha256") != before:
+            raise ProtocolError("STALE_TARGET", "finish journal before identity does not match approved target", {"path": path, "expected": expected.get("before_sha256"), "actual": before})
+        if item.get("target_language") != expected["target_language"] or item.get("language_source") != expected["language_source"]:
+            raise ProtocolError("STALE_TARGET_LANGUAGE", "finish journal language metadata does not match approved target", {"path": path, "expected": {"target_language": expected["target_language"], "language_source": expected["language_source"]}, "actual": {"target_language": item.get("target_language"), "language_source": item.get("language_source")}})
+        if _non_empty(item.get("reason"), "journal.entries[].reason") != expected["reason"]:
+            raise ProtocolError("STALE_DECISION", "finish journal reason does not match approved target", {"path": path})
         if item.get("apply_result") != "applied":
             raise ProtocolError("INVALID_FINISH_JOURNAL", "finish journal apply_result must be applied", {"path": path})
         archive_result = item.get("archive_result")
-        if archive_result not in {"archived", "not_applicable"}:
-            raise ProtocolError("INVALID_FINISH_JOURNAL", "finish journal archive_result is invalid", {"path": path})
-        if targets[path]["group"] == "archive_targets" and archive_result != "archived":
+        if expected["group"] == "archive_targets" and archive_result != "archived":
             raise ProtocolError("INVALID_FINISH_JOURNAL", "archive target requires archived archive_result", {"path": path})
-        if targets[path]["group"] == "knowledge_targets" and archive_result != "not_applicable":
-            raise ProtocolError("INVALID_FINISH_JOURNAL", "knowledge target requires not_applicable archive_result", {"path": path})
-        entries[path] = item
-    missing = sorted(set(targets) - set(entries))
-    if missing:
-        raise ProtocolError("MISSING_FINISH_TARGET", "finish journal must cover every approved target", {"paths": missing})
-    body = {"decision_sha256": decision_sha256, "finish_plan_sha256": sha256_value(finish_plan), "entries": [entries[path] for path in sorted(entries)]}
-    return {"schema_version": 1, "valid": True, "journal_sha256": sha256_value(body), "covered_paths": sorted(entries)}
+        if expected["group"] in {"knowledge_targets", "index_targets"} and archive_result != "not_applicable":
+            raise ProtocolError("INVALID_FINISH_JOURNAL", "index/knowledge target requires not_applicable archive_result", {"path": path})
+        if repo is not None:
+            actual_after = _file_sha(repo, path)
+            if actual_after != after:
+                raise ProtocolError("STALE_TARGET", "finish journal after identity does not match actual repo bytes", {"path": path, "expected": after, "actual": actual_after})
+        entries[path] = dict(item)
+    missing_targets = sorted(set(targets) - set(entries))
+    if missing_targets:
+        raise ProtocolError("MISSING_FINISH_TARGET", "finish journal must cover every approved target", {"paths": missing_targets})
+    expected_journal_sha = self_hash(journal, "journal_sha256")
+    if _require_sha(journal.get("journal_sha256"), "journal.journal_sha256") != expected_journal_sha:
+        raise ProtocolError("INVALID_FINISH_JOURNAL", "finish journal self hash is stale", {"expected": expected_journal_sha, "actual": journal.get("journal_sha256")})
+    return {"schema_version": 1, "valid": True, "verified": True, "journal_sha256": expected_journal_sha, "covered_paths": sorted(entries)}
 
 
 def _ok(payload: dict[str, Any]) -> int:
@@ -611,8 +935,25 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("decision-hash")
     p.add_argument("--decision-json", required=True)
     p.add_argument("--completion-identity-json", required=True)
+    p.add_argument("--decision-state-version", type=int)
+    p.add_argument("--markdown-sha256")
+
+    p = sub.add_parser("validate-finish-handoff")
+    p.add_argument("--state-json", required=True)
+    p.add_argument("--completion-json", required=True)
+    p.add_argument("--decision-json", required=True)
+    p.add_argument("--finish-plan-json", required=True)
+    p.add_argument("--completion-md", required=True)
+    p.add_argument("--decision-md", required=True)
+    p.add_argument("--repo")
+
+    p = sub.add_parser("finish-readiness")
+    p.add_argument("--change-root", required=True)
+    p.add_argument("--contract-sha256", required=True)
+    p.add_argument("--context-fingerprint", required=True)
 
     p = sub.add_parser("validate-finish-apply")
+    p.add_argument("--repo")
     p.add_argument("--decision-sha256", required=True)
     p.add_argument("--finish-plan-json", required=True)
     p.add_argument("--journal-json", required=True)
@@ -631,9 +972,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "completion-identity":
             return _ok(completion_identity(_load_json_value(args.state_json, "state"), args.contract_sha256, args.context_fingerprint, args.base, args.head, _load_json_value(args.acceptance_index_json, "acceptance index"), _load_json_value(args.completed_tasks_json, "completed tasks")))
         if args.command == "decision-hash":
-            return _ok(decision_hash(_load_json_value(args.decision_json, "decision"), _load_json_value(args.completion_identity_json, "completion identity")))
+            return _ok(decision_hash(_load_json_value(args.decision_json, "decision"), _load_json_value(args.completion_identity_json, "completion identity"), args.decision_state_version, args.markdown_sha256))
+        if args.command == "validate-finish-handoff":
+            markdown_paths = {"completion_md": args.completion_md, "decision_md": args.decision_md}
+            if args.repo:
+                markdown_paths["repo"] = args.repo
+            return _ok(validate_finish_handoff(_load_json_value(args.state_json, "state"), _load_json_value(args.completion_json, "completion"), _load_json_value(args.decision_json, "decision"), _load_json_value(args.finish_plan_json, "finish plan"), markdown_paths))
+        if args.command == "finish-readiness":
+            return _ok(finish_readiness(args.change_root, args.contract_sha256, args.context_fingerprint))
         if args.command == "validate-finish-apply":
-            return _ok(validate_finish_apply(args.decision_sha256, _load_json_value(args.finish_plan_json, "finish plan"), _load_json_value(args.journal_json, "journal")))
+            return _ok(validate_finish_apply(args.decision_sha256, _load_json_value(args.finish_plan_json, "finish plan"), _load_json_value(args.journal_json, "journal"), args.repo))
         raise ProtocolError("INVALID_COMMAND", "unknown command")
     except ProtocolError as exc:
         return _err(exc)

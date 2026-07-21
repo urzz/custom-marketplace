@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nuclio.local/schemas/finish-plan.schema.json",
+  "title": "Nuclio Finish Plan",
+  "description": "Canonical Finish handoff sidecar used by deterministic helpers before exact user acceptance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract_sha256",
+    "context_fingerprint",
+    "completion_sha256",
+    "decision_sha256",
+    "mutation_map_sha256",
+    "acceptance_index_sha256",
+    "implementation_range",
+    "task_heads",
+    "decision_state_version",
+    "archive_intent",
+    "knowledge_proposal",
+    "knowledge_targets",
+    "archive_targets",
+    "index_targets",
+    "finish_plan_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "contract_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "context_fingerprint": {
+      "$ref": "#/$defs/sha256"
+    },
+    "completion_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "decision_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "mutation_map_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "acceptance_index_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "implementation_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "head"
+      ],
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/vcs_ref"
+        },
+        "head": {
+          "$ref": "#/$defs/vcs_ref"
+        }
+      }
+    },
+    "task_heads": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/non_empty_string"
+      }
+    },
+    "decision_state_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "archive_intent": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "knowledge_proposal": {},
+    "knowledge_targets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/target_entry"
+      }
+    },
+    "archive_targets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/target_entry"
+      }
+    },
+    "index_targets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/target_entry"
+      }
+    },
+    "finish_plan_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "anyOf": [
+    {
+      "properties": {
+        "knowledge_targets": {
+          "minItems": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "archive_targets": {
+          "minItems": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "index_targets": {
+          "minItems": 1
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "vcs_ref": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F][0-9a-fA-F._/-]{0,127}$"
+    },
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "before_sha256",
+        "proposed_after_summary",
+        "reason",
+        "source_evidence",
+        "target_language",
+        "language_source"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "before_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proposed_after_summary": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "reason": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "source_evidence": {
+          "$ref": "#/$defs/sha256"
+        },
+        "target_language": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "language_source": {
+          "enum": [
+            "contract_output_language",
+            "existing_target",
+            "user_confirmed"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nuclio.local/schemas/evidence.schema.json",
   "title": "Nuclio Evidence",
-  "description": "Shape schema for stable evidence identity; raw transcripts and agent summaries are not authority fields.",
+  "description": "Shape schema for stable evidence identity; completion, decision and finish apply journals are canonical Finish sidecars.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,8 +17,7 @@
   ],
   "properties": {
     "schema_version": {
-      "type": "integer",
-      "minimum": 1
+      "const": 1
     },
     "evidence_id": {
       "$ref": "#/$defs/non_empty_string"
@@ -57,16 +56,16 @@
       ]
     },
     "implementation": {
-      "$ref": "#/$defs/implementation_evidence"
+      "type": "object"
     },
     "validation": {
-      "$ref": "#/$defs/validation_evidence"
+      "type": "object"
     },
     "review": {
-      "$ref": "#/$defs/review_evidence"
+      "type": "object"
     },
     "mutation_map": {
-      "$ref": "#/$defs/mutation_map"
+      "type": "object"
     },
     "completion": {
       "$ref": "#/$defs/completion_evidence"
@@ -80,126 +79,16 @@
   },
   "allOf": [
     {
-      "if": {
-        "properties": {
-          "kind": {
-            "const": "task_implementation"
-          }
-        },
-        "required": [
-          "kind"
-        ]
-      },
-      "then": {
-        "required": [
-          "task_id",
-          "implementation"
-        ]
-      }
+      "if": {"properties": {"kind": {"const": "completion"}}, "required": ["kind"]},
+      "then": {"required": ["completion"]}
     },
     {
-      "if": {
-        "properties": {
-          "kind": {
-            "const": "task_validation"
-          }
-        },
-        "required": [
-          "kind"
-        ]
-      },
-      "then": {
-        "required": [
-          "task_id",
-          "validation"
-        ]
-      }
+      "if": {"properties": {"kind": {"const": "decision"}}, "required": ["kind"]},
+      "then": {"required": ["decision"]}
     },
     {
-      "if": {
-        "properties": {
-          "kind": {
-            "const": "task_review"
-          }
-        },
-        "required": [
-          "kind"
-        ]
-      },
-      "then": {
-        "required": [
-          "task_id",
-          "review"
-        ]
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "kind": {
-            "const": "mutation_map"
-          }
-        },
-        "required": [
-          "kind"
-        ]
-      },
-      "then": {
-        "required": [
-          "mutation_map"
-        ]
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "kind": {
-            "const": "completion"
-          }
-        },
-        "required": [
-          "kind"
-        ]
-      },
-      "then": {
-        "required": [
-          "completion"
-        ]
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "kind": {
-            "const": "decision"
-          }
-        },
-        "required": [
-          "kind"
-        ]
-      },
-      "then": {
-        "required": [
-          "decision"
-        ]
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "kind": {
-            "const": "finish_apply_journal"
-          }
-        },
-        "required": [
-          "kind"
-        ]
-      },
-      "then": {
-        "required": [
-          "finish_apply_journal"
-        ]
-      }
+      "if": {"properties": {"kind": {"const": "finish_apply_journal"}}, "required": ["kind"]},
+      "then": {"required": ["finish_apply_journal"]}
     }
   ],
   "$defs": {
@@ -209,233 +98,55 @@
     },
     "vcs_ref": {
       "type": "string",
-      "pattern": "^[0-9a-f]{7,64}$"
+      "pattern": "^[0-9a-fA-F][0-9a-fA-F._/-]{0,127}$"
     },
     "non_empty_string": {
       "type": "string",
       "minLength": 1
     },
-    "path_sha": {
+    "implementation_range": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "path",
-        "sha256"
-      ],
+      "required": ["base", "head"],
       "properties": {
-        "path": {
-          "$ref": "#/$defs/non_empty_string"
-        },
-        "sha256": {
-          "$ref": "#/$defs/sha256"
-        }
+        "base": {"$ref": "#/$defs/vcs_ref"},
+        "head": {"$ref": "#/$defs/vcs_ref"}
       }
     },
-    "nullable_path_sha": {
+    "nullable_sha": {
       "anyOf": [
-        {
-          "$ref": "#/$defs/path_sha"
-        },
-        {
-          "type": "null"
-        }
+        {"$ref": "#/$defs/sha256"},
+        {"type": "null"}
       ]
-    },
-    "check_result": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "command",
-        "exit_code",
-        "output_sha256"
-      ],
-      "properties": {
-        "command": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/non_empty_string"
-          }
-        },
-        "exit_code": {
-          "type": "integer"
-        },
-        "output_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "output_excerpt": {
-          "type": "string"
-        }
-      }
-    },
-    "implementation_evidence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "base_head",
-        "new_head",
-        "changed_paths",
-        "ownership_sha256",
-        "checks"
-      ],
-      "properties": {
-        "base_head": {
-          "$ref": "#/$defs/vcs_ref"
-        },
-        "new_head": {
-          "$ref": "#/$defs/vcs_ref"
-        },
-        "changed_paths": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/non_empty_string"
-          }
-        },
-        "ownership_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "checks": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/check_result"
-          }
-        }
-      }
-    },
-    "validation_evidence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "checks",
-        "result"
-      ],
-      "properties": {
-        "checks": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/check_result"
-          }
-        },
-        "result": {
-          "enum": [
-            "success",
-            "failure",
-            "blocked"
-          ]
-        }
-      }
-    },
-    "review_evidence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "review_package_sha256",
-        "findings"
-      ],
-      "properties": {
-        "review_package_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "findings": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "id",
-              "severity",
-              "summary"
-            ],
-            "properties": {
-              "id": {
-                "$ref": "#/$defs/non_empty_string"
-              },
-              "severity": {
-                "enum": [
-                  "info",
-                  "warning",
-                  "blocking"
-                ]
-              },
-              "summary": {
-                "$ref": "#/$defs/non_empty_string"
-              }
-            }
-          }
-        }
-      }
-    },
-    "mutation_map": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "entries",
-        "sha256"
-      ],
-      "properties": {
-        "entries": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "path",
-              "mode",
-              "before",
-              "after"
-            ],
-            "properties": {
-              "path": {
-                "$ref": "#/$defs/non_empty_string"
-              },
-              "mode": {
-                "enum": [
-                  "create",
-                  "modify",
-                  "delete"
-                ]
-              },
-              "before": {
-                "$ref": "#/$defs/nullable_path_sha"
-              },
-              "after": {
-                "$ref": "#/$defs/nullable_path_sha"
-              }
-            }
-          }
-        },
-        "sha256": {
-          "$ref": "#/$defs/sha256"
-        }
-      }
     },
     "completion_evidence": {
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "completion_sha256",
         "proposal_sha256",
         "mutation_map_sha256",
         "check_summary_sha256",
-        "residual_risks"
+        "task_heads",
+        "task_evidence",
+        "task_evidence_sha256",
+        "implementation_range",
+        "acceptance_index_sha256",
+        "residual_risks",
+        "markdown_sha256"
       ],
       "properties": {
-        "proposal_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "mutation_map_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "check_summary_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "residual_risks": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/non_empty_string"
-          }
-        }
+        "completion_sha256": {"$ref": "#/$defs/sha256"},
+        "proposal_sha256": {"$ref": "#/$defs/sha256"},
+        "mutation_map_sha256": {"$ref": "#/$defs/sha256"},
+        "check_summary_sha256": {"$ref": "#/$defs/sha256"},
+        "task_heads": {"type": "object", "additionalProperties": {"$ref": "#/$defs/non_empty_string"}},
+        "task_evidence": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}},
+        "task_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "implementation_range": {"$ref": "#/$defs/implementation_range"},
+        "acceptance_index_sha256": {"$ref": "#/$defs/sha256"},
+        "residual_risks": {"type": "array", "items": {"$ref": "#/$defs/non_empty_string"}},
+        "markdown_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "decision_evidence": {
@@ -443,28 +154,23 @@
       "additionalProperties": false,
       "required": [
         "decision_sha256",
-        "decision",
-        "state_version",
-        "artifact_sha256"
+        "completion_sha256",
+        "decision_state_version",
+        "Completion Verdict",
+        "Remaining Risks",
+        "Knowledge Proposal",
+        "Archive Decision",
+        "markdown_sha256"
       ],
       "properties": {
-        "decision_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "decision": {
-          "enum": [
-            "approved",
-            "deferred",
-            "rejected"
-          ]
-        },
-        "state_version": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "artifact_sha256": {
-          "$ref": "#/$defs/sha256"
-        }
+        "decision_sha256": {"$ref": "#/$defs/sha256"},
+        "completion_sha256": {"$ref": "#/$defs/sha256"},
+        "decision_state_version": {"type": "integer", "minimum": 1},
+        "Completion Verdict": {},
+        "Remaining Risks": {},
+        "Knowledge Proposal": {},
+        "Archive Decision": {},
+        "markdown_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "finish_apply_journal": {
@@ -472,48 +178,51 @@
       "additionalProperties": false,
       "required": [
         "decision_sha256",
-        "entries"
+        "finish_plan_sha256",
+        "approval_identity",
+        "archive_intent",
+        "entries",
+        "verified",
+        "journal_sha256"
       ],
       "properties": {
-        "decision_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
+        "decision_sha256": {"$ref": "#/$defs/sha256"},
+        "finish_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "approval_identity": {"$ref": "#/$defs/non_empty_string"},
+        "archive_intent": {"$ref": "#/$defs/non_empty_string"},
         "entries": {
           "type": "array",
           "minItems": 1,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "path",
-              "before_sha256",
-              "after_sha256",
-              "reason"
-            ],
-            "properties": {
-              "path": {
-                "$ref": "#/$defs/non_empty_string"
-              },
-              "before_sha256": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "pattern": "^[0-9a-f]{64}$"
-              },
-              "after_sha256": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "pattern": "^[0-9a-f]{64}$"
-              },
-              "reason": {
-                "$ref": "#/$defs/non_empty_string"
-              }
-            }
-          }
-        }
+          "items": {"$ref": "#/$defs/finish_entry"}
+        },
+        "verified": {"const": true},
+        "journal_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "finish_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "before_sha256",
+        "after_sha256",
+        "reason",
+        "target_language",
+        "language_source",
+        "apply_result",
+        "archive_result"
+      ],
+      "properties": {
+        "path": {"$ref": "#/$defs/non_empty_string"},
+        "before_sha256": {"$ref": "#/$defs/nullable_sha"},
+        "after_sha256": {"$ref": "#/$defs/nullable_sha"},
+        "reason": {"$ref": "#/$defs/non_empty_string"},
+        "target_language": {"$ref": "#/$defs/non_empty_string"},
+        "language_source": {
+          "enum": ["contract_output_language", "existing_target", "user_confirmed"]
+        },
+        "apply_result": {"enum": ["applied"]},
+        "archive_result": {"enum": ["archived", "not_applicable"]}
       }
     }
   }

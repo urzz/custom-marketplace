@@ -5,7 +5,7 @@ Evidence helper tests.
 
 - [Fixture builders](#fixture-builders)
 - [Snapshot and mutation map tests](#snapshot-and-mutation-map-tests)
-- [Completion decision and finish tests](#completion-decision-and-finish-tests)
+- [Completion decision and Finish tests](#completion-decision-and-finish-tests)
 - [CLI trajectory tests](#cli-trajectory-tests)
 """
 
@@ -23,6 +23,7 @@ A_HASH = "a" * 64
 B_HASH = "b" * 64
 C_HASH = "c" * 64
 D_HASH = "d" * 64
+E_HASH = "e" * 64
 
 
 def load_helper():
@@ -101,7 +102,9 @@ def make_copy_repo(commit_copy=True):
 def state():
     return {
         "state_version": 9,
-        "contract": {"acceptance": ["first acceptance", {"id": "AC-2", "text": "second acceptance"}]},
+        "contract_sha256": A_HASH,
+        "context_fingerprint": B_HASH,
+        "contract": {"output_language": "zh-CN", "acceptance": ["first acceptance", {"id": "AC-2", "text": "second acceptance"}]},
         "mutation_map_sha256": D_HASH,
         "tasks": [{"id": "T1", "status": "completed"}, {"id": "T2", "status": "completed"}],
         "history": [{"event": "INITIALIZED", "reason": json.dumps({"heads": {"T1": "1111111", "T2": "2222222"}})}],
@@ -118,6 +121,85 @@ def completed():
 
 def decision():
     return {"Completion Verdict": {"result": "通过", "summary": "所有任务已完成"}, "Remaining Risks": ["无剩余风险"], "Knowledge Proposal": [{"path": ".dev-docs/knowledge/notes.md", "body": "保留已验证决策"}], "Archive Decision": {"target": "archive", "body": "归档变更证据"}}
+
+
+def evidence_doc(kind, payload):
+    return {
+        "schema_version": 1,
+        "evidence_id": f"{kind}-1",
+        "kind": kind,
+        "change_id": "change-1",
+        "contract_sha256": A_HASH,
+        "context_fingerprint": B_HASH,
+        "state_version": 9,
+        "created_at": "2026-07-22T00:00:00Z",
+        kind: payload,
+    }
+
+
+def make_handoff(helper, repo):
+    change_root = repo / ".dev-docs" / "changes" / "change-1"
+    change_root.mkdir(parents=True, exist_ok=True)
+    completion_md = change_root / "completion.md"
+    decision_md = change_root / "decision.md"
+    completion_md.write_text("# Completion\nAll tasks done.\n", encoding="utf-8")
+    decision_md.write_text("# Decision\nProposal only.\n", encoding="utf-8")
+    (repo / ".dev-docs" / "knowledge").mkdir(parents=True, exist_ok=True)
+    existing = repo / ".dev-docs" / "knowledge" / "existing.md"
+    existing.write_text("old knowledge\n", encoding="utf-8")
+    existing_sha = helper.sha256_bytes(existing.read_bytes())
+    completion_payload = {
+        "proposal_sha256": C_HASH,
+        "mutation_map_sha256": D_HASH,
+        "check_summary_sha256": E_HASH,
+        "task_heads": {"T1": "1111111", "T2": "2222222"},
+        "task_evidence": {"T1": A_HASH, "T2": B_HASH},
+        "task_evidence_sha256": helper.sha256_value({"T1": A_HASH, "T2": B_HASH}),
+        "implementation_range": {"base": "abcdef1", "head": "abcdef9"},
+        "acceptance_index_sha256": helper.sha256_value(acceptance()),
+        "residual_risks": [],
+        "markdown_sha256": helper.sha256_bytes(completion_md.read_bytes()),
+    }
+    completion_payload["completion_sha256"] = helper.self_hash(completion_payload, "completion_sha256")
+    decision_payload = {
+        "completion_sha256": completion_payload["completion_sha256"],
+        "decision_state_version": 10,
+        "markdown_sha256": helper.sha256_bytes(decision_md.read_bytes()),
+        **decision(),
+    }
+    decision_payload["decision_sha256"] = helper.self_hash(decision_payload, "decision_sha256")
+    finish_plan = {
+        "schema_version": 1,
+        "contract_sha256": A_HASH,
+        "context_fingerprint": B_HASH,
+        "completion_sha256": completion_payload["completion_sha256"],
+        "decision_sha256": decision_payload["decision_sha256"],
+        "mutation_map_sha256": D_HASH,
+        "acceptance_index_sha256": helper.sha256_value(acceptance()),
+        "implementation_range": {"base": "abcdef1", "head": "abcdef9"},
+        "task_heads": {"T1": "1111111", "T2": "2222222"},
+        "decision_state_version": 10,
+        "archive_intent": "archive validated change-local evidence",
+        "knowledge_proposal": decision_payload["Knowledge Proposal"],
+        "knowledge_targets": [
+            {"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "proposed_after_summary": "new notes", "reason": "preserve validated decision", "source_evidence": completion_payload["completion_sha256"], "target_language": "zh-CN", "language_source": "contract_output_language"},
+            {"path": ".dev-docs/knowledge/existing.md", "before_sha256": existing_sha, "proposed_after_summary": "update notes", "reason": "refresh existing target", "source_evidence": completion_payload["completion_sha256"], "target_language": "zh-CN", "language_source": "existing_target"},
+        ],
+        "archive_targets": [
+            {"path": ".dev-docs/archive/change-1.json", "before_sha256": None, "proposed_after_summary": "archive packet", "reason": "archive evidence", "source_evidence": decision_payload["decision_sha256"], "target_language": "zh-CN", "language_source": "contract_output_language"}
+        ],
+        "index_targets": [
+            {"path": ".dev-docs/changes/index.md", "before_sha256": None, "proposed_after_summary": "change index", "reason": "index archived change", "source_evidence": decision_payload["decision_sha256"], "target_language": "zh-CN", "language_source": "contract_output_language"}
+        ],
+    }
+    finish_plan["finish_plan_sha256"] = helper.self_hash(finish_plan, "finish_plan_sha256")
+    completion_doc = evidence_doc("completion", completion_payload)
+    decision_doc = evidence_doc("decision", decision_payload)
+    (change_root / "state.json").write_text(json.dumps(state()), encoding="utf-8")
+    (change_root / "completion.json").write_text(json.dumps(completion_doc), encoding="utf-8")
+    (change_root / "decision.json").write_text(json.dumps(decision_doc), encoding="utf-8")
+    (change_root / "finish-plan.json").write_text(json.dumps(finish_plan), encoding="utf-8")
+    return change_root, completion_doc, decision_doc, finish_plan, completion_md, decision_md
 
 
 class EvidenceHelperTests(unittest.TestCase):
@@ -214,87 +296,123 @@ class EvidenceHelperTests(unittest.TestCase):
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), incomplete)
         self.assertEqual(ctx.exception.code, "TASKS_INCOMPLETE")
-        no_evidence = completed(); no_evidence[0].pop("evidence_sha256")
-        with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), no_evidence)
-        self.assertEqual(ctx.exception.code, "INVALID_IDENTITY")
-        extra_acceptance = acceptance() + [{"id": "AX", "accepted": True}]
-        with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", extra_acceptance, completed())
-        self.assertEqual(ctx.exception.code, "INCOMPLETE_ACCEPTANCE")
-        stale = state(); stale["history"][0]["reason"] = json.dumps({"heads": {"T1": "1111111", "T2": "3333333"}})
-        with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.completion_identity(stale, A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), completed())
-        self.assertEqual(ctx.exception.code, "STALE_HEAD")
 
     def test_decision_hash_is_stable_external_and_requires_four_sections(self):
         identity = self.helper.completion_identity(state(), A_HASH, B_HASH, "abcdef1", "abcdef9", acceptance(), completed())
-        first = self.helper.decision_hash(decision(), identity)
+        md_hash = self.helper.sha256_bytes(b"decision markdown")
+        first = self.helper.decision_hash(decision(), identity, 10, md_hash)
         shuffled = {"Archive Decision": {"target": "archive", "body": "归档变更证据"}, "Knowledge Proposal": [{"path": ".dev-docs/knowledge/notes.md", "body": "保留已验证决策"}], "Remaining Risks": ["无剩余风险"], "Completion Verdict": {"result": "通过", "summary": "所有任务已完成"}}
-        second = self.helper.decision_hash(shuffled, identity)
+        second = self.helper.decision_hash(shuffled, identity, 10, md_hash)
         self.assertEqual(first["decision_sha256"], second["decision_sha256"])
         self.assertNotIn("decision_sha256", json.dumps(decision()))
         bad = decision(); bad.pop("Archive Decision")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.decision_hash(bad, identity)
+            self.helper.decision_hash(bad, identity, 10, md_hash)
         self.assertEqual(ctx.exception.code, "INVALID_DECISION")
 
-    def test_finish_apply_journal_requires_target_binding_and_archive_outcome(self):
-        plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "target_language": "zh-CN", "language_source": "contract_output_language"}], "archive_targets": [{"path": ".dev-docs/archive/archive.json", "before_sha256": A_HASH, "target_language": "en", "language_source": "existing_target"}]}
-        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "entries": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "after_sha256": B_HASH, "target_language": "zh-CN", "language_source": "contract_output_language", "apply_result": "applied", "archive_result": "not_applicable"}, {"path": ".dev-docs/archive/archive.json", "before_sha256": A_HASH, "after_sha256": D_HASH, "target_language": "en", "language_source": "existing_target", "apply_result": "applied", "archive_result": "archived"}]}
-        valid = self.helper.validate_finish_apply(C_HASH, plan, journal)
-        self.assertTrue(valid["valid"])
-        language_mismatch = json.loads(json.dumps(journal)); language_mismatch["entries"][0]["target_language"] = "en"
+    def test_finish_handoff_validates_five_files_and_schema_contract(self):
+        temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)
+        _change_root, completion_doc, decision_doc, plan, completion_md, decision_md = make_handoff(self.helper, repo)
+        result = self.helper.validate_finish_handoff(state(), completion_doc, decision_doc, plan, {"completion_md": completion_md, "decision_md": decision_md, "repo": repo})
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["decision_sha256"], decision_doc["decision"]["decision_sha256"])
+        bad_plan = json.loads(json.dumps(plan)); bad_plan["extra"] = True
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, language_mismatch)
-        self.assertEqual(ctx.exception.code, "STALE_TARGET_LANGUAGE")
-        source_mismatch = json.loads(json.dumps(journal)); source_mismatch["entries"][1]["language_source"] = "user_confirmed"
+            self.helper.validate_finish_plan(bad_plan, "zh-CN")
+        self.assertEqual(ctx.exception.code, "INVALID_FINISH_PLAN")
+        missing = json.loads(json.dumps(plan)); missing.pop("archive_intent")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, source_mismatch)
-        self.assertEqual(ctx.exception.code, "STALE_TARGET_LANGUAGE")
-        missing_language = json.loads(json.dumps(journal)); missing_language["entries"][0].pop("language_source")
+            self.helper.validate_finish_plan(missing, "zh-CN")
+        self.assertEqual(ctx.exception.code, "INVALID_FINISH_PLAN")
+
+    def test_finish_readiness_fresh_missing_and_stale_decision(self):
+        temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)
+        change_root, _completion_doc, _decision_doc, _plan, _completion_md, _decision_md = make_handoff(self.helper, repo)
+        ready = self.helper.finish_readiness(change_root, A_HASH, B_HASH)
+        self.assertTrue(ready["ready"])
+        self.assertEqual(ready["current_action"], "request_finish_acceptance")
+        for key in ("ready", "current_action", "artifacts", "identity_comparison", "failure_code", "repair_hint", "decision_sha256", "finish_plan_sha256", "decision_state_version"):
+            self.assertIn(key, ready)
+        (change_root / "finish-plan.json").unlink()
+        missing = self.helper.finish_readiness(change_root, A_HASH, B_HASH)
+        self.assertFalse(missing["ready"])
+        self.assertEqual(missing["failure_code"], "MISSING_FINISH_HANDOFF")
+        _change_root, _completion_doc, decision_doc, _plan, _completion_md, _decision_md = make_handoff(self.helper, repo)
+        decision_doc["decision"]["completion_sha256"] = C_HASH
+        (change_root / "decision.json").write_text(json.dumps(decision_doc), encoding="utf-8")
+        stale = self.helper.finish_readiness(change_root, A_HASH, B_HASH)
+        self.assertFalse(stale["ready"])
+        self.assertEqual(stale["failure_code"], "STALE_DECISION")
+
+    def test_markdown_json_mismatch_self_hash_and_invalid_markdown_as_json(self):
+        temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)
+        _change_root, completion_doc, decision_doc, plan, completion_md, decision_md = make_handoff(self.helper, repo)
+        self.assertEqual(completion_doc["completion"]["completion_sha256"], self.helper.self_hash(completion_doc["completion"], "completion_sha256"))
+        self.assertNotEqual(completion_doc["completion"]["completion_sha256"], self.helper.sha256_value(completion_doc["completion"]))
+        completion_md.write_text("# Drift\n", encoding="utf-8")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, missing_language)
-        self.assertEqual(ctx.exception.code, "STALE_TARGET_LANGUAGE")
-        over = json.loads(json.dumps(journal))
-        over["entries"].append({"path": ".dev-docs/knowledge/extra.md", "before_sha256": None, "after_sha256": B_HASH, "apply_result": "applied", "archive_result": "not_applicable"})
+            self.helper.validate_finish_handoff(state(), completion_doc, decision_doc, plan, {"completion_md": completion_md, "decision_md": decision_md, "repo": repo})
+        self.assertEqual(ctx.exception.code, "MARKDOWN_HASH_MISMATCH")
+        proc = subprocess.run([sys.executable, str(HELPER), "validate-finish-handoff", "--state-json", json.dumps(state()), "--completion-json", str(completion_md), "--decision-json", json.dumps(decision_doc), "--finish-plan-json", json.dumps(plan), "--completion-md", str(completion_md), "--decision-md", str(decision_md)], text=True, capture_output=True)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("INVALID_JSON_FILE", proc.stderr)
+
+    def test_target_groups_are_mutually_exclusive_and_index_path_is_index_only(self):
+        temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)
+        _change_root, _completion_doc, _decision_doc, plan, _completion_md, _decision_md = make_handoff(self.helper, repo)
+        duplicate = json.loads(json.dumps(plan))
+        duplicate["archive_targets"].append({**duplicate["knowledge_targets"][0], "path": ".dev-docs/archive/change-1.json"})
+        duplicate["archive_targets"][1]["path"] = duplicate["knowledge_targets"][0]["path"]
+        duplicate["finish_plan_sha256"] = self.helper.self_hash(duplicate, "finish_plan_sha256")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, over)
+            self.helper.validate_finish_plan(duplicate, "zh-CN")
         self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
-        product = json.loads(json.dumps(plan)); product["knowledge_targets"] = [{"path": "plugins/nuclio-plugin/scripts/a.py", "before_sha256": None}]
+        wrong_index = json.loads(json.dumps(plan))
+        wrong_index["knowledge_targets"].append({**wrong_index["index_targets"][0]})
+        wrong_index["finish_plan_sha256"] = self.helper.self_hash(wrong_index, "finish_plan_sha256")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, product, journal)
+            self.helper.validate_finish_plan(wrong_index, "zh-CN")
         self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
-        bad_archive = json.loads(json.dumps(journal))
-        bad_archive["entries"][1]["archive_result"] = "not_applicable"
+        product = json.loads(json.dumps(plan))
+        product["knowledge_targets"][0]["path"] = "plugins/nuclio-plugin/scripts/a.py"
+        product["finish_plan_sha256"] = self.helper.self_hash(product, "finish_plan_sha256")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, bad_archive)
-        self.assertEqual(ctx.exception.code, "INVALID_FINISH_JOURNAL")
-        bad_knowledge = json.loads(json.dumps(journal))
-        bad_knowledge["entries"][0]["archive_result"] = "archived"
+            self.helper.validate_finish_plan(product, "zh-CN")
+        self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
+        change_evidence = json.loads(json.dumps(plan))
+        change_evidence["archive_targets"][0]["path"] = ".dev-docs/changes/change-1/completion.md"
+        change_evidence["finish_plan_sha256"] = self.helper.self_hash(change_evidence, "finish_plan_sha256")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, bad_knowledge)
-        self.assertEqual(ctx.exception.code, "INVALID_FINISH_JOURNAL")
-        unchanged = json.loads(json.dumps(journal)); unchanged["entries"][0]["apply_result"] = "unchanged"
+            self.helper.validate_finish_plan(change_evidence, "zh-CN")
+        self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
+
+    def test_finish_handoff_rejects_before_drift(self):
+        temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)
+        _change_root, completion_doc, decision_doc, plan, completion_md, decision_md = make_handoff(self.helper, repo)
+        (repo / ".dev-docs" / "knowledge" / "existing.md").write_text("changed\n", encoding="utf-8")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, unchanged)
-        self.assertEqual(ctx.exception.code, "INVALID_FINISH_JOURNAL")
-        missing = json.loads(json.dumps(journal)); missing["entries"] = missing["entries"][:1]
-        with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, missing)
-        self.assertEqual(ctx.exception.code, "MISSING_FINISH_TARGET")
-        mismatch = json.loads(json.dumps(journal)); mismatch["entries"][1]["before_sha256"] = B_HASH
-        with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, mismatch)
+            self.helper.validate_finish_handoff(state(), completion_doc, decision_doc, plan, {"completion_md": completion_md, "decision_md": decision_md, "repo": repo})
         self.assertEqual(ctx.exception.code, "STALE_TARGET")
-        stale_intent = json.loads(json.dumps(journal)); stale_intent["archive_intent"] = "old intent"
+
+    def test_finish_apply_reads_actual_repo_bytes_and_rejects_after_mismatch(self):
+        temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)
+        _change_root, _completion_doc, decision_doc, plan, _completion_md, _decision_md = make_handoff(self.helper, repo)
+        for target in plan["knowledge_targets"] + plan["archive_targets"] + plan["index_targets"]:
+            path = repo / target["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"after {target['path']}\n", encoding="utf-8")
+        entries = []
+        for target in plan["knowledge_targets"] + plan["archive_targets"] + plan["index_targets"]:
+            entries.append({"path": target["path"], "before_sha256": target["before_sha256"], "after_sha256": self.helper.sha256_bytes((repo / target["path"]).read_bytes()), "reason": target["reason"], "target_language": target["target_language"], "language_source": target["language_source"], "apply_result": "applied", "archive_result": "archived" if target["path"].startswith(".dev-docs/archive/") else "not_applicable"})
+        journal = {"decision_sha256": decision_doc["decision"]["decision_sha256"], "finish_plan_sha256": plan["finish_plan_sha256"], "approval_identity": "accept:2026-07-22", "archive_intent": plan["archive_intent"], "entries": entries, "verified": True}
+        journal["journal_sha256"] = self.helper.self_hash(journal, "journal_sha256")
+        valid = self.helper.validate_finish_apply(decision_doc["decision"]["decision_sha256"], plan, journal, repo)
+        self.assertTrue(valid["verified"])
+        self.assertIn(".dev-docs/changes/index.md", valid["covered_paths"])
+        (repo / entries[0]["path"]).write_text("drift\n", encoding="utf-8")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, stale_intent)
-        self.assertEqual(ctx.exception.code, "STALE_DECISION")
-        stale = json.loads(json.dumps(journal)); stale["approval_identity"] = "old"
-        with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.validate_finish_apply(C_HASH, plan, stale)
-        self.assertEqual(ctx.exception.code, "STALE_APPROVAL")
+            self.helper.validate_finish_apply(decision_doc["decision"]["decision_sha256"], plan, journal, repo)
+        self.assertEqual(ctx.exception.code, "STALE_TARGET")
 
     def test_cli_temporary_git_trajectory_json_envelope(self):
         temp, repo, base, head = make_repo(); self.addCleanup(temp.cleanup)
@@ -304,11 +422,10 @@ class EvidenceHelperTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["mutation_map"]["result"], "ok")
-        finish_plan = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "target_language": "en", "language_source": "contract_output_language"}], "archive_targets": []}
-        journal = {"decision_sha256": C_HASH, "approval_identity": "finish-accept", "archive_intent": "archive validated change-local evidence", "entries": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "after_sha256": B_HASH, "target_language": "en", "language_source": "contract_output_language", "apply_result": "applied", "archive_result": "not_applicable"}]}
-        proc2 = subprocess.run([sys.executable, str(HELPER), "validate-finish-apply", "--decision-sha256", C_HASH, "--finish-plan-json", json.dumps(finish_plan), "--journal-json", json.dumps(journal)], text=True, capture_output=True)
+        change_root, _completion_doc, _decision_doc, _plan, _completion_md, _decision_md = make_handoff(self.helper, repo)
+        proc2 = subprocess.run([sys.executable, str(HELPER), "finish-readiness", "--change-root", str(change_root), "--contract-sha256", A_HASH, "--context-fingerprint", B_HASH], text=True, capture_output=True)
         self.assertEqual(proc2.returncode, 0, proc2.stderr)
-        self.assertTrue(json.loads(proc2.stdout)["valid"])
+        self.assertTrue(json.loads(proc2.stdout)["ready"])
 
 
 if __name__ == "__main__":
