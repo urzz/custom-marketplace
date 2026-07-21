@@ -141,10 +141,12 @@ class ContractHelperTests(unittest.TestCase):
         self.assertFalse(summary["approval"])
         self.assertIn("not an approval", summary["approval_notice"])
         self.assertEqual(summary["acceptance_count"], 1)
-        self.assertEqual(summary["task_graph"], [{"id": "T1", "dependencies": []}])
+        self.assertEqual(summary["task_graph"], [{"id": "T1", "owner": "worker-a", "dependencies": [], "ownership": [{"path": "plugins/nuclio-plugin/scripts/a.py", "mode": "create"}]}])
+        self.assertNotIn("packet_sha256", summary["task_graph"][0])
         identity = self.helper.build_identity(contract)
         self.assertEqual(identity["change_id"], "change-alpha")
         self.assertEqual(identity["contract_version"], "v1")
+        self.assertEqual(identity["output_language"], "zh-CN")
         self.assertRegex(identity["sha256"], r"^[0-9a-f]{64}$")
         ownership = self.helper.derive_ownership(contract)
         entry = ownership["paths"]["plugins/nuclio-plugin/scripts/a.py"]

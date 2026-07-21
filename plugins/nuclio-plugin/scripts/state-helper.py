@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 import sys
@@ -50,6 +51,20 @@ FINISH_DECISIONS = {"accept", "request_changes", "defer", "reject"}
 CONTRACT_APPROVAL_ALIASES = {"approve": "approve", "批准": "approve", "同意": "approve", "继续": "approve"}
 FINISH_DECISION_ALIASES = {"accept": "accept", "同意": "accept", "request_changes": "request_changes", "要求修改": "request_changes", "defer": "defer", "暂缓": "defer", "reject": "reject", "拒绝": "reject"}
 HASH_RE = "0123456789abcdef"
+MUTATION_MODES = {"create", "modify", "delete"}
+SCRIPTS_DIR = Path(__file__).resolve().parent
+PACKET_SCHEMA = SCRIPTS_DIR.parent / "schemas" / "packet.schema.json"
+
+
+def _load_json_schema_helper():
+    helper_path = SCRIPTS_DIR / "json-schema-helper.py"
+    spec = importlib.util.spec_from_file_location("nuclio_json_schema_helper", helper_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+JSON_SCHEMA_HELPER = _load_json_schema_helper()
 
 
 class ProtocolError(Exception):
@@ -122,15 +137,24 @@ def validate_state_shape(state: Any) -> None:
     missing = sorted(required - set(state))
     if missing:
         raise ProtocolError("INVALID_STATE", "state is missing required fields", {"fields": missing})
-    if not isinstance(state["state_version"], int) or state["state_version"] < 1:
+    if not isinstance(state["state_version"], int) or isinstance(state["state_version"], bool) or state["state_version"] < 1:
         raise ProtocolError("INVALID_STATE", "state_version must be positive")
     if state["status"] not in STATE_STATUSES:
         raise ProtocolError("INVALID_STATE", "invalid status", {"status": state["status"]})
+    _artifact_identity(state["contract"])
+    _context_identity(state["context"])
     if not isinstance(state["tasks"], list):
         raise ProtocolError("INVALID_STATE", "tasks must be a list")
     for task in state["tasks"]:
         if not isinstance(task, dict) or task.get("status") not in TASK_STATUSES:
             raise ProtocolError("INVALID_STATE", "task status is invalid")
+        ownership = task.get("ownership")
+        if not isinstance(ownership, list) or not ownership or any(not isinstance(path, str) or not path.strip() for path in ownership):
+            raise ProtocolError("INVALID_STATE", "task ownership must be a non-empty list of paths")
+        if task["status"] in {"implementing", "reviewing", "fixing", "completed", "blocked", "rejected"}:
+            _require_sha(task.get("packet_sha256"), "task.packet_sha256")
+        elif "packet_sha256" in task and not _is_sha(task.get("packet_sha256")):
+            raise ProtocolError("INVALID_STATE", "pending/ready task packet_sha256 must be omitted or a lowercase sha256")
     if state["status"] in {"context_stale", "deferred", "rejected"} and any(task["status"] == "completed" for task in state["tasks"]):
         raise ProtocolError("INVALID_STATE", "schema forbids completed tasks in stale/deferred/rejected states")
 
@@ -178,9 +202,19 @@ def _commit(path: str | Path, before: dict[str, Any], after: dict[str, Any], act
     return after
 
 
+def _language_tag(value: Any, where: str) -> str:
+    text = _non_empty(value, where)
+    parts = text.split("-")
+    valid = 2 <= len(parts[0]) <= 8 and parts[0].isalpha()
+    valid = valid and all(1 <= len(part) <= 8 and part.isalnum() for part in parts[1:])
+    if not valid:
+        raise ProtocolError("INVALID_OUTPUT_LANGUAGE", f"{where} must be a BCP-47 style language tag")
+    return text
+
+
 def _artifact_identity(raw: dict[str, Any]) -> dict[str, str]:
     raw = _require_object(raw, "contract identity")
-    return {"path": _non_empty(raw.get("path"), "contract.path"), "sha256": _require_sha(raw.get("sha256"), "contract.sha256"), "version": _non_empty(raw.get("version"), "contract.version")}
+    return {"path": _non_empty(raw.get("path"), "contract.path"), "sha256": _require_sha(raw.get("sha256"), "contract.sha256"), "version": _non_empty(raw.get("version"), "contract.version"), "output_language": _language_tag(raw.get("output_language"), "contract.output_language")}
 
 
 def _context_identity(raw: dict[str, Any]) -> dict[str, Any]:
@@ -191,11 +225,37 @@ def _context_identity(raw: dict[str, Any]) -> dict[str, Any]:
     return {"path": _non_empty(raw.get("path"), "context.path"), "fingerprint": _require_sha(raw.get("fingerprint"), "context.fingerprint"), "entries": entries}
 
 
+def _ownership_objects(raw_ownership: Any, where: str = "task.ownership") -> list[dict[str, str]]:
+    ownership = []
+    for raw in _require_list(raw_ownership, where):
+        item = _require_object(raw, f"{where}[]")
+        keys = set(item)
+        if keys != {"path", "mode"}:
+            raise ProtocolError("INVALID_TASK_GRAPH", "task ownership entries must contain only path and mode", {"fields": sorted(keys)})
+        path = _non_empty(item.get("path"), f"{where}[].path")
+        mode = _non_empty(item.get("mode"), f"{where}[].mode")
+        if mode not in MUTATION_MODES:
+            raise ProtocolError("INVALID_TASK_GRAPH", "task ownership mode is invalid", {"mode": mode})
+        ownership.append({"path": path, "mode": mode})
+    if not ownership:
+        raise ProtocolError("INVALID_TASK_GRAPH", "task ownership must not be empty")
+    return ownership
+
+
+def _validate_packet_schema(packet: Any) -> None:
+    try:
+        JSON_SCHEMA_HELPER.validate_instance(PACKET_SCHEMA, packet)
+    except JSON_SCHEMA_HELPER.SchemaValidationError as exc:
+        raise ProtocolError("INVALID_PACKET_SCHEMA", "packet does not conform to canonical packet.schema.json", exc.details()) from exc
+
+
 def _task_metadata_from_graph(task_graph: list[Any]) -> list[dict[str, Any]]:
     tasks = []
     seen = set()
     for raw in task_graph:
         item = _require_object(raw, "task graph item")
+        if "packet_sha256" in item:
+            raise ProtocolError("INVALID_TASK_GRAPH", "task graph must not contain packet_sha256")
         task_id = str(item.get("id", "")).strip()
         if not task_id or task_id in seen:
             raise ProtocolError("INVALID_TASK_GRAPH", "task ids must be unique and non-empty")
@@ -204,11 +264,8 @@ def _task_metadata_from_graph(task_graph: list[Any]) -> list[dict[str, Any]]:
         deps = [str(dep).strip() for dep in _require_list(item.get("dependencies", []), "task.dependencies")]
         if any(not dep for dep in deps) or len(deps) != len(set(deps)):
             raise ProtocolError("INVALID_TASK_GRAPH", "dependencies must be unique non-empty ids")
-        ownership = [_non_empty(path, "task.ownership[]") for path in _require_list(item.get("ownership"), "task.ownership")]
-        if not ownership:
-            raise ProtocolError("INVALID_TASK_GRAPH", "task ownership must not be empty")
-        packet_sha256 = _require_sha(item.get("packet_sha256"), "task.packet_sha256")
-        tasks.append({"id": task_id, "owner": owner, "dependencies": deps, "ownership": ownership, "packet_sha256": packet_sha256})
+        ownership = _ownership_objects(item.get("ownership"), "task.ownership")
+        tasks.append({"id": task_id, "owner": owner, "dependencies": deps, "ownership": ownership})
     ids = {task["id"] for task in tasks}
     for task in tasks:
         for dep in task["dependencies"]:
@@ -280,6 +337,49 @@ def _refresh_ready_tasks(state: dict[str, Any]) -> None:
 
 def _owner_for_task(state: dict[str, Any], task_id: str) -> str:
     return _task_meta(state, task_id)["owner"]
+
+
+def _ownership_for_task(state: dict[str, Any], task_id: str) -> list[dict[str, str]]:
+    return copy.deepcopy(_task_meta(state, task_id)["ownership"])
+
+
+def _packet_id(packet_without_or_with_id: dict[str, Any]) -> str:
+    body = {key: value for key, value in packet_without_or_with_id.items() if key != "packet_id"}
+    return sha256_value(body)
+
+
+def _validate_worker_packet(state: dict[str, Any], task_id: str, packet: Any) -> tuple[dict[str, Any], str]:
+    _validate_packet_schema(packet)
+    packet = _require_object(packet, "worker packet")
+    if packet.get("schema_version") != 1:
+        raise ProtocolError("INVALID_PACKET", "worker packet schema_version must be 1")
+    if packet.get("role") != "worker":
+        raise ProtocolError("INVALID_PACKET_ROLE", "packet role must be worker")
+    packet_id = _require_sha(packet.get("packet_id"), "packet.packet_id")
+    actual_packet_id = _packet_id(packet)
+    if packet_id != actual_packet_id:
+        raise ProtocolError("PACKET_ID_MISMATCH", "packet_id does not match canonical packet content", {"expected": actual_packet_id, "actual": packet_id})
+    if packet.get("change_id") != state["change_id"]:
+        raise ProtocolError("STALE_PACKET", "packet change_id does not match state")
+    if packet.get("contract_sha256") != state["contract"]["sha256"]:
+        raise ProtocolError("STALE_PACKET", "packet contract_sha256 does not match state")
+    if packet.get("context_fingerprint") != state["context"]["fingerprint"]:
+        raise ProtocolError("STALE_PACKET", "packet context_fingerprint does not match state")
+    if packet.get("state_version") != state["state_version"]:
+        raise ProtocolError("STALE_PACKET", "packet state_version does not match current state", {"expected": state["state_version"], "actual": packet.get("state_version")})
+    if packet.get("output_language") != state["contract"]["output_language"]:
+        raise ProtocolError("STALE_PACKET", "packet output_language does not match Contract identity")
+    if str(packet.get("task_id")) != str(task_id):
+        raise ProtocolError("WRONG_TASK", "packet task_id does not match requested task")
+    try:
+        packet_ownership = _ownership_objects(packet.get("ownership"), "packet.ownership")
+    except ProtocolError as exc:
+        if exc.code == "INVALID_TASK_GRAPH":
+            raise ProtocolError("STALE_OWNERSHIP", exc.message, exc.details) from exc
+        raise
+    if packet_ownership != _ownership_for_task(state, str(task_id)):
+        raise ProtocolError("STALE_OWNERSHIP", "packet ownership does not match state metadata", {"expected": _ownership_for_task(state, str(task_id)), "actual": packet_ownership})
+    return packet, sha256_value(packet)
 
 
 def _open_blockers(state: dict[str, Any], task_id: str | None = None) -> list[dict[str, Any]]:
@@ -371,7 +471,7 @@ def init_state(path: str | Path, contract: dict[str, Any], context: dict[str, An
     tasks = []
     budgets: dict[str, dict[str, int]] = {}
     for index, task in enumerate(tasks_meta):
-        tasks.append({"id": task["id"], "status": "ready" if index == 0 and not task["dependencies"] else "pending", "ownership": task["ownership"], "packet_sha256": task["packet_sha256"]})
+        tasks.append({"id": task["id"], "status": "ready" if index == 0 and not task["dependencies"] else "pending", "ownership": [item["path"] for item in task["ownership"]]})
         budgets.setdefault(task["owner"], {"maximum": 2, "used": 0, "remaining": 2})
     state = {
         "schema_version": 1,
@@ -428,7 +528,7 @@ def _require_contract_approved(state: dict[str, Any]) -> None:
         raise ProtocolError("CONTRACT_NOT_APPROVED", "fresh Contract approval is required before execution")
 
 
-def start_task(path: str | Path, expected_version: int, task_id: str, packet_sha256: str) -> dict[str, Any]:
+def start_task(path: str | Path, expected_version: int, task_id: str, packet_json: dict[str, Any]) -> dict[str, Any]:
     before = load_state(path)
     _check_version(before, expected_version)
     _require_contract_approved(before)
@@ -436,16 +536,29 @@ def start_task(path: str | Path, expected_version: int, task_id: str, packet_sha
         raise ProtocolError("INVALID_TRANSITION", "task can start only from execution-ready state")
     task_id = str(task_id)
     task = _task_state(before, task_id)
-    if task["packet_sha256"] != _require_sha(packet_sha256, "packet_sha256"):
-        raise ProtocolError("PACKET_MISMATCH", "packet identity does not match task")
+    current_packet = task.get("packet_sha256")
+    if task["status"] == "implementing" and current_packet:
+        _validate_packet_schema(packet_json)
+        retry_packet = _require_object(packet_json, "worker packet")
+        retry_sha = sha256_value(retry_packet)
+        if retry_sha == current_packet:
+            if _packet_id(retry_packet) != _require_sha(retry_packet.get("packet_id"), "packet.packet_id"):
+                raise ProtocolError("PACKET_ID_MISMATCH", "packet_id does not match canonical packet content")
+            return before
+        raise ProtocolError("PACKET_ALREADY_BOUND", "task is already bound to a different packet")
+    packet, packet_sha256 = _validate_worker_packet(before, task_id, packet_json)
+    if current_packet and current_packet != packet_sha256:
+        raise ProtocolError("PACKET_ALREADY_BOUND", "task is already bound to a different packet")
     if task["status"] not in {"ready", "pending"}:
         raise ProtocolError("TASK_NOT_READY", "task is not ready to start")
     if not _all_deps_complete(before, task_id):
         raise ProtocolError("DEPENDENCY_NOT_COMPLETE", "task dependencies are not complete")
     after = copy.deepcopy(before)
-    _task_state(after, task_id)["status"] = "implementing"
+    after_task = _task_state(after, task_id)
+    after_task["packet_sha256"] = packet_sha256
+    after_task["status"] = "implementing"
     after["status"] = "executing"
-    return _commit(path, before, after, "TASK_STARTED", event_reason={"task_id": task_id, "packet_sha256": packet_sha256})
+    return _commit(path, before, after, "TASK_STARTED", event_reason={"task_id": task_id, "packet_sha256": packet_sha256, "packet_id": packet["packet_id"]})
 
 
 def record_implementation(path: str | Path, expected_version: int, evidence: dict[str, Any]) -> dict[str, Any]:
@@ -454,6 +567,8 @@ def record_implementation(path: str | Path, expected_version: int, evidence: dic
     evidence = _require_object(evidence, "implementation evidence")
     task_id = str(evidence.get("task_id", ""))
     task = _task_state(before, task_id)
+    if "packet_sha256" not in task:
+        raise ProtocolError("PACKET_UNBOUND", "task is not bound to a worker packet")
     if before["status"] != "executing" or task["status"] not in {"implementing", "fixing"}:
         raise ProtocolError("TASK_NOT_IMPLEMENTING", "task is not accepting implementation evidence")
     if task["packet_sha256"] != _require_sha(evidence.get("packet_sha256"), "packet_sha256"):
@@ -813,7 +928,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("state")
     p.add_argument("--expected-version", type=int, required=True)
     p.add_argument("--task-id", required=True)
-    p.add_argument("--packet-sha256", required=True)
+    p.add_argument("--packet-json", required=True)
 
     for name, arg in (("record-implementation", "--evidence-json"), ("record-fix", "--evidence-json"), ("record-completion", "--completion-json"), ("record-finish-apply", "--journal-json")):
         p = sub.add_parser(name)
@@ -855,7 +970,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "approve-contract":
             return _ok({"state": approve_contract(args.state, args.expected_version, _json_arg(args.contract_identity_json, "contract identity"), _json_arg(args.context_identity_json, "context identity"), _json_arg(args.approval_json, "approval"))})
         if args.command == "start-task":
-            return _ok({"state": start_task(args.state, args.expected_version, args.task_id, args.packet_sha256)})
+            return _ok({"state": start_task(args.state, args.expected_version, args.task_id, _json_arg(args.packet_json, "packet"))})
         if args.command == "record-implementation":
             return _ok({"state": record_implementation(args.state, args.expected_version, _json_arg(args.evidence_json, "evidence"))})
         if args.command == "import-task-review":

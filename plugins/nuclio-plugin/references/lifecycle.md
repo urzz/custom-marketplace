@@ -16,8 +16,8 @@
 | `idle` | 没有 active change，或上一个 change 已归档。 | 启动 init；选择或创建 change-local `CHANGE_ROOT=.dev-docs/changes/<change-id>`；读取 project context。 |
 | `drafting_contract` | 正在形成或修订 `CHANGE_ROOT/contract.yaml` 与 `CHANGE_ROOT/context.jsonl`。 | 询问澄清；生成/更新 contract draft，包括 `output_language`；运行 schema 与 context 检查；转入 `contract_pending`。 |
 | `contract_pending` | Contract draft 已可展示，等待用户 Contract Gate decision。 | 展示摘要、风险、mutation_targets、validation；等待 explicit approve/defer/reject；不得执行 mutation。 |
-| `ready_to_execute` | 存在 fresh Contract approval，且 state/context/contract identity 未变。 | 派发 Task packet；重新校验 dirty/fingerprint；开始执行；转入 `executing`。 |
-| `executing` | 一个或多个 Task 正在实现、review 或修复。 | 按 packet 派发 fresh implementer/reviewer/fixer；记录 `CHANGE_ROOT/evidence/tasks/<task-id>/...`；更新 Task 状态；完成后转入 `completing`。 |
+| `ready_to_execute` | 存在 fresh Contract approval，且 state/context/contract identity 未变。pending/ready tasks may be legally unbound；合法未绑定并不等于可派发。 | 先 packet-helper derive/write worker artifact，再由 state-helper 用 canonical packet schema 和 state identity 绑定并 start；重新校验 dirty/fingerprint；成功后才转入 `executing` 并派发 fresh implementer。 |
+| `executing` | 一个或多个 Task 正在实现、review 或修复。 | 按 bound packet 派发 fresh implementer/reviewer/fixer；记录 `CHANGE_ROOT/evidence/tasks/<task-id>/...`；更新 Task 状态；完成后转入 `completing`。 |
 | `completing` | 所有 Task 候选实现完成，正在做 change-wide completion。 | 汇总 mutation map、checks、review evidence、risk；用 packet-bound `output_language` 写 `CHANGE_ROOT/evidence/completion.md` 与 `CHANGE_ROOT/evidence/decision.md` proposal，且 decision 顶层 headings 固定为 English；转入 `decision_pending`。 |
 | `decision_pending` | Completion proposal 已可展示，等待 Finish Gate decision。 | 展示 before/after、residual risk、finish apply plan；等待 exact `accept`/`request_changes`/`defer`/`reject`；不得写长期知识或归档。 |
 | `folding` | 存在 fresh Finish approval，正在执行长期知识写入或归档。 | 应用 approved finish plan；按 finish target language metadata 处理 existing/new targets，unknown 时 STOP；记录 `CHANGE_ROOT/evidence/finish-apply.md` before/after evidence；归档 state；转入 `archived`。 |
@@ -51,6 +51,7 @@
 - `mutation_targets` 缺失、为空、越界、重叠冲突或与 Task ownership 不一致。
 - Context 条目包含未授权绝对路径、路径穿越、glob、宽泛目录根、raw logs、full conversation、all docs、all source 或 unrelated tasks。
 - Artifact hash、context fingerprint、state version、packet identity 或 evidence identity 不匹配。
+- Worker packet 未经 `state-helper.py start-task ... --packet-json <packet>` 成功绑定，或 artifact existence、bare SHA、agent claim、Controller inference 被当作 dispatch authority。
 - 工作区存在未知 dirty changes，或 snapshot/fingerprint 无法证明变更归属。
 - Helper schema validation、path allowlist、state transition 或 check command fail closed。
 - Agent claim 与文件 evidence 冲突，或 agent summary 被当成 authority。

@@ -46,18 +46,19 @@ Controller 每一步都必须先调用 deterministic helper 获得 `next action`
 
 单个 Task 的闭环如下：
 
-1. helper 派生 worker packet，packet `role` 为 `worker`，包含 `task_id`、`ownership`、`range`、`snapshots`、`checks`。
-2. Controller 派发 fresh implementer。fresh 表示本轮只接收当前 packet、必要 bounded context 和 Task handoff，不继承旧 agent memory 作为 authority。
-3. implementer 只写 packet `ownership` 中 mode 为 `create`、`modify` 或 `delete` 的路径；这些路径必须等价于当前 Task 的 `mutation_targets`。
-4. implementer 产出候选 product mutation、Task report 与可复现检查输出；如需 commit，只能提交当前 Task 的授权产品路径。
-5. helper 执行 mutation/evidence check，验证 changed paths、snapshot、hash、dirty state、checks 与 packet identity。
-6. helper 派生 reviewer packet，packet `role` 为 `reviewer`，包含只读 `review_targets`。
-7. Controller 派发 fresh read-only reviewer。reviewer 只能读取 review packet 授权内容、Task diff、schema/contract 与 evidence；不能写产品文件、不能补授权、不能推进 Gate。
-8. reviewer 输出 findings。没有 blocking finding 且 helper validation 成功时，该 Task 可进入 `completed`。
-9. 有 blocking finding 时，若 finding 与同 owner、同 Task ownership、同 approved Contract 匹配，helper 可派发 bounded fixer；否则进入 blocker。
-10. fixer 修复后必须重新经过 mutation/evidence check 和 fresh read-only reviewer。
+1. Controller 调用 packet-helper 派生并写入 worker packet artifact，命令形态为 `packet-helper.py worker ... --output <packet>`；packet `role` 为 `worker`，包含 `task_id`、`ownership`、`range`、`snapshots`、`checks`。
+2. Controller 立即调用 `state-helper.py start-task <state> --expected-version <n> --task-id <task-id> --packet-json <packet>`。`packet.schema.json is the only packet shape/role authority`，state-helper is the state-specific packet identity and transition authority；state-helper 必须先执行 canonical schema validation，再校验 packet_id、current state identity、freshness、Task、ownership，并在同一 transition 中 bind/start。
+3. Only after bind/start succeeds may the Controller dispatch a fresh implementer。fresh 表示本轮只接收当前 bound packet、必要 bounded context 和 Task handoff，不继承旧 agent memory 作为 authority。Artifact existence, bare SHA, agent claim, or Controller inference is not dispatch authority；失败时 STOP 并重新 inspect/next-action。
+4. implementer 只写 packet `ownership` 中 mode 为 `create`、`modify` 或 `delete` 的路径；这些路径必须等价于当前 Task 的 `mutation_targets`。
+5. implementer 产出候选 product mutation、Task report 与可复现检查输出；如需 commit，只能提交当前 Task 的授权产品路径。
+6. helper 执行 mutation/evidence check，验证 changed paths、snapshot、hash、dirty state、checks 与 packet identity。
+7. helper 派生 reviewer packet，packet `role` 为 `reviewer`，包含只读 `review_targets`。
+8. Controller 派发 fresh read-only reviewer。reviewer 只能读取 review packet 授权内容、Task diff、schema/contract 与 evidence；不能写产品文件、不能补授权、不能推进 Gate。
+9. reviewer 输出 findings。没有 blocking finding 且 helper validation 成功时，该 Task 可进入 `completed`。
+10. 有 blocking finding 时，若 finding 与同 owner、同 Task ownership、同 approved Contract 匹配，helper 可派发 bounded fixer；否则进入 blocker。
+11. fixer 修复后必须重新经过 mutation/evidence check 和 fresh read-only reviewer。
 
-Task 不能因为 implementer、fixer 或 reviewer 的自然语言 claim 直接跳到 `completed`。每次状态变更必须有 helper 可验证 evidence identity。
+Task 不能因为 implementer、fixer 或 reviewer 的自然语言 claim 直接跳到 `completed`。每次状态变更必须有 helper 可验证 evidence identity。The sequential dispatch pipeline is `derive/write → schema+identity bind/start → dispatch`; stale, wrong Task, wrong ownership, wrong role, cross-role, tampered, replacement, or unbound evidence fail closed, including `INVALID_PACKET_SCHEMA` before any state byte change.
 
 ## Freshness 与 evidence identity
 

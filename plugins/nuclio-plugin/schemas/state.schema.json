@@ -188,13 +188,18 @@
       "type": "string",
       "minLength": 1
     },
+    "language_tag": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$"
+    },
     "artifact_identity": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "path",
         "sha256",
-        "version"
+        "version",
+        "output_language"
       ],
       "properties": {
         "path": {
@@ -205,6 +210,9 @@
         },
         "version": {
           "$ref": "#/$defs/non_empty_string"
+        },
+        "output_language": {
+          "$ref": "#/$defs/language_tag"
         }
       }
     },
@@ -301,8 +309,7 @@
       "required": [
         "id",
         "status",
-        "ownership",
-        "packet_sha256"
+        "ownership"
       ],
       "properties": {
         "id": {
@@ -339,7 +346,33 @@
         "review_sha256": {
           "$ref": "#/$defs/sha256"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "implementing",
+                  "reviewing",
+                  "fixing",
+                  "completed",
+                  "blocked",
+                  "rejected"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "packet_sha256"
+            ]
+          }
+        }
+      ]
     },
     "blocker": {
       "type": "object",

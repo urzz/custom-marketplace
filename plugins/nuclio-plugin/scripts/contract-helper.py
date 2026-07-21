@@ -550,11 +550,19 @@ def derive_ownership(contract: dict[str, Any]) -> dict[str, Any]:
 
 def build_identity(contract: dict[str, Any]) -> dict[str, Any]:
     canonical = canonical_json(contract)
-    return {"change_id": contract["change_id"], "contract_version": contract["contract_version"], "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
+    return {"change_id": contract["change_id"], "contract_version": contract["contract_version"], "output_language": contract["output_language"], "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
 
 
 def build_task_graph(contract: dict[str, Any]) -> list[dict[str, Any]]:
-    return [{"id": task["id"], "dependencies": list(task["dependencies"])} for task in contract["tasks"]]
+    return [
+        {
+            "id": task["id"],
+            "owner": task["owner"],
+            "dependencies": list(task["dependencies"]),
+            "ownership": [{"path": target["path"], "mode": target["mode"]} for target in task["mutation_targets"]],
+        }
+        for task in contract["tasks"]
+    ]
 
 
 def build_summary(contract: dict[str, Any]) -> dict[str, Any]:

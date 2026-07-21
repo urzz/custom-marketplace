@@ -47,6 +47,8 @@ Nuclio 的 Contract Workbench 行为还需要与以下内容保持一致：
 
 Nuclio 的机器协议保持英文和稳定 token：schema keys、helper actions、state/decision enum、hash、路径、命令、固定 headings 与 raw output 不翻译；面向维护者的正文由 Contract-bound `output_language` 和 Finish target language metadata 控制。修改语言传播、Gate alias、packet schema、agent report、Finish apply 或 archive/knowledge 行为时，必须同步 references、schemas、helpers、tests 与 eval；不要修改 marketplace 注册来表达这类内部协议变化，也不要声称新增 runtime hook、daemon、MCP、项目本地 `.claude/` 安装或 `.nuclio/` state。
 
+Nuclio worker packet 维护规则：worker SHA 不在 init/migration 预存；packet-helper 写入 worker packet artifact；state-helper 使用 canonical packet schema 与 current state identity 首次绑定并 start-task；atomic bind/start 成功后才 dispatch fresh implementer。artifact existence、裸 SHA 或 agent claim 都不是 dispatch authority。
+
 ## 本地校验
 
 当前仓库没有独立的 package/build 工作流，但可以先做基础静态校验：

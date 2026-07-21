@@ -418,8 +418,8 @@ def _normalize_context_rows(legacy: Path, relpaths: list[str], mappings: list[di
 def _task_graph_for_state(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     graph = []
     for task in tasks:
-        ownership = [target["path"] for target in task.get("mutation_targets", [])]
-        graph.append({"id": str(task.get("id")), "owner": task.get("owner", ""), "dependencies": list(task.get("dependencies", [])), "ownership": ownership, "packet_sha256": sha256_value({"migration_packet_placeholder": str(task.get("id")), "ownership": ownership})})
+        ownership = [{"path": target["path"], "mode": target["mode"]} for target in task.get("mutation_targets", [])]
+        graph.append({"id": str(task.get("id")), "owner": task.get("owner", ""), "dependencies": list(task.get("dependencies", [])), "ownership": ownership})
     return graph
 
 
@@ -427,7 +427,7 @@ def _state_from_identities(change_id: str, contract_id: dict[str, Any], context_
     tasks = []
     budgets: dict[str, dict[str, int]] = {}
     for index, task in enumerate(task_graph):
-        tasks.append({"id": task["id"], "status": "ready" if index == 0 and not task["dependencies"] else "pending", "ownership": task["ownership"], "packet_sha256": task["packet_sha256"]})
+        tasks.append({"id": task["id"], "status": "ready" if index == 0 and not task["dependencies"] else "pending", "ownership": [item["path"] for item in task["ownership"]]})
         budgets.setdefault(task["owner"], {"maximum": 2, "used": 0, "remaining": 2})
     metadata = {"tasks": task_graph, "context_fingerprint": context_id["fingerprint"], "contract_sha256": contract_id["sha256"], "legacy_migration": {"legacy_retained": True, "facts": facts}}
     state = {
@@ -629,7 +629,8 @@ def _build_preview(legacy: Path, target: Path) -> dict[str, Any]:
         validation_result["context"] = {"code": getattr(exc, "code", "INVALID_CONTEXT"), "message": getattr(exc, "message", str(exc))}
 
     if normalized_contract is not None and normalized_context is not None:
-        contract_id = {"path": _target_path(target, "contract.yaml"), "sha256": contract_helper.build_identity(normalized_contract)["sha256"], "version": normalized_contract["contract_version"], "change_id": normalized_contract["change_id"]}
+        contract_identity = contract_helper.build_identity(normalized_contract)
+        contract_id = {"path": _target_path(target, "contract.yaml"), "sha256": contract_identity["sha256"], "version": normalized_contract["contract_version"], "output_language": contract_identity["output_language"]}
         context_fingerprint = context_helper.build_fingerprint(normalized_context)
         context_id = {"path": _target_path(target, "context.jsonl"), "fingerprint": context_fingerprint["fingerprint"], "entries": [entry["id"] for entry in context_helper.sorted_entries(normalized_context)]}
         try:

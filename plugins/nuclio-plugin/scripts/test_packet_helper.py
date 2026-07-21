@@ -24,6 +24,8 @@ except ImportError:  # pragma: no cover - optional validation dependency
 ROOT = Path(__file__).resolve().parents[3]
 HELPER = ROOT / "plugins" / "nuclio-plugin" / "scripts" / "packet-helper.py"
 STATE_HELPER = ROOT / "plugins" / "nuclio-plugin" / "scripts" / "state-helper.py"
+CONTRACT_HELPER = ROOT / "plugins" / "nuclio-plugin" / "scripts" / "contract-helper.py"
+JSON_SCHEMA_HELPER = ROOT / "plugins" / "nuclio-plugin" / "scripts" / "json-schema-helper.py"
 SCHEMA = ROOT / "plugins" / "nuclio-plugin" / "schemas" / "packet.schema.json"
 A_HASH = "a" * 64
 B_HASH = "b" * 64
@@ -42,6 +44,20 @@ def load_helper():
 
 def load_state_helper():
     spec = importlib.util.spec_from_file_location("state_helper", STATE_HELPER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_contract_helper():
+    spec = importlib.util.spec_from_file_location("contract_helper", CONTRACT_HELPER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_json_schema_helper():
+    spec = importlib.util.spec_from_file_location("json_schema_helper", JSON_SCHEMA_HELPER)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -104,7 +120,7 @@ def state(all_completed=False):
         "state_version": 7,
         "change_id": "change-alpha",
         "status": "executing",
-        "contract": {"path": ".dev-docs/changes/change-alpha/contract.yaml", "sha256": A_HASH, "version": "v1"},
+        "contract": {"path": ".dev-docs/changes/change-alpha/contract.yaml", "sha256": A_HASH, "version": "v1", "output_language": "en"},
         "context": {"path": ".dev-docs/changes/change-alpha/context.jsonl", "fingerprint": B_HASH, "entries": ["all-context"]},
         "tasks": tasks,
         "gates": {"contract": {"status": "approved"}, "finish": {"status": "none"}},
@@ -122,6 +138,19 @@ def completed_tasks():
 
 def acceptance_index():
     return [{"id": "AC-object", "accepted": True, "evidence": "tests"}, {"id": "A2", "accepted": True, "evidence": "review"}, {"id": "A3", "accepted": True, "evidence": "contract"}]
+
+
+def normalized_contract_for_state():
+    doc = contract("zh-CN")
+    doc.pop("sha256")
+    doc["intent"] = {"goals": ["Bind real packets"], "non_goals": [], "confirmed_answers": []}
+    doc["acceptance"] = ["worker evidence records after packet bind"]
+    doc["constraints"] = ["no placeholder packet sha"]
+    doc["design"] = {"boundaries": "helpers only", "data_flow": "contract context state packet", "contracts": "stable JSON", "tradeoffs": "fail closed"}
+    doc["context_policy"] = {"required": [], "jit": [], "forbidden": ["full_conversation"], "budget": {"total": 10}}
+    doc["validation"] = {"focused": [{"name": "focused", "command": ["python3"]}], "full": [{"name": "full", "command": ["python3"]}], "change_wide": [{"name": "wide", "command": ["python3"]}]}
+    doc["tasks"] = doc["tasks"][:1]
+    return doc
 
 
 def finish_plan(new_language="en", existing_language="en", existing_source="existing_target"):
@@ -142,22 +171,28 @@ def finish_plan(new_language="en", existing_language="en", existing_source="exis
 class PacketHelperTests(unittest.TestCase):
     def setUp(self):
         self.helper = load_helper()
+        self.schema_helper = load_json_schema_helper()
         self.schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
         self.validator = jsonschema.Draft202012Validator(self.schema) if jsonschema is not None else None
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name)
 
+    def schema_errors(self, packet):
+        if self.validator is not None:
+            return sorted(self.validator.iter_errors(packet), key=lambda error: list(error.absolute_path))
+        try:
+            self.schema_helper.validate_instance(SCHEMA, packet)
+        except self.schema_helper.SchemaValidationError as exc:
+            return [exc]
+        return []
+
     def assert_schema_valid(self, packet):
-        if self.validator is None:
-            return
-        errors = sorted(self.validator.iter_errors(packet), key=lambda error: list(error.absolute_path))
-        self.assertEqual(errors, [], [error.message for error in errors])
+        errors = self.schema_errors(packet)
+        self.assertEqual(errors, [], [getattr(error, "message", getattr(error, "reason", str(error))) for error in errors])
 
     def assert_schema_invalid(self, packet):
-        if self.validator is None:
-            return
-        errors = sorted(self.validator.iter_errors(packet), key=lambda error: list(error.absolute_path))
+        errors = self.schema_errors(packet)
         self.assertNotEqual(errors, [], packet)
 
     def generated_role_packets(self):
@@ -373,6 +408,79 @@ class PacketHelperTests(unittest.TestCase):
             self.helper.completion_packet(self.repo, contract(), context(), drift_state, "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {}, [], 7)
         self.assertEqual(ctx.exception.code, "STALE_HEAD")
 
+    def test_real_worker_packet_binds_state_and_records_matching_implementation(self):
+        state_helper = load_state_helper()
+        contract_helper = load_contract_helper()
+        normalized = contract_helper.validate_contract(normalized_contract_for_state())
+        identity = contract_helper.build_identity(normalized)
+        contract_id = {"path": ".dev-docs/changes/change-alpha/contract.yaml", "sha256": identity["sha256"], "version": identity["contract_version"], "change_id": identity["change_id"], "output_language": identity["output_language"]}
+        context_id = {"path": ".dev-docs/changes/change-alpha/context.jsonl", "fingerprint": B_HASH, "entries": ["all-context"]}
+        state_path = self.repo / "real-state.json"
+        initialized = state_helper.init_state(state_path, contract_id, context_id, contract_helper.build_task_graph(normalized))
+        self.assertNotIn("packet_sha256", initialized["tasks"][0])
+        approved = state_helper.approve_contract(state_path, 1, contract_id, context_id, {"approval_id": "A1", "approved_at": "2026-07-18T00:00:00Z", "token": "approve"})
+        packet_contract = {**normalized, "sha256": identity["sha256"]}
+        packet = self.helper.worker_packet(self.repo, packet_contract, context_id, approved, "T1", "abcdef1", "abcdef1", [], 2)
+        packet_path = self.repo / "worker.json"
+        packet_identity = self.helper.write_packet(packet_path, packet)
+        written_packet = json.loads(packet_path.read_text(encoding="utf-8"))
+        started = state_helper.start_task(state_path, 2, "T1", written_packet)
+        self.assertEqual(started["tasks"][0]["status"], "implementing")
+        self.assertEqual(started["tasks"][0]["packet_sha256"], packet_identity["packet_sha256"])
+        evidence = {"task_id": "T1", "packet_sha256": packet_identity["packet_sha256"], "base_head": "abcdef1", "new_head": "head-1", "implementation_sha256": C_HASH, "changed_paths": ["plugins/nuclio-plugin/scripts/a.py"]}
+        recorded = state_helper.record_implementation(state_path, 3, evidence)
+        self.assertEqual(recorded["tasks"][0]["status"], "reviewing")
+
+    def test_worker_packet_schema_differential_matrix_matches_start_task_acceptance(self):
+        state_helper = load_state_helper()
+        contract_helper = load_contract_helper()
+        normalized = contract_helper.validate_contract(normalized_contract_for_state())
+        identity = contract_helper.build_identity(normalized)
+        contract_id = {"path": ".dev-docs/changes/change-alpha/contract.yaml", "sha256": identity["sha256"], "version": identity["contract_version"], "change_id": identity["change_id"], "output_language": identity["output_language"]}
+        context_id = {"path": ".dev-docs/changes/change-alpha/context.jsonl", "fingerprint": B_HASH, "entries": ["all-context"]}
+        packet_contract = {**normalized, "sha256": identity["sha256"]}
+
+        def fresh_state_and_packet():
+            state_path = self.repo / f"state-{len(list(self.repo.glob('state-*.json')))}.json"
+            initialized = state_helper.init_state(state_path, contract_id, context_id, contract_helper.build_task_graph(normalized))
+            approved = state_helper.approve_contract(state_path, 1, contract_id, context_id, {"approval_id": "A1", "approved_at": "2026-07-18T00:00:00Z", "token": "approve"})
+            packet = self.helper.worker_packet(self.repo, packet_contract, context_id, approved, "T1", "abcdef1", "abcdef1", [], 2)
+            return state_path, packet
+
+        def recompute(packet):
+            packet["packet_id"] = self.helper._packet_id(packet)
+            return packet
+
+        matrix = [
+            ("valid", lambda p: p, True),
+            ("boolean schema_version", lambda p: recompute({**p, "schema_version": True}), False),
+            ("boolean state_version", lambda p: recompute({**p, "state_version": True}), False),
+            ("missing checks", lambda p: (p.pop("checks"), recompute(p))[1], False),
+            ("extra field", lambda p: recompute({**p, "unexpected": "extra"}), False),
+            ("wrong role", lambda p: recompute({**p, "role": "reviewer"}), False),
+            ("cross-role field", lambda p: recompute({**p, "completion_sha256": C_HASH}), False),
+            ("invalid ownership entry", lambda p: recompute({**p, "ownership": [{"path": "plugins/nuclio-plugin/scripts/a.py", "mode": "invalid"}]}), False),
+            ("invalid range", lambda p: recompute({**p, "range": {"base_head": "bad-ref", "expected_dirty_state": "clean"}}), False),
+            ("invalid snapshot", lambda p: recompute({**p, "snapshots": [{"path": "../escape", "state": "present"}]}), False),
+            ("invalid checks", lambda p: recompute({**p, "checks": {"focused": [{"name": "unit", "command": []}], "full": []}}), False),
+            ("invalid handoffs", lambda p: recompute({**p, "handoffs": [""]}), False),
+        ]
+        for label, mutate, expected_valid in matrix:
+            with self.subTest(label=label):
+                state_path, base_packet = fresh_state_and_packet()
+                packet = mutate(json.loads(json.dumps(base_packet)))
+                schema_valid = not self.schema_errors(packet)
+                self.assertEqual(schema_valid, expected_valid)
+                before = state_path.read_bytes()
+                if expected_valid:
+                    started = state_helper.start_task(state_path, 2, "T1", packet)
+                    self.assertEqual(started["tasks"][0]["status"], "implementing")
+                else:
+                    with self.assertRaises(state_helper.ProtocolError) as ctx:
+                        state_helper.start_task(state_path, 2, "T1", packet)
+                    self.assertEqual(ctx.exception.code, "INVALID_PACKET_SCHEMA")
+                    self.assertEqual(before, state_path.read_bytes())
+
     def test_generated_completion_packet_starts_state_helper_completion(self):
         state_helper = load_state_helper()
         packet = self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {"evidence_paths": ["validation.json"]}, [], 7)
@@ -381,7 +489,7 @@ class PacketHelperTests(unittest.TestCase):
             "state_version": 7,
             "change_id": "change-alpha",
             "status": "executing",
-            "contract": {"path": ".dev-docs/changes/change-alpha/contract.yaml", "sha256": A_HASH, "version": "v1", "acceptance": contract()["acceptance"]},
+            "contract": {"path": ".dev-docs/changes/change-alpha/contract.yaml", "sha256": A_HASH, "version": "v1", "output_language": "en"},
             "context": {"path": ".dev-docs/changes/change-alpha/context.jsonl", "fingerprint": B_HASH, "entries": ["all-context"]},
             "gates": {"contract": {"status": "approved", "artifact_sha256": A_HASH, "context_fingerprint": B_HASH, "state_version": 1}, "finish": {"status": "none"}},
             "tasks": [{"id": "T1", "status": "completed", "ownership": ["plugins/nuclio-plugin/scripts/a.py"], "packet_sha256": C_HASH}, {"id": "T2", "status": "completed", "ownership": ["plugins/nuclio-plugin/scripts/b.py"], "packet_sha256": D_HASH}],

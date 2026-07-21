@@ -99,6 +99,8 @@ Dev-stack `skill-forge` 变更还需要保持以下专用文件同步：
 
 Nuclio's canonical lifecycle is `init → work → finish`. Work owns Contract drafting, the fresh Contract Gate, bounded per-Task implementer/reviewer/fixer execution, and mandatory change-wide completion; Finish is decision-first and requires a fresh exact `accept` before applying long-term `.dev-docs` knowledge or archive targets. Nuclio machine protocol remains English/stable for schema keys, helper actions, state/decision enums, hashes, paths, commands, fixed headings, and raw output; maintainer-facing prose is controlled by Contract-bound `output_language` and Finish target language metadata. When changing output language propagation, Gate aliases, packet schema, agent reports, Finish apply, archive, or knowledge behavior, keep skills, `output-language.md`, references, schemas, helpers, tests, and eval cases in sync without changing marketplace registration or claiming a new runtime hook/daemon/MCP/local `.claude/` install/`.nuclio/` state mechanism.
 
+Nuclio worker packet maintenance: worker SHA 不在 init/migration 预存；packet-helper 写入 worker packet artifact；state-helper 使用 canonical packet schema 与 current state identity 首次绑定并 start-task；atomic bind/start 成功后才 dispatch fresh implementer。Do not treat artifact existence, bare SHA, or agent claim as dispatch authority.
+
 ## Common Commands
 
 This repository currently has no `package.json`, and there is no standalone build / lint / test workflow. Day-to-day development mainly consists of editing manifests and skill/reference files, then doing minimal static validation.

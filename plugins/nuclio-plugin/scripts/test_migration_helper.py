@@ -324,6 +324,8 @@ class MigrationHelperTests(unittest.TestCase):
         state = json.loads((self.target / "state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["gates"]["contract"]["status"], "pending")
         self.assertEqual(state["gates"]["finish"]["status"], "none")
+        self.assertEqual(state["contract"]["output_language"], "zh-CN")
+        self.assertNotIn("packet_sha256", state["tasks"][0])
         self.assertNotIn("approval_id", state["gates"]["contract"])
         for staging in self.target.parent.glob(".migration-staging-*"):
             self.fail(f"staging path was not cleaned: {staging}")

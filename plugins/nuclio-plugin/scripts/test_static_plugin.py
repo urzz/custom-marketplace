@@ -109,7 +109,7 @@ class StaticPluginTests(unittest.TestCase):
     def test_plugin_metadata_and_skill_directory_are_exact(self):
         metadata = load_json(PLUGIN / ".claude-plugin" / "plugin.json")
         self.assertEqual(metadata["name"], "nuclio")
-        self.assertEqual(metadata["version"], "1.0.0")
+        self.assertEqual(metadata["version"], "1.0.1")
         self.assertEqual(set(self.skills()), NEW_LIFECYCLE)
         self.assertEqual({path.name for path in SKILLS.iterdir() if path.is_dir()}, NEW_LIFECYCLE)
 
@@ -273,6 +273,41 @@ class StaticPluginTests(unittest.TestCase):
         self.assertIn("--decision request_changes", finish)
         self.assertNotIn("request changes", finish)
         self.assertRegex(finish, r"(?is)exact token.*?accept.*?request_changes.*?defer.*?reject")
+
+    def test_work_dispatch_uses_packet_json_bind_before_implementer(self):
+        work = split_skill(SKILLS / "work" / "SKILL.md")[1]
+        execution = read_text(REFERENCES / "execution.md")
+        authority = read_text(REFERENCES / "authority.md")
+        lifecycle = read_text(REFERENCES / "lifecycle.md")
+        corpus = "\n".join([work, execution, authority, lifecycle])
+
+        required_work_order = [
+            "packet-helper.py worker",
+            "--output <packet>",
+            "state-helper.py start-task <state> --expected-version <n> --task-id <task-id> --packet-json <packet>",
+            "dispatch a fresh implementer",
+        ]
+        cursor = -1
+        for needle in required_work_order:
+            with self.subTest(surface="work dispatch order", needle=needle):
+                cursor = work.find(needle, cursor + 1)
+                self.assertGreater(cursor, -1, needle)
+
+        for needle in [
+            "derive/write → schema+identity bind/start → dispatch",
+            "packet.schema.json is the only packet shape/role authority",
+            "state-helper is the state-specific packet identity and transition authority",
+            "artifact existence, bare SHA, agent claim, or Controller inference is not dispatch authority",
+            "pending/ready tasks may be legally unbound",
+            "stale, wrong Task, wrong ownership, wrong role, cross-role, tampered, replacement, or unbound evidence fail closed",
+            "INVALID_PACKET_SCHEMA",
+        ]:
+            with self.subTest(surface="packet bind authority", needle=needle):
+                self.assertIn(needle, corpus)
+
+        self.assertIn("--packet-json", corpus)
+        self.assertNotIn("start-task <state> --expected-version <n> --task-id <task-id> --packet-sha256", corpus)
+        self.assertNotRegex(corpus, r"start-task[^\n`]*--packet-sha256")
 
     def test_init_references_only_real_init_and_migration_command_surfaces(self):
         init = split_skill(SKILLS / "init" / "SKILL.md")[1]
@@ -512,7 +547,7 @@ class StaticPluginTests(unittest.TestCase):
         self.assertTrue(init_cases)
         for case_id, row in init_cases.items():
             with self.subTest(init_case=case_id):
-                self.assertRegex(case_id, r"^(init-bootstrap|init-repair|migration-|multi-active-change-refuse-guess|baseline-)")
+                self.assertRegex(case_id, r"^(init-bootstrap|init-repair|migration-|packet-bind-migration-|multi-active-change-refuse-guess|baseline-)")
                 self.assertNotRegex(case_id, r"contract-(approval|revise|reject)|resume-deferred")
                 if not case_id.startswith("migration-apply"):
                     self.assertNotRegex(row["allowed_writes"], r"(?<!TARGET_)CHANGE_ROOT/(contract\.yaml|context\.jsonl|state\.json)")
@@ -607,6 +642,65 @@ class StaticPluginTests(unittest.TestCase):
         self.assertIn("Completion Verdict`、`Remaining Risks`、`Knowledge Proposal`、`Archive Decision", eval_prompts)
         self.assertIn("`继续` 不能推断 accept", eval_prompts)
         self.assertNotIn("所有中文肯定词", eval_prompts)
+
+    def test_eval_prompts_cover_packet_bind_protocol_regressions(self):
+        eval_prompts = read_text(REFERENCES / "eval-prompts.md")
+        rows = {}
+        for line in eval_prompts.splitlines():
+            match = re.match(r"\| `([^`]+)` \| (.*?) \| `(init|work|finish)` \| (.*?) \| (.*?) \| (.*?) \| (.*?) \|$", line)
+            if match:
+                case_id, case_input, owner, next_action, allowed_writes, forbidden_writes, assertions = match.groups()
+                rows[case_id] = {
+                    "input": case_input,
+                    "owner_skill": owner,
+                    "expected_next_action": next_action,
+                    "allowed_writes": allowed_writes,
+                    "forbidden_writes": forbidden_writes,
+                    "assertions": assertions,
+                }
+        expected_cases = {
+            "packet-bind-new-change-positive",
+            "packet-bind-migration-first-bind-positive",
+            "packet-bind-boolean-schema-type-rejected",
+            "packet-bind-stale-version-rejected",
+            "packet-bind-wrong-task-rejected",
+            "packet-bind-wrong-ownership-rejected",
+            "packet-bind-wrong-role-rejected",
+            "packet-bind-cross-role-field-rejected",
+            "packet-bind-tampered-packet-rejected",
+            "packet-bind-replacement-rejected",
+            "packet-bind-unbound-evidence-rejected",
+        }
+        self.assertTrue(expected_cases.issubset(rows), sorted(expected_cases - set(rows)))
+        for case_id in expected_cases:
+            row = rows[case_id]
+            with self.subTest(case=case_id, field="owner_skill"):
+                self.assertIn(row["owner_skill"], {"work", "init"})
+            with self.subTest(case=case_id, field="fields"):
+                combined = " | ".join(row.values())
+                self.assertRegex(combined, r"packet\.schema\.json|state-helper|canonical packet schema|INVALID_PACKET_SCHEMA")
+                self.assertRegex(combined, r"allowed_writes|CHANGE_ROOT|none")
+                self.assertRegex(combined, r"forbidden|禁止|产品路径|state authority|未授权")
+                self.assertRegex(combined, r"fail closed|STOP|PASS|绑定|bind")
+        self.assertEqual(rows["packet-bind-new-change-positive"]["owner_skill"], "work")
+        self.assertEqual(rows["packet-bind-migration-first-bind-positive"]["owner_skill"], "init")
+
+    def test_readme_claude_document_packet_bind_maintenance_without_runtime_claims(self):
+        readme = read_text(ROOT / "README.md")
+        claude = read_text(ROOT / "CLAUDE.md")
+        combined = readme + "\n" + claude
+        for needle in [
+            "worker SHA 不在 init/migration 预存",
+            "packet-helper 写入 worker packet artifact",
+            "state-helper 使用 canonical packet schema 与 current state identity 首次绑定并 start-task",
+            "atomic bind/start 成功后才 dispatch fresh implementer",
+        ]:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+        self.assertIn("source", read_text(MARKETPLACE))
+        for line in combined.splitlines():
+            if "runtime hook" in line or "daemon" in line or "MCP" in line or "`.nuclio/`" in line:  # not an implementation claim
+                self.assertRegex(line, r"不|不要|not |without |不新增|不声称")
 
     def test_reference_eval_finish_tokens_match_helper_enum_without_spaced_machine_token(self):
         state_helper = load_helper_module("state-helper.py")

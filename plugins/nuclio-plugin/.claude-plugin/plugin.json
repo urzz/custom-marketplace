@@ -1,7 +1,7 @@
 {
   "name": "nuclio",
   "description": "Use when a project needs an init/work/finish file-backed Contract Workbench with explicit Contract and Finish gates before product mutation or long-term knowledge updates",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": {
     "name": "Jade Liu",
     "email": "[redacted-email]"

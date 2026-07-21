@@ -12,6 +12,7 @@ Nuclio 的 authority 只来自项目内 `.dev-docs/` 文件和 deterministic hel
 - `CHANGE_ROOT/research/` 只保存当前 change 的 bounded research artifact；它不能扩展 context 读授权或写授权。
 - Evidence authority 只在 `CHANGE_ROOT/evidence/`：Task evidence 位于 `CHANGE_ROOT/evidence/tasks/<task-id>/...`，completion、decision、finish apply 分别位于 `CHANGE_ROOT/evidence/completion.md`、`CHANGE_ROOT/evidence/decision.md`、`CHANGE_ROOT/evidence/finish-apply.md`。
 - Evidence 文件记录 helper 可校验的 hash、fingerprint、snapshot、check output 与 before/after identity；它们不能绕过 Gate。
+- Worker packet artifact existence、packet hash 或 bare SHA 不是 dispatch authority。`packet.schema.json is the only packet shape/role authority`；state-helper is the state-specific packet identity and transition authority for packet id, current state identity, freshness, Task, ownership, and atomic bind/start.
 
 ## Approval 与 freshness
 
@@ -29,6 +30,7 @@ Nuclio 的 authority 只来自项目内 `.dev-docs/` 文件和 deterministic hel
 - Packet-bound `output_language` 必须由 helper 从当前 Contract 派生并传给 worker、reviewer、fixer、completion critic 与 Finish packet；agent 只能消费 packet/envelope 值，不能从 chat history、branch name、用户记忆、邻近 Task 或仓库 locale 自行推断语言。
 - Finish target language metadata 是长期 knowledge/archive 写入时的目标语言 authority：existing target 保持既有主要语言，new target 使用 Contract-bound `output_language`，unknown/missing metadata 必须 STOP。
 - 路径 allowlist、dirty check、snapshot/fingerprint、ownership overlap、handoff lineage、state transition、target language metadata 与 packet derivation 必须由 helper fail closed 校验。
+- Work implementer dispatch 的唯一正常路径是 `derive/write → schema+identity bind/start → dispatch`：packet-helper 写入 worker packet artifact，state-helper 通过 canonical packet schema 与 current state identity 完成首次绑定和 start-task，成功后才派发 fresh implementer。stale, wrong Task, wrong ownership, wrong role, cross-role, tampered, replacement, or unbound evidence fail closed；`INVALID_PACKET_SCHEMA` 或 identity/transition 错误均不得改变 state bytes。
 - Controller 只负责路由、展示 next action、请求用户决策和调用 helper；Controller 不能从对话或 agent claim 推导 Gate、ownership、freshness 或完成状态。
 
 ## 角色边界

@@ -37,7 +37,7 @@ def load_helper():
 
 
 def contract_identity(**overrides):
-    identity = {"path": ".dev-docs/changes/change-alpha/contract.yaml", "sha256": A_HASH, "version": "v1", "change_id": "change-alpha"}
+    identity = {"path": ".dev-docs/changes/change-alpha/contract.yaml", "sha256": A_HASH, "version": "v1", "change_id": "change-alpha", "output_language": "zh-CN"}
     identity.update(overrides)
     return identity
 
@@ -50,8 +50,8 @@ def context_identity(**overrides):
 
 def task_graph():
     return [
-        {"id": "T1", "owner": "owner-a", "dependencies": [], "ownership": ["plugins/nuclio-plugin/scripts/a.py"], "packet_sha256": C_HASH},
-        {"id": "T2", "owner": "owner-a", "dependencies": ["T1"], "ownership": ["plugins/nuclio-plugin/scripts/b.py"], "packet_sha256": D_HASH},
+        {"id": "T1", "owner": "owner-a", "dependencies": [], "ownership": [{"path": "plugins/nuclio-plugin/scripts/a.py", "mode": "create"}]},
+        {"id": "T2", "owner": "owner-a", "dependencies": ["T1"], "ownership": [{"path": "plugins/nuclio-plugin/scripts/b.py", "mode": "modify"}]},
     ]
 
 
@@ -61,10 +61,35 @@ def approval(token="approve", **overrides):
     return payload
 
 
-def impl(task_id="T1", head="head-1", implementation_sha256=E_HASH, packet_sha256=None, base_head="base-1"):
+def worker_packet(helper, task_id="T1", state_version=2, output_language="zh-CN", ownership=None, role="worker", change_id="change-alpha", contract_sha256=A_HASH, context_fingerprint=B_HASH):
+    ownership = ownership or ([{"path": "plugins/nuclio-plugin/scripts/a.py", "mode": "create"}] if task_id == "T1" else [{"path": "plugins/nuclio-plugin/scripts/b.py", "mode": "modify"}])
+    packet = {
+        "schema_version": 1,
+        "role": role,
+        "change_id": change_id,
+        "contract_sha256": contract_sha256,
+        "context_fingerprint": context_fingerprint,
+        "state_version": state_version,
+        "output_language": output_language,
+        "task_id": task_id,
+        "ownership": ownership,
+        "range": {"base_head": "abc1234", "expected_dirty_state": "clean"},
+        "snapshots": [],
+        "checks": {"focused": [], "full": []},
+        "handoffs": [],
+    }
+    packet["packet_id"] = helper.sha256_value(packet)
+    return packet
+
+
+def packet_sha(helper, task_id="T1", state_version=2, **overrides):
+    return helper.sha256_value(worker_packet(helper, task_id=task_id, state_version=state_version, **overrides))
+
+
+def impl(task_id="T1", head="def5678", implementation_sha256=E_HASH, packet_sha256=None, base_head="abc1234"):
     return {
         "task_id": task_id,
-        "packet_sha256": packet_sha256 or (C_HASH if task_id == "T1" else D_HASH),
+        "packet_sha256": packet_sha256 or "",
         "base_head": base_head,
         "new_head": head,
         "implementation_sha256": implementation_sha256,
@@ -98,29 +123,37 @@ class StateHelperTests(unittest.TestCase):
     def read_state(self):
         return json.loads(self.state_path.read_text(encoding="utf-8"))
 
+    def current_packet_sha(self, task_id="T1"):
+        for task in self.read_state()["tasks"]:
+            if task["id"] == task_id:
+                return task["packet_sha256"]
+        raise AssertionError(f"unknown task {task_id}")
+
     def approve_contract(self, expected_version=1, contract=None, context=None, approval_payload=None):
         return self.helper.approve_contract(self.state_path, expected_version, contract or contract_identity(), context or context_identity(), approval_payload or approval())
 
     def complete_t1(self):
         version = self.read_state()["state_version"]
-        self.helper.start_task(self.state_path, version, "T1", C_HASH)
-        self.helper.record_implementation(self.state_path, version + 1, impl())
+        packet = worker_packet(self.helper, "T1", version)
+        self.helper.start_task(self.state_path, version, "T1", packet)
+        self.helper.record_implementation(self.state_path, version + 1, impl(packet_sha256=self.helper.sha256_value(packet)))
         self.helper.import_task_review(self.state_path, version + 2, pass_review())
 
     def complete_all_tasks(self):
         if self.read_state()["tasks"][0]["status"] != "completed":
             self.complete_t1()
         version = self.read_state()["state_version"]
-        self.helper.start_task(self.state_path, version, "T2", D_HASH)
-        self.helper.record_implementation(self.state_path, version + 1, impl("T2", head="head-2"))
+        packet = worker_packet(self.helper, "T2", version)
+        self.helper.start_task(self.state_path, version, "T2", packet)
+        self.helper.record_implementation(self.state_path, version + 1, impl("T2", head="fedcba9", packet_sha256=self.helper.sha256_value(packet)))
         self.helper.import_task_review(self.state_path, version + 2, pass_review("T2", review_sha256=A_HASH))
 
     def completion_identity(self):
         return {
             "contract_sha256": A_HASH,
             "context_fingerprint": B_HASH,
-            "task_heads": {"T1": "head-1", "T2": "head-2"},
-            "implementation_range": {"base": "base-1", "head": "head-2"},
+            "task_heads": {"T1": "def5678", "T2": "fedcba9"},
+            "implementation_range": {"base": "abc1234", "head": "fedcba9"},
             "acceptance_index_sha256": B_HASH,
         }
 
@@ -206,9 +239,10 @@ class StateHelperTests(unittest.TestCase):
         self.assertEqual(self.helper.inspect_state(self.read_state())["status"], "contract_pending")
         self.approve_contract()
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "DISPATCH_IMPLEMENTER")
-        self.helper.start_task(self.state_path, 2, "T1", C_HASH)
+        packet = worker_packet(self.helper, "T1", 2)
+        self.helper.start_task(self.state_path, 2, "T1", packet)
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "DISPATCH_IMPLEMENTER")
-        self.helper.record_implementation(self.state_path, 3, impl())
+        self.helper.record_implementation(self.state_path, 3, impl(packet_sha256=self.helper.sha256_value(packet)))
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "DISPATCH_REVIEWER")
         self.helper.import_task_review(self.state_path, 4, pass_review())
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "DISPATCH_IMPLEMENTER")
@@ -226,16 +260,76 @@ class StateHelperTests(unittest.TestCase):
 
     def test_dependency_order_packet_and_task_pass_are_enforced(self):
         self.init_state(); self.approve_contract()
-        self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T2", D_HASH), "DEPENDENCY_NOT_COMPLETE")
-        self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T1", D_HASH), "PACKET_MISMATCH")
-        self.helper.start_task(self.state_path, 2, "T1", C_HASH)
+        self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T2", worker_packet(self.helper, "T2", 2)), "DEPENDENCY_NOT_COMPLETE")
+        self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T1", worker_packet(self.helper, "T1", 2, ownership=[{"path": "plugins/nuclio-plugin/scripts/b.py", "mode": "modify"}])), "STALE_OWNERSHIP")
+        packet = worker_packet(self.helper, "T1", 2)
+        self.helper.start_task(self.state_path, 2, "T1", packet)
         self.assert_error(lambda: self.helper.import_task_review(self.state_path, 3, pass_review()), "TASK_NOT_REVIEWING")
-        self.helper.record_implementation(self.state_path, 3, impl())
+        self.helper.record_implementation(self.state_path, 3, impl(packet_sha256=self.helper.sha256_value(packet)))
         self.helper.import_task_review(self.state_path, 4, pass_review())
         self.assertEqual(self.read_state()["tasks"][0]["status"], "completed")
 
+    def test_worker_packet_bind_negative_cases_are_atomic_and_fail_closed(self):
+        self.init_state(); self.approve_contract()
+        self.assertNotIn("packet_sha256", self.read_state()["tasks"][0])
+        self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T1", worker_packet(self.helper, "T1", 1)), "STALE_PACKET")
+        self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T1", worker_packet(self.helper, "T2", 2)), "WRONG_TASK")
+        self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T1", worker_packet(self.helper, "T1", 2, ownership=[{"path": "plugins/nuclio-plugin/scripts/a.py", "mode": "delete"}])), "STALE_OWNERSHIP")
+        self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T1", worker_packet(self.helper, "T1", 2, role="reviewer")), "INVALID_PACKET_SCHEMA")
+        tampered = worker_packet(self.helper, "T1", 2)
+        tampered["output_language"] = "en"
+        self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T1", tampered), "PACKET_ID_MISMATCH")
+        packet = worker_packet(self.helper, "T1", 2)
+        started = self.helper.start_task(self.state_path, 2, "T1", packet)
+        self.assertEqual(started["tasks"][0]["status"], "implementing")
+        retry = self.helper.start_task(self.state_path, 3, "T1", packet)
+        self.assertEqual(retry["state_version"], 3)
+        replacement = worker_packet(self.helper, "T1", 3)
+        self.assert_error(lambda: self.helper.start_task(self.state_path, 3, "T1", replacement), "PACKET_ALREADY_BOUND")
+
+        self.state_path.unlink()
+        self.init_state(); self.approve_contract()
+        unbound = self.read_state(); unbound["status"] = "executing"; unbound["state_version"] = 2
+        self.state_path.write_text(self.helper.canonical_json(unbound) + "\n", encoding="utf-8")
+        self.assert_error(lambda: self.helper.record_implementation(self.state_path, 2, impl(packet_sha256=C_HASH)), "PACKET_UNBOUND")
+
+    def test_worker_packet_contract_shape_is_validated_before_binding(self):
+        cases = [
+            ("range", "not-an-object"),
+            ("range", {"base_head": "not-a-hex-ref", "expected_dirty_state": "clean"}),
+            ("range", {"base_head": "abc1234", "new_head": "not-a-hex-ref", "expected_dirty_state": "clean"}),
+            ("range", {"base_head": "abc1234", "expected_dirty_state": "dirty"}),
+            ("snapshots", "not-a-list"),
+            ("snapshots", [{"path": "plugins/nuclio-plugin/scripts/a.py"}]),
+            ("checks", "not-an-object"),
+            ("checks", {"focused": "not-a-list", "full": []}),
+            ("checks", {"focused": [{"name": "unit", "command": []}], "full": []}),
+            ("handoffs", "not-a-list"),
+            ("handoffs", [""]),
+        ]
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                self.state_path.unlink(missing_ok=True)
+                self.init_state(); self.approve_contract()
+                packet = worker_packet(self.helper, "T1", 2)
+                packet[field] = value
+                packet["packet_id"] = self.helper._packet_id(packet)
+                self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T1", packet), "INVALID_PACKET_SCHEMA")
+                self.assertNotIn("packet_sha256", self.read_state()["tasks"][0])
+
+    def test_worker_packet_bool_versions_fail_schema_before_identity_or_binding(self):
+        for field in ("schema_version", "state_version"):
+            with self.subTest(field=field):
+                self.state_path.unlink(missing_ok=True)
+                self.init_state(); self.approve_contract()
+                packet = worker_packet(self.helper, "T1", 2)
+                packet[field] = True
+                packet["packet_id"] = self.helper._packet_id(packet)
+                self.assert_error(lambda: self.helper.start_task(self.state_path, 2, "T1", packet), "INVALID_PACKET_SCHEMA")
+                self.assertNotIn("packet_sha256", self.read_state()["tasks"][0])
+
     def test_fail_fix_shared_max2_budget_no_progress_cross_owner(self):
-        self.init_state(); self.approve_contract(); self.helper.start_task(self.state_path, 2, "T1", C_HASH); self.helper.record_implementation(self.state_path, 3, impl())
+        self.init_state(); self.approve_contract(); packet = worker_packet(self.helper, "T1", 2); self.helper.start_task(self.state_path, 2, "T1", packet); self.helper.record_implementation(self.state_path, 3, impl(packet_sha256=self.helper.sha256_value(packet)))
         self.helper.import_task_review(self.state_path, 4, fail_review())
         state = self.read_state()
         self.assertEqual(state["status"], "repair_required")
@@ -244,8 +338,8 @@ class StateHelperTests(unittest.TestCase):
         self.helper.authorize_fix(self.state_path, 6, "T1", ["F1"])
         state = self.read_state()
         self.assertEqual(state["fix_budgets"]["owner-a"]["used"], 1)
-        self.assert_error(lambda: self.helper.record_fix(self.state_path, 7, impl(head="head-1", base_head="head-1")), "NO_PROGRESS")
-        self.helper.record_fix(self.state_path, 7, impl(head="head-1-fixed", implementation_sha256=A_HASH, base_head="head-1"))
+        self.assert_error(lambda: self.helper.record_fix(self.state_path, 7, impl(head="def5678", base_head="def5678", packet_sha256=self.current_packet_sha())), "NO_PROGRESS")
+        self.helper.record_fix(self.state_path, 7, impl(head="def5678-fixed", implementation_sha256=A_HASH, base_head="def5678", packet_sha256=self.current_packet_sha()))
         self.assert_error(lambda: self.helper.import_task_review(self.state_path, 8, fail_review(owner="owner-b", finding_id="FX")), "CROSS_OWNER_FINDING")
         self.helper.import_task_review(self.state_path, 8, fail_review(finding_id="F2", fingerprint="fp-2"))
         self.helper.needs_fix(self.state_path, 9, "T1", ["F2"])
@@ -254,18 +348,18 @@ class StateHelperTests(unittest.TestCase):
         self.assert_error(lambda: self.helper.authorize_fix(self.state_path, 11, "T1", ["F2"]), "BUDGET_EXHAUSTED")
 
     def test_record_fix_requires_base_head_to_match_current_task_head(self):
-        self.init_state(); self.approve_contract(); self.helper.start_task(self.state_path, 2, "T1", C_HASH); self.helper.record_implementation(self.state_path, 3, impl())
+        self.init_state(); self.approve_contract(); packet = worker_packet(self.helper, "T1", 2); self.helper.start_task(self.state_path, 2, "T1", packet); self.helper.record_implementation(self.state_path, 3, impl(packet_sha256=self.helper.sha256_value(packet)))
         self.helper.import_task_review(self.state_path, 4, fail_review())
         self.helper.authorize_fix(self.state_path, 5, "T1", ["F1"])
-        self.assert_error(lambda: self.helper.record_fix(self.state_path, 6, impl(head="head-1-fixed", implementation_sha256=A_HASH, base_head="stale-unrelated-head")), "STALE_HEAD")
-        state = self.helper.record_fix(self.state_path, 6, impl(head="head-1-fixed", implementation_sha256=A_HASH, base_head="head-1"))
+        self.assert_error(lambda: self.helper.record_fix(self.state_path, 6, impl(head="def5678-fixed", implementation_sha256=A_HASH, base_head="stale-unrelated-head", packet_sha256=self.current_packet_sha())), "STALE_HEAD")
+        state = self.helper.record_fix(self.state_path, 6, impl(head="def5678-fixed", implementation_sha256=A_HASH, base_head="def5678", packet_sha256=self.current_packet_sha()))
         self.assertEqual(state["tasks"][0]["status"], "reviewing")
-        self.assertEqual(self.helper._metadata(state)["heads"]["T1"], "head-1-fixed")
+        self.assertEqual(self.helper._metadata(state)["heads"]["T1"], "def5678-fixed")
 
     def test_completion_requires_all_tasks_and_handles_pass_fail(self):
         self.init_state(); self.approve_contract(); self.complete_t1()
-        self.assert_error(lambda: self.helper.start_completion(self.state_path, 5, {"implementation_range": {"base": "base-1", "head": "head-1"}, "acceptance_index_sha256": B_HASH}), "TASKS_INCOMPLETE")
-        self.helper.start_task(self.state_path, 5, "T2", D_HASH); self.helper.record_implementation(self.state_path, 6, impl("T2", head="head-2")); self.helper.import_task_review(self.state_path, 7, pass_review("T2", review_sha256=A_HASH))
+        self.assert_error(lambda: self.helper.start_completion(self.state_path, 5, {"implementation_range": {"base": "abc1234", "head": "def5678"}, "acceptance_index_sha256": B_HASH}), "TASKS_INCOMPLETE")
+        packet = worker_packet(self.helper, "T2", 5); self.helper.start_task(self.state_path, 5, "T2", packet); self.helper.record_implementation(self.state_path, 6, impl("T2", head="fedcba9", packet_sha256=self.helper.sha256_value(packet))); self.helper.import_task_review(self.state_path, 7, pass_review("T2", review_sha256=A_HASH))
         self.helper.start_completion(self.state_path, 8, self.completion_packet())
         state = self.helper.record_completion(self.state_path, 9, {"verdict": "FAIL", "blocking_owner": "owner-a", "finding_id": "CF1", "reason": "completion blocker"})
         self.assertEqual(state["status"], "repair_required")
@@ -293,14 +387,14 @@ class StateHelperTests(unittest.TestCase):
         self.assertEqual(self.helper.next_action(state)["action"], "DISPATCH_FIXER")
         self.assertNotIn("completion_identity", self.helper._metadata(state))
         self.helper.authorize_fix(self.state_path, 10, "T1", ["CF1"])
-        self.helper.record_fix(self.state_path, 11, impl(head="head-1-repaired", implementation_sha256=A_HASH, base_head="head-1"))
+        self.helper.record_fix(self.state_path, 11, impl(head="def5678-repaired", implementation_sha256=A_HASH, base_head="def5678", packet_sha256=self.current_packet_sha()))
         self.helper.import_task_review(self.state_path, 12, pass_review("T1", review_sha256=B_HASH))
         repaired = self.read_state()
         self.assertEqual(repaired["tasks"][0]["status"], "completed")
         self.assertEqual(repaired["tasks"][1]["status"], "completed")
         self.assertEqual(repaired["status"], "executing")
         self.assertEqual(self.helper.next_action(repaired)["action"], "RUN_COMPLETION_REVIEW")
-        refreshed_packet = self.completion_packet(task_heads={"T1": "head-1-repaired", "T2": "head-2"}, implementation_range={"base": "base-1", "head": "head-1-repaired"})
+        refreshed_packet = self.completion_packet(task_heads={"T1": "def5678-repaired", "T2": "fedcba9"}, implementation_range={"base": "abc1234", "head": "def5678-repaired"})
         self.helper.start_completion(self.state_path, 13, refreshed_packet)
 
     def test_completion_pass_requires_full_identity_and_leaves_state_unchanged(self):
@@ -400,7 +494,7 @@ class StateHelperTests(unittest.TestCase):
     def test_invalid_transition_atomic_bytes_and_resume_next_action(self):
         self.init_state(); self.approve_contract()
         before = self.state_path.read_bytes()
-        self.assert_error(lambda: self.helper.record_implementation(self.state_path, 2, impl()), "TASK_NOT_IMPLEMENTING")
+        self.assert_error(lambda: self.helper.record_implementation(self.state_path, 2, impl()), "PACKET_UNBOUND")
         self.assertEqual(before, self.state_path.read_bytes())
         resumed = self.helper.load_state(self.state_path)
         self.assertEqual(self.helper.next_action(resumed)["action"], "DISPATCH_IMPLEMENTER")
@@ -411,7 +505,7 @@ class StateHelperTests(unittest.TestCase):
         out = json.loads(proc.stdout)
         self.assertTrue(out["ok"])
         self.assertEqual(out["state"]["status"], "contract_pending")
-        proc = subprocess.run([sys.executable, str(HELPER), "start-task", str(self.state_path), "--expected-version", "1", "--task-id", "T1", "--packet-sha256", C_HASH], text=True, capture_output=True)
+        proc = subprocess.run([sys.executable, str(HELPER), "start-task", str(self.state_path), "--expected-version", "1", "--task-id", "T1", "--packet-json", json.dumps(worker_packet(self.helper, "T1", 1))], text=True, capture_output=True)
         self.assertEqual(proc.returncode, 2)
         self.assertEqual(proc.stdout, "")
         self.assertEqual(json.loads(proc.stderr)["code"], "CONTRACT_NOT_APPROVED")
