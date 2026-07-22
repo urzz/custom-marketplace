@@ -153,19 +153,81 @@ def normalized_contract_for_state():
     return doc
 
 
-def finish_plan(new_language="en", existing_language="en", existing_source="existing_target"):
+def self_hash(value, self_field):
+    body = {key: value[key] for key in sorted(value) if key != self_field}
+    return load_helper().sha256_value(body)
+
+
+def finish_target(path, before_sha256, proposed_after_summary, reason, source_evidence, target_language, language_source):
     return {
+        "path": path,
+        "before_sha256": before_sha256,
+        "proposed_after_summary": proposed_after_summary,
+        "reason": reason,
+        "source_evidence": source_evidence,
+        "target_language": target_language,
+        "language_source": language_source,
+    }
+
+
+def finish_plan(new_language="en", existing_language="en", existing_source="existing_target", include_index=True):
+    plan = {
+        "schema_version": 1,
+        "contract_sha256": A_HASH,
+        "context_fingerprint": B_HASH,
+        "completion_sha256": C_HASH,
         "decision_sha256": F_HASH,
-        "finish_plan_sha256": D_HASH,
+        "mutation_map_sha256": E_HASH,
+        "acceptance_index_sha256": B_HASH,
+        "implementation_range": {"base": "abcdef1", "head": "abcdef9"},
+        "task_heads": {"T1": "1111111", "T2": "2222222"},
+        "decision_state_version": 8,
         "knowledge_proposal": {"summary": "retain validated decisions"},
         "knowledge_targets": [
-            {"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "target_language": new_language, "language_source": "contract_output_language"}
+            finish_target(".dev-docs/knowledge/notes.md", None, "Knowledge summary exactly", "Keep validated decisions exactly", F_HASH, new_language, "contract_output_language")
         ],
         "archive_targets": [
-            {"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH, "target_language": existing_language, "language_source": existing_source}
+            finish_target(".dev-docs/archive/change.json", A_HASH, "Archive summary exactly", "Archive validated handoff exactly", F_HASH, existing_language, existing_source)
         ],
+        "index_targets": [],
         "archive_intent": "archive change-local evidence after finish approval",
     }
+    if include_index:
+        plan["index_targets"].append(finish_target(".dev-docs/changes/index.md", None, "Index summary exactly", "Index archived change exactly", F_HASH, new_language, "contract_output_language"))
+    plan["finish_plan_sha256"] = self_hash(plan, "finish_plan_sha256")
+    return plan
+
+
+def completion_identity_doc():
+    return {
+        "completion_identity": {
+            "contract_sha256": A_HASH,
+            "context_fingerprint": B_HASH,
+            "completion_sha256": C_HASH,
+            "mutation_map_sha256": E_HASH,
+            "acceptance_index_sha256": B_HASH,
+            "implementation_range": {"base": "abcdef1", "head": "abcdef9"},
+            "task_heads": {"T1": "1111111", "T2": "2222222"},
+            "state_version": 7,
+        }
+    }
+
+
+def decision_doc():
+    return {
+        "contract_sha256": A_HASH,
+        "context_fingerprint": B_HASH,
+        "decision": {"decision_sha256": F_HASH, "completion_sha256": C_HASH, "decision_state_version": 8},
+    }
+
+
+def finish_state(plan=None):
+    plan = plan or finish_plan()
+    doc = state(all_completed=True)
+    doc["completion"] = dict(completion_identity_doc()["completion_identity"])
+    doc["decision"] = {**dict(completion_identity_doc()["completion_identity"]), "decision_sha256": F_HASH, "finish_plan_sha256": plan["finish_plan_sha256"], "decision_state_version": 8, "state_version": 7, "approved": True}
+    doc["gates"]["finish"] = {"status": "approved", "decision_sha256": F_HASH, "artifact_sha256": F_HASH, "state_version": 7}
+    return doc
 
 
 class PacketHelperTests(unittest.TestCase):
@@ -200,7 +262,7 @@ class PacketHelperTests(unittest.TestCase):
             "worker": self.helper.worker_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef1", [{"path": "handoff.json", "state": "absent"}], 7),
             "reviewer": self.helper.reviewer_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef2", mutation_map(), {"evidence_paths": ["evidence/t1.json"]}, [{"path": "iface.py", "state": "present", "sha256": A_HASH}], 7),
             "completion": self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {"evidence_paths": ["validation.json"]}, ["risk-1"], 7),
-            "finish": self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, finish_plan(), [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7),
+            "finish": self.helper.finish_packet(self.repo, contract(), context(), finish_state(), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), finish_plan(), [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7),
         }
 
     def assert_role_fields_forbidden(self, base_packet, forbidden_fields):
@@ -280,7 +342,7 @@ class PacketHelperTests(unittest.TestCase):
             self.helper.worker_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef1", [{"path": "handoff.json", "state": "absent"}], 7),
             self.helper.reviewer_packet(self.repo, contract(), context(), state(), "T1", "abcdef1", "abcdef2", mutation_map(), {"evidence_paths": ["evidence/t1.json"]}, [{"path": "iface.py", "state": "present", "sha256": A_HASH}], 7),
             self.helper.completion_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {"evidence_paths": ["validation.json"]}, ["risk-1"], 7),
-            self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, finish_plan(), [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7),
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), finish_plan(), [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7),
         ]
         for packet in packets:
             with self.subTest(role=packet["role"]):
@@ -294,7 +356,7 @@ class PacketHelperTests(unittest.TestCase):
             self.helper.worker_packet(self.repo, zh_contract, context(), state(), "T1", "abcdef1", "abcdef1", [{"path": "handoff.json", "state": "absent"}], 7),
             self.helper.reviewer_packet(self.repo, zh_contract, context(), state(), "T1", "abcdef1", "abcdef2", mutation_map(), {"evidence_paths": ["evidence/t1.json"]}, [{"path": "iface.py", "state": "present", "sha256": A_HASH}], 7),
             self.helper.completion_packet(self.repo, zh_contract, context(), state(all_completed=True), "abcdef1", "abcdef9", mutation_map(), completed_tasks(), acceptance_index(), {"evidence_paths": ["validation.json"]}, ["risk-1"], 7),
-            self.helper.finish_packet(self.repo, zh_contract, context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, zh_plan, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7),
+            self.helper.finish_packet(self.repo, zh_contract, context(), finish_state(zh_plan), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), zh_plan, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7),
         ]
         for packet in packets:
             with self.subTest(role=packet["role"]):
@@ -315,7 +377,7 @@ class PacketHelperTests(unittest.TestCase):
     def test_finish_targets_enforce_language_source_rules(self):
         zh_contract = contract("zh-CN")
         user_confirmed = finish_plan(new_language="zh-CN", existing_language="fr", existing_source="user_confirmed")
-        packet = self.helper.finish_packet(self.repo, zh_contract, context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, user_confirmed, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+        packet = self.helper.finish_packet(self.repo, zh_contract, context(), finish_state(user_confirmed), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), user_confirmed, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
         self.assertEqual(packet["knowledge_targets"][0]["target_language"], "zh-CN")
         self.assertEqual(packet["knowledge_targets"][0]["language_source"], "contract_output_language")
         self.assertEqual(packet["archive_targets"][0]["target_language"], "fr")
@@ -323,23 +385,23 @@ class PacketHelperTests(unittest.TestCase):
 
         wrong_new = finish_plan(new_language="en")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.finish_packet(self.repo, zh_contract, context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, wrong_new, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+            self.helper.finish_packet(self.repo, zh_contract, context(), finish_state(wrong_new), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), wrong_new, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
         self.assertEqual(ctx.exception.code, "INVALID_TARGET_LANGUAGE")
 
         wrong_existing = finish_plan(new_language="zh-CN", existing_language="zh-CN", existing_source="contract_output_language")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.finish_packet(self.repo, zh_contract, context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, wrong_existing, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+            self.helper.finish_packet(self.repo, zh_contract, context(), finish_state(wrong_existing), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), wrong_existing, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
         self.assertEqual(ctx.exception.code, "INVALID_TARGET_LANGUAGE")
 
     def test_finish_packet_fails_closed_for_missing_or_unknown_existing_target_language(self):
         missing_language = finish_plan(new_language="en")
         missing_language["archive_targets"][0].pop("target_language")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, missing_language, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(missing_language), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), missing_language, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
         self.assertEqual(ctx.exception.code, "UNKNOWN_TARGET_LANGUAGE")
         unknown_source = finish_plan(new_language="en", existing_language="en", existing_source="unknown")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, {"completion_identity": {"completion_sha256": C_HASH}}, unknown_source, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(unknown_source), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), unknown_source, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
         self.assertEqual(ctx.exception.code, "UNKNOWN_TARGET_LANGUAGE")
 
     def test_worker_packet_is_minimal_and_binds_current_task_only(self):
@@ -506,28 +568,105 @@ class PacketHelperTests(unittest.TestCase):
 
     def test_finish_packet_binds_decision_plan_and_has_no_product_fix_authority(self):
         plan = finish_plan()
-        completion = {"completion_identity": {"completion_sha256": C_HASH}}
-        packet = self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, completion, plan, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
+        packet = self.helper.finish_packet(self.repo, contract(), context(), finish_state(plan), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), plan, [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], 7)
         self.assert_schema_valid(packet)
         self.assertEqual(packet["role"], "finish")
         self.assertEqual(packet["completion_sha256"], C_HASH)
         self.assertEqual(packet["decision_sha256"], F_HASH)
-        self.assertEqual(packet["finish_plan_sha256"], D_HASH)
+        self.assertEqual(packet["finish_plan_sha256"], plan["finish_plan_sha256"])
         self.assertEqual(packet["knowledge_proposal"], {"summary": "retain validated decisions"})
-        self.assertEqual(packet["knowledge_targets"], [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "target_language": "en", "language_source": "contract_output_language"}])
-        self.assertEqual(packet["archive_targets"], [{"path": ".dev-docs/archive/change.json", "before_sha256": A_HASH, "target_language": "en", "language_source": "existing_target"}])
+        self.assertEqual(packet["knowledge_targets"], plan["knowledge_targets"])
+        self.assertEqual(packet["archive_targets"], plan["archive_targets"])
+        self.assertEqual(packet["index_targets"], plan["index_targets"])
         self.assertEqual(packet["archive_intent"], "archive change-local evidence after finish approval")
         self.assertNotIn("ownership", packet)
         self.assertNotIn("checks", packet)
         self.assertNotIn("fix", json.dumps(packet))
-        overreach = finish_plan(); overreach["knowledge_targets"] = [{"path": "plugins/nuclio-plugin/scripts/a.py", "before_sha256": None}]
+        overreach = finish_plan(); overreach["knowledge_targets"] = [finish_target("plugins/nuclio-plugin/scripts/a.py", None, "bad", "bad", F_HASH, "en", "contract_output_language")]; overreach["finish_plan_sha256"] = self_hash(overreach, "finish_plan_sha256")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, completion, overreach, [], 7)
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(overreach), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), overreach, [], 7)
         self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
-        missing = finish_plan(); missing.pop("archive_intent")
+        missing = finish_plan(); missing.pop("archive_intent"); missing["finish_plan_sha256"] = self_hash(missing, "finish_plan_sha256")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
-            self.helper.finish_packet(self.repo, contract(), context(), state(all_completed=True), "abcdef1", "abcdef9", {"decision_sha256": F_HASH}, completion, missing, [], 7)
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(plan), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), missing, [], 7)
         self.assertEqual(ctx.exception.code, "INVALID_INPUT")
+
+    def test_finish_targets_are_exact_groups_and_fail_closed_for_overlap(self):
+        plan = finish_plan()
+        packet = self.helper.finish_packet(self.repo, contract(), context(), finish_state(plan), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), plan, [], 7)
+        self.assertEqual([target["path"] for target in packet["knowledge_targets"]], [".dev-docs/knowledge/notes.md"])
+        self.assertEqual([target["path"] for target in packet["archive_targets"]], [".dev-docs/archive/change.json"])
+        self.assertEqual([target["path"] for target in packet["index_targets"]], [".dev-docs/changes/index.md"])
+        self.assert_schema_valid(packet)
+
+        no_index = finish_plan(include_index=False)
+        no_index["knowledge_targets"].append(finish_target(".dev-docs/changes/index.md", None, "wrong", "wrong", F_HASH, "en", "contract_output_language"))
+        no_index["finish_plan_sha256"] = self_hash(no_index, "finish_plan_sha256")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(no_index), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), no_index, [], 7)
+        self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
+
+        duplicate = finish_plan()
+        duplicate["knowledge_targets"].append({**duplicate["knowledge_targets"][0], "reason": "duplicate same group"})
+        duplicate["finish_plan_sha256"] = self_hash(duplicate, "finish_plan_sha256")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(duplicate), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), duplicate, [], 7)
+        self.assertEqual(ctx.exception.code, "INVALID_FINISH_PLAN")
+
+        cross_group = finish_plan()
+        cross_group["index_targets"][0] = {**cross_group["index_targets"][0], "path": ".dev-docs/knowledge/notes.md"}
+        cross_group["finish_plan_sha256"] = self_hash(cross_group, "finish_plan_sha256")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(cross_group), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), cross_group, [], 7)
+        self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
+
+    def test_finish_packet_rejects_stale_plan_decision_completion_and_identity(self):
+        plan = finish_plan()
+        stale_plan = dict(plan); stale_plan["knowledge_proposal"] = {"summary": "changed after hash"}
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(plan), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), stale_plan, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_FINISH_PLAN")
+
+        stale_decision = decision_doc(); stale_decision["decision"]["decision_sha256"] = E_HASH
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(plan), "abcdef1", "abcdef9", stale_decision, completion_identity_doc(), plan, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_DECISION")
+
+        stale_completion = completion_identity_doc(); stale_completion["completion_identity"]["completion_sha256"] = D_HASH
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(plan), "abcdef1", "abcdef9", decision_doc(), stale_completion, plan, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_COMPLETION")
+
+        stale_contract_plan = finish_plan(); stale_contract_plan["contract_sha256"] = C_HASH; stale_contract_plan["finish_plan_sha256"] = self_hash(stale_contract_plan, "finish_plan_sha256")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), finish_state(stale_contract_plan), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), stale_contract_plan, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_FINISH_PLAN")
+
+    def test_finish_cli_rejects_markdown_json_inputs(self):
+        plan = finish_plan()
+        contract_path = self.repo / "contract.json"
+        context_path = self.repo / "context.json"
+        state_path = self.repo / "state.json"
+        decision_path = self.repo / "decision.md"
+        completion_path = self.repo / "completion.md"
+        plan_path = self.repo / "finish-plan.md"
+        out = self.repo / "finish-packet.json"
+        contract_path.write_text(json.dumps(contract()), encoding="utf-8")
+        context_path.write_text(json.dumps(context()), encoding="utf-8")
+        state_path.write_text(json.dumps(finish_state(plan)), encoding="utf-8")
+        decision_path.write_text(json.dumps(decision_doc()), encoding="utf-8")
+        completion_path.write_text(json.dumps(completion_identity_doc()), encoding="utf-8")
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        proc = subprocess.run(
+            [
+                sys.executable, str(HELPER), "finish", "--repo", str(self.repo), "--contract-json", str(contract_path), "--context-json", str(context_path), "--state-json", str(state_path), "--base", "abcdef1", "--head", "abcdef9", "--decision-json", str(decision_path), "--completion-identity-json", str(completion_path), "--finish-plan-json", str(plan_path), "--output", str(out), "--expected-state-version", "7",
+            ],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(json.loads(proc.stderr)["code"], "INVALID_JSON_ARGUMENT")
+        self.assertFalse(out.exists())
 
     def test_stale_contract_context_state_and_head_fail_closed(self):
         stale_contract = contract(); stale_contract["sha256"] = C_HASH

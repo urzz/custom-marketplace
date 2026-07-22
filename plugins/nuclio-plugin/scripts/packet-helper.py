@@ -35,6 +35,9 @@ except ImportError:  # pragma: no cover
     jsonschema = None
 
 HASH_CHARS = set("0123456789abcdef")
+INDEX_TARGETS = {".dev-docs/index.md", ".dev-docs/index.json", ".dev-docs/changes/index.md"}
+FINISH_TARGET_GROUPS = ("knowledge_targets", "archive_targets", "index_targets")
+FINISH_TARGET_FIELDS = {"path", "before_sha256", "proposed_after_summary", "reason", "source_evidence", "target_language", "language_source"}
 
 
 class ProtocolError(Exception):
@@ -104,6 +107,8 @@ def _load_json_value(raw: str, where: str) -> Any:
         except json.JSONDecodeError as exc:
             raise ProtocolError("INVALID_JSON_ARGUMENT", f"{where} is not valid JSON") from exc
     path = Path(raw)
+    if path.suffix.lower() == ".md":
+        raise ProtocolError("INVALID_JSON_ARGUMENT", f"{where} must be canonical JSON, not Markdown", {"path": raw})
     if not path.exists() or not path.is_file():
         raise ProtocolError("INPUT_NOT_FOUND", f"{where} path must name an existing file", {"path": raw})
     try:
@@ -290,17 +295,25 @@ def _context_paths(context: Any, audience: str) -> list[str]:
     return []
 
 
+def _self_hash(value: dict[str, Any], self_field: str) -> str:
+    return sha256_value({key: value[key] for key in sorted(value) if key != self_field})
+
+
 def _dev_docs_target_path(value: Any, where: str, group: str) -> str:
     path = normalize_path(value, where)
-    if not path.startswith(".dev-docs/"):
-        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish targets must stay inside .dev-docs long-term knowledge paths", {"path": path})
-    allowed = path.startswith(".dev-docs/knowledge/") or path.startswith(".dev-docs/archive/") or path in {".dev-docs/index.md", ".dev-docs/index.json"}
-    if not allowed:
-        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish target path is not an approved long-term knowledge/index/archive file", {"path": path})
-    if group == "archive_targets" and not path.startswith(".dev-docs/archive/"):
-        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "archive targets must use .dev-docs/archive/", {"path": path})
-    if group == "knowledge_targets" and path.startswith(".dev-docs/archive/"):
-        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "knowledge targets must not use .dev-docs/archive/", {"path": path})
+    if group == "knowledge_targets":
+        if not path.startswith(".dev-docs/knowledge/"):
+            raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "knowledge targets must use .dev-docs/knowledge/", {"path": path})
+    elif group == "archive_targets":
+        if not path.startswith(".dev-docs/archive/"):
+            raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "archive targets must use .dev-docs/archive/", {"path": path})
+    elif group == "index_targets":
+        if path not in INDEX_TARGETS:
+            raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "index targets must use the approved index files", {"path": path})
+    else:
+        raise ProtocolError("INVALID_FINISH_PLAN", "unknown finish target group", {"group": group})
+    if path.startswith(".dev-docs/changes/") and path != ".dev-docs/changes/index.md":
+        raise ProtocolError("KNOWLEDGE_TARGET_OVERREACH", "finish targets must not write change-local evidence paths", {"path": path})
     return path
 
 
@@ -308,6 +321,11 @@ def _finish_targets(finish_plan: dict[str, Any], group: str, output_language: st
     result = []
     for raw in _require_list(finish_plan.get(group), f"finish_plan.{group}"):
         item = _require_object(raw, f"finish_plan.{group}[]")
+        missing = sorted(FINISH_TARGET_FIELDS - set(item))
+        extras = sorted(set(item) - FINISH_TARGET_FIELDS)
+        if missing or extras:
+            code = "UNKNOWN_TARGET_LANGUAGE" if any(field in missing for field in ("target_language", "language_source")) else "INVALID_FINISH_PLAN"
+            raise ProtocolError(code, "finish target shape mismatch", {"group": group, "missing": missing, "extra": extras})
         before = item.get("before_sha256")
         path = _dev_docs_target_path(item.get("path"), f"finish_plan.{group}[].path", group)
         language_source = item.get("language_source")
@@ -322,6 +340,9 @@ def _finish_targets(finish_plan: dict[str, Any], group: str, output_language: st
         result.append({
             "path": path,
             "before_sha256": _require_sha(before, f"finish_plan.{group}[].before_sha256") if before is not None else None,
+            "proposed_after_summary": _non_empty(item.get("proposed_after_summary"), f"finish_plan.{group}[].proposed_after_summary"),
+            "reason": _non_empty(item.get("reason"), f"finish_plan.{group}[].reason"),
+            "source_evidence": _require_sha(item.get("source_evidence"), f"finish_plan.{group}[].source_evidence"),
             "target_language": target_language,
             "language_source": language_source,
         })
@@ -345,14 +366,13 @@ def _finish_plan_details(finish_plan: dict[str, Any], output_language: str) -> d
     else:
         raise ProtocolError("INVALID_FINISH_PLAN", "finish plan knowledge_proposal must be a non-empty string, array or object")
     archive_intent = _non_empty(finish_plan.get("archive_intent"), "finish_plan.archive_intent")
-    knowledge_targets = _finish_targets(finish_plan, "knowledge_targets", output_language)
-    archive_targets = _finish_targets(finish_plan, "archive_targets", output_language)
-    if not knowledge_targets and not archive_targets:
+    grouped_targets = {group: _finish_targets(finish_plan, group, output_language) for group in FINISH_TARGET_GROUPS}
+    if not any(grouped_targets.values()):
         raise ProtocolError("INVALID_FINISH_PLAN", "finish plan must include at least one approved target")
-    all_paths = [item["path"] for item in knowledge_targets + archive_targets]
+    all_paths = [item["path"] for group in FINISH_TARGET_GROUPS for item in grouped_targets[group]]
     if len(all_paths) != len(set(all_paths)):
         raise ProtocolError("INVALID_FINISH_PLAN", "finish targets must not duplicate or overlap", {"paths": sorted(all_paths)})
-    return {"knowledge_proposal": proposal, "knowledge_targets": knowledge_targets, "archive_targets": archive_targets, "archive_intent": archive_intent}
+    return {"knowledge_proposal": proposal, **grouped_targets, "archive_intent": archive_intent}
 
 
 def _range(base: str, head: str | None = None, expected_dirty_state: str = "clean") -> dict[str, Any]:
@@ -499,18 +519,68 @@ def completion_packet(repo_path: str | Path, contract: dict[str, Any], context: 
     return _finalize_packet(packet)
 
 
+def _compare_identity(actual: dict[str, Any], expected: dict[str, Any], keys: tuple[str, ...], code: str) -> None:
+    mismatches = {key: {"expected": expected.get(key), "actual": actual.get(key)} for key in keys if expected.get(key) is not None and actual.get(key) != expected.get(key)}
+    if mismatches:
+        raise ProtocolError(code, "finish packet identity drift", mismatches)
+
+
+def _finish_payload(doc: dict[str, Any], key: str) -> dict[str, Any]:
+    return _require_object(doc.get(key, doc), key)
+
+
 def finish_packet(repo_path: str | Path, contract: dict[str, Any], context: dict[str, Any], state: dict[str, Any], base: str, head: str, decision_doc: dict[str, Any], completion_identity_doc: dict[str, Any], finish_plan: dict[str, Any], knowledge_snapshots: list[Any], expected_state_version: int | None = None) -> dict[str, Any]:
     _repo(repo_path)
     fresh = _fresh_inputs(contract, context, state, expected_state_version)
-    decision = _require_object(decision_doc, "decision")
-    completion = _require_object(completion_identity_doc.get("completion_identity", completion_identity_doc), "completion_identity")
+    decision_doc = _require_object(decision_doc, "decision")
+    decision = _finish_payload(decision_doc, "decision")
+    completion_identity_doc = _require_object(completion_identity_doc, "completion_identity_doc")
+    completion = _finish_payload(completion_identity_doc, "completion_identity")
     finish_plan = _require_object(finish_plan, "finish_plan")
     details = _finish_plan_details(finish_plan, fresh["output_language"])
-    decision_sha = _require_sha(decision.get("decision_sha256", finish_plan.get("decision_sha256")), "decision_sha256")
-    if finish_plan.get("decision_sha256") and finish_plan["decision_sha256"] != decision_sha:
+
+    expected_plan_sha = _self_hash(finish_plan, "finish_plan_sha256")
+    plan_sha = _require_sha(finish_plan.get("finish_plan_sha256"), "finish_plan.finish_plan_sha256")
+    if plan_sha != expected_plan_sha:
+        raise ProtocolError("STALE_FINISH_PLAN", "finish plan self hash is stale", {"expected": expected_plan_sha, "actual": plan_sha})
+
+    completion_sha = _require_sha(completion.get("completion_sha256"), "completion_identity.completion_sha256")
+    decision_sha = _require_sha(decision.get("decision_sha256"), "decision.decision_sha256")
+    decision_state_version = _require_version(decision.get("decision_state_version"), "decision.decision_state_version")
+    current_identity = {"contract_sha256": fresh["contract_sha256"], "context_fingerprint": fresh["context_fingerprint"]}
+    if "contract_sha256" in completion_identity_doc:
+        _compare_identity(completion_identity_doc, current_identity, ("contract_sha256", "context_fingerprint"), "STALE_COMPLETION")
+    _compare_identity(completion, current_identity, ("contract_sha256", "context_fingerprint"), "STALE_COMPLETION")
+    if "contract_sha256" in decision_doc:
+        _compare_identity(decision_doc, current_identity, ("contract_sha256", "context_fingerprint"), "STALE_DECISION")
+    _compare_identity(finish_plan, current_identity, ("contract_sha256", "context_fingerprint"), "STALE_FINISH_PLAN")
+
+    if finish_plan.get("decision_sha256") != decision_sha:
         raise ProtocolError("STALE_DECISION", "finish plan decision identity is stale")
-    completion_sha = _require_sha(completion.get("completion_sha256", state.get("completion", {}).get("proposal_sha256")), "completion_sha256")
-    plan_sha = _require_sha(finish_plan.get("finish_plan_sha256", sha256_value({key: finish_plan[key] for key in sorted(finish_plan) if key != "finish_plan_sha256"})), "finish_plan_sha256")
+    if finish_plan.get("completion_sha256") != completion_sha:
+        raise ProtocolError("STALE_COMPLETION", "finish plan completion identity is stale")
+    plan_expected = {
+        "completion_sha256": completion_sha,
+        "decision_sha256": decision_sha,
+        "mutation_map_sha256": completion.get("mutation_map_sha256"),
+        "acceptance_index_sha256": completion.get("acceptance_index_sha256"),
+        "implementation_range": completion.get("implementation_range"),
+        "task_heads": completion.get("task_heads"),
+        "decision_state_version": decision_state_version,
+    }
+    _compare_identity(finish_plan, plan_expected, tuple(plan_expected), "STALE_FINISH_PLAN")
+    _compare_identity(decision, {"completion_sha256": completion_sha}, ("completion_sha256",), "STALE_DECISION")
+
+    state_completion = state.get("completion") if isinstance(state.get("completion"), dict) else {}
+    state_decision = state.get("decision") if isinstance(state.get("decision"), dict) else {}
+    state_completion_expected = {key: completion.get(key) for key in ("contract_sha256", "context_fingerprint", "completion_sha256", "mutation_map_sha256", "acceptance_index_sha256", "implementation_range", "task_heads")}
+    _compare_identity(state_completion, state_completion_expected, tuple(state_completion_expected), "STALE_COMPLETION")
+    state_decision_expected = {**state_completion_expected, "decision_sha256": decision_sha, "finish_plan_sha256": plan_sha, "decision_state_version": decision_state_version}
+    _compare_identity(state_decision, state_decision_expected, tuple(state_decision_expected), "STALE_DECISION")
+    gate = state.get("gates", {}).get("finish", {}) if isinstance(state.get("gates"), dict) else {}
+    if gate.get("status") != "approved" or gate.get("decision_sha256") != decision_sha:
+        raise ProtocolError("STALE_DECISION", "finish packet requires the approved finish decision identity")
+
     finish_context_paths = _context_paths(context, "finish")
     snapshots = list(_require_list(knowledge_snapshots, "knowledge_snapshots"))
     snapshots.extend({"path": path, "state": "present"} for path in finish_context_paths)
