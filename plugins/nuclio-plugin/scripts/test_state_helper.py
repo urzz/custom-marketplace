@@ -185,6 +185,9 @@ class StateHelperTests(unittest.TestCase):
     def self_hash(self, payload, field):
         return self.helper.sha256_value({key: payload[key] for key in sorted(payload) if key != field})
 
+    def file_sha(self, path):
+        return load_evidence_helper().sha256_bytes(Path(path).read_bytes())
+
     def ensure_change_root_state_path(self):
         change_root = Path(self.temp.name) / "repo" / ".dev-docs" / "changes" / "change-alpha"
         change_root.mkdir(parents=True, exist_ok=True)
@@ -198,6 +201,8 @@ class StateHelperTests(unittest.TestCase):
         change_root = change_root or self.ensure_change_root_state_path()
         repo = change_root.parents[2]
         (repo / ".dev-docs" / "knowledge").mkdir(parents=True, exist_ok=True)
+        (repo / ".dev-docs" / "archive").mkdir(parents=True, exist_ok=True)
+        (repo / ".dev-docs" / "changes").mkdir(parents=True, exist_ok=True)
         completion_md = change_root / "completion.md"
         decision_md = change_root / "decision.md"
         completion_md.write_text("# Completion\nAll tasks done.\n", encoding="utf-8")
@@ -250,6 +255,51 @@ class StateHelperTests(unittest.TestCase):
         (change_root / "decision.json").write_text(json.dumps(decision_doc), encoding="utf-8")
         (change_root / "finish-plan.json").write_text(json.dumps(finish_plan), encoding="utf-8")
         return change_root, completion_doc, decision_doc, finish_plan
+
+    def write_finish_apply_targets(self, change_root=None):
+        change_root = change_root or self.state_path.parent
+        repo = change_root.parents[2]
+        targets = {
+            ".dev-docs/knowledge/notes.md": "preserve decision\n",
+            ".dev-docs/archive/change-alpha.json": '{"archived":true}\n',
+            ".dev-docs/changes/index.md": "- change-alpha archived\n",
+        }
+        for rel_path, content in targets.items():
+            target = repo / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        return targets
+
+    def finish_apply_journal(self, approval_identity, change_root=None):
+        change_root = change_root or self.state_path.parent
+        repo = change_root.parents[2]
+        finish_plan = json.loads((change_root / "finish-plan.json").read_text(encoding="utf-8"))
+        self.write_finish_apply_targets(change_root)
+        entries = []
+        for group_name, archive_result in (("knowledge_targets", "not_applicable"), ("archive_targets", "archived"), ("index_targets", "not_applicable")):
+            for target in finish_plan[group_name]:
+                entries.append(
+                    {
+                        "path": target["path"],
+                        "before_sha256": target["before_sha256"],
+                        "after_sha256": self.file_sha(repo / target["path"]),
+                        "reason": target["reason"],
+                        "target_language": target["target_language"],
+                        "language_source": target["language_source"],
+                        "apply_result": "applied",
+                        "archive_result": archive_result,
+                    }
+                )
+        journal = {
+            "decision_sha256": finish_plan["decision_sha256"],
+            "finish_plan_sha256": finish_plan["finish_plan_sha256"],
+            "approval_identity": approval_identity,
+            "archive_intent": finish_plan["archive_intent"],
+            "entries": entries,
+            "verified": True,
+        }
+        journal["journal_sha256"] = self.self_hash(journal, "journal_sha256")
+        return journal
 
     def start_completion_pass(self):
         self.complete_all_tasks()
@@ -339,7 +389,7 @@ class StateHelperTests(unittest.TestCase):
         finish_plan_sha = self.current_finish_plan_sha()
         self.helper.finish_decision(self.state_path, 10, "accept", {"decision_sha256": decision_sha, "expected_decision_state_version": 11, "finish_plan_sha256": finish_plan_sha, "decided_at": "2026-07-18T01:00:00Z", "change_root": str(change_root)})
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "APPLY_FINISH")
-        self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T01:00:00Z"})
+        self.helper.record_finish_apply(self.state_path, 11, self.finish_apply_journal("accept:2026-07-18T01:00:00Z", change_root))
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "COMPLETE")
 
     def test_dependency_order_packet_and_task_pass_are_enforced(self):
@@ -563,9 +613,41 @@ class StateHelperTests(unittest.TestCase):
         finish_plan_sha = self.current_finish_plan_sha()
         self.helper.finish_decision(self.state_path, 10, "accept", {"decision_sha256": decision_sha, "expected_decision_state_version": 11, "finish_plan_sha256": finish_plan_sha, "decided_at": "2026-07-18T03:00:00Z", "change_root": str(self.state_path.parent)})
         self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True}), "INVALID_FINISH_JOURNAL")
-        journal = {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T03:00:00Z"}
+        journal = self.finish_apply_journal("accept:2026-07-18T03:00:00Z")
         archived = self.helper.record_finish_apply(self.state_path, 11, journal)
         self.assertEqual(archived["status"], "archived")
+
+    def test_record_finish_apply_rejects_fake_verified_minimal_journal_before_archive(self):
+        self.init_state(); self.approve_contract(); self.start_completion_pass()
+        decision_sha = self.current_decision_sha()
+        finish_plan_sha = self.current_finish_plan_sha()
+        self.helper.finish_decision(self.state_path, 10, "accept", {"decision_sha256": decision_sha, "expected_decision_state_version": 11, "finish_plan_sha256": finish_plan_sha, "decided_at": "2026-07-18T03:00:00Z", "change_root": str(self.state_path.parent)})
+        fake_journal = {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T03:00:00Z"}
+        self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, fake_journal), "INVALID_FINISH_JOURNAL")
+        self.assertEqual(self.read_state()["status"], "folding")
+
+    def test_folding_partial_canonical_identity_is_invalid_state_schema(self):
+        self.init_state(); self.approve_contract(); self.start_completion_pass()
+        decision_sha = self.current_decision_sha()
+        finish_plan_sha = self.current_finish_plan_sha()
+        self.helper.finish_decision(self.state_path, 10, "accept", {"decision_sha256": decision_sha, "expected_decision_state_version": 11, "finish_plan_sha256": finish_plan_sha, "decided_at": "2026-07-18T03:00:00Z", "change_root": str(self.state_path.parent)})
+        state = self.read_state()
+        state["completion"] = {"proposal_sha256": C_HASH, "mutation_map_sha256": D_HASH, "state_version": 9}
+        state["decision"] = {"decision_sha256": decision_sha, "state_version": 10, "approved": True}
+        self.state_path.write_text(self.helper.canonical_json(state) + "\n", encoding="utf-8")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.load_state(self.state_path)
+        self.assertEqual(ctx.exception.code, "INVALID_STATE_SCHEMA")
+
+    def test_decision_pending_partial_canonical_marker_is_invalid_state_schema(self):
+        self.init_state(); self.approve_contract(); self.start_completion_pass()
+        state = self.read_state()
+        state["completion"] = {"completion_sha256": state["completion"]["completion_sha256"], "proposal_sha256": C_HASH, "mutation_map_sha256": D_HASH, "state_version": 9}
+        state["decision"] = {"decision_sha256": state["decision"]["decision_sha256"], "finish_plan_sha256": state["decision"]["finish_plan_sha256"], "state_version": 9, "approved": False}
+        self.state_path.write_text(self.helper.canonical_json(state) + "\n", encoding="utf-8")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.load_state(self.state_path)
+        self.assertEqual(ctx.exception.code, "INVALID_STATE_SCHEMA")
 
     def test_finish_accept_requires_generated_decision_hash_and_expected_state_version(self):
         self.init_state(); self.approve_contract(); self.start_completion_pass()
@@ -646,8 +728,11 @@ class StateHelperTests(unittest.TestCase):
                 self.assertEqual(state["status"], expected_status)
                 if decision == "accept":
                     self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 10, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T02:00:00Z"}), "VERSION_MISMATCH")
-                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": B_HASH, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T02:00:00Z"}), "STALE_DECISION")
-                    archived = self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T02:00:00Z"})
+                    stale_journal = self.finish_apply_journal("accept:2026-07-18T02:00:00Z")
+                    stale_journal["decision_sha256"] = B_HASH
+                    stale_journal["journal_sha256"] = self.self_hash(stale_journal, "journal_sha256")
+                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, stale_journal), "STALE_DECISION")
+                    archived = self.helper.record_finish_apply(self.state_path, 11, self.finish_apply_journal("accept:2026-07-18T02:00:00Z"))
                     self.assertEqual(archived["status"], "archived")
                 else:
                     self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T02:00:00Z"}), "FINISH_NOT_ACCEPTED")
@@ -695,13 +780,7 @@ class StateHelperTests(unittest.TestCase):
         journal_path = Path(self.temp.name) / "finish-apply.json"
         journal_path.write_text(
             json.dumps(
-                {
-                    "decision_sha256": decision_sha,
-                    "finish_plan_sha256": finish_plan_sha,
-                    "journal_sha256": A_HASH,
-                    "verified": True,
-                    "approval_identity": "accept:2026-07-18T03:00:00Z",
-                }
+                self.finish_apply_journal("accept:2026-07-18T03:00:00Z")
             ),
             encoding="utf-8",
         )

@@ -1055,13 +1055,18 @@ def record_finish_apply(path: str | Path, expected_version: int, journal: dict[s
     if before["status"] != "folding" or before["gates"]["finish"].get("status") != "approved":
         raise ProtocolError("FINISH_NOT_ACCEPTED", "fresh Finish accept is required before archive")
     journal = _require_object(journal, "finish apply journal")
-    required = {"decision_sha256", "finish_plan_sha256", "approval_identity", "journal_sha256", "verified"}
-    missing = sorted(required - set(journal))
-    if missing:
-        raise ProtocolError("INVALID_FINISH_JOURNAL", "finish apply journal shape mismatch", {"missing": missing})
+    change_root = Path(path).resolve().parent
+    finish_plan = _read_handoff_json(change_root / "finish-plan.json", "finish-plan.json")
+    expected_decision_sha = _require_sha(before["decision"].get("decision_sha256"), "state.decision.decision_sha256")
+    try:
+        validation = EVIDENCE_HELPER.validate_finish_apply(expected_decision_sha, finish_plan, journal, _repo_for_change_root(change_root))
+    except Exception as exc:
+        if exc.__class__.__name__ == "ProtocolError":
+            raise _wrap_evidence_error(exc) from exc
+        raise
     decision_sha = _require_sha(journal.get("decision_sha256"), "decision_sha256")
     finish_plan_sha = _require_sha(journal.get("finish_plan_sha256"), "finish_plan_sha256")
-    if decision_sha != before["decision"]["decision_sha256"] or decision_sha != before["gates"]["finish"].get("decision_sha256"):
+    if decision_sha != before["gates"]["finish"].get("decision_sha256"):
         raise ProtocolError("STALE_DECISION", "finish apply decision identity is stale")
     if finish_plan_sha != before["decision"].get("finish_plan_sha256"):
         raise ProtocolError("STALE_FINISH_PLAN", "finish apply finish plan identity is stale")
@@ -1073,12 +1078,10 @@ def record_finish_apply(path: str | Path, expected_version: int, journal: dict[s
     approval_identity = _non_empty(journal.get("approval_identity"), "approval_identity")
     if approval_identity != finish_meta.get("approval_identity"):
         raise ProtocolError("STALE_DECISION", "finish apply approval identity is stale")
-    if journal.get("verified") is not True:
-        raise ProtocolError("APPLY_NOT_VERIFIED", "finish apply journal must be verified")
-    journal_sha = _require_sha(journal.get("journal_sha256"), "journal_sha256")
+    journal_sha = _require_sha(validation.get("journal_sha256"), "validation.journal_sha256")
     after = copy.deepcopy(before)
     after["status"] = "archived"
-    return _commit(path, before, after, "FINISH_APPLIED", artifact_sha256=journal_sha, event_reason={"journal_sha256": journal_sha, "decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "approval_identity": approval_identity})
+    return _commit(path, before, after, "FINISH_APPLIED", artifact_sha256=journal_sha, event_reason={"journal_sha256": journal_sha, "decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "approval_identity": approval_identity, "covered_paths": validation.get("covered_paths", [])})
 
 
 def _json_arg(value: str, where: str) -> Any:

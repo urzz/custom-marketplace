@@ -145,6 +145,97 @@
           "decision"
         ]
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "archived",
+              "folding"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "completion": {
+            "$ref": "#/$defs/canonical_completion_identity"
+          },
+          "decision": {
+            "$ref": "#/$defs/canonical_decision_identity"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "decision_pending"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "properties": {
+                  "completion": {
+                    "required": [
+                      "completion_sha256"
+                    ]
+                  }
+                },
+                "required": [
+                  "completion"
+                ]
+              },
+              {
+                "properties": {
+                  "decision": {
+                    "required": [
+                      "finish_plan_sha256"
+                    ]
+                  }
+                },
+                "required": [
+                  "decision"
+                ]
+              },
+              {
+                "properties": {
+                  "decision": {
+                    "required": [
+                      "decision_state_version"
+                    ]
+                  }
+                },
+                "required": [
+                  "decision"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "completion": {
+            "$ref": "#/$defs/canonical_completion_identity"
+          },
+          "decision": {
+            "$ref": "#/$defs/canonical_decision_identity"
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -407,6 +498,26 @@
         }
       }
     },
+    "canonical_completion_identity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/completion_identity"
+        },
+        {
+          "required": [
+            "contract_sha256",
+            "context_fingerprint",
+            "completion_sha256",
+            "proposal_sha256",
+            "mutation_map_sha256",
+            "task_heads",
+            "implementation_range",
+            "acceptance_index_sha256",
+            "state_version"
+          ]
+        }
+      ]
+    },
     "decision_identity": {
       "type": "object",
       "additionalProperties": false,
@@ -474,6 +585,30 @@
           "type": "boolean"
         }
       }
+    },
+    "canonical_decision_identity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/decision_identity"
+        },
+        {
+          "required": [
+            "contract_sha256",
+            "context_fingerprint",
+            "completion_sha256",
+            "proposal_sha256",
+            "mutation_map_sha256",
+            "task_heads",
+            "implementation_range",
+            "acceptance_index_sha256",
+            "decision_sha256",
+            "finish_plan_sha256",
+            "decision_state_version",
+            "state_version",
+            "approved"
+          ]
+        }
+      ]
     },
     "history_event": {
       "type": "object",
