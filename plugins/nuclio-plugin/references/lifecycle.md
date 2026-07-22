@@ -5,7 +5,7 @@
 ## 日常 Gate
 
 - Contract Gate：用户批准当前 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl` fingerprint、`CHANGE_ROOT/state.json` version、mutation_targets 和 Contract-bound `output_language` 后，才允许产品 mutation。helper trim-only exact aliases 为 `approve`、`批准`、`同意`、`继续`，存储 canonical `approve`。
-- Finish Gate：用户批准 `CHANGE_ROOT/evidence/completion.md` proposal、`CHANGE_ROOT/evidence/decision.md` identity 与 `CHANGE_ROOT/state.json` version 后，才允许长期知识写入、归档或 finish apply。helper trim-only exact aliases 为 `accept`/`同意`、`request_changes`/`要求修改`、`defer`/`暂缓`、`reject`/`拒绝`，存储 canonical English decision；`继续` 不是 Finish accept。
+- Finish Gate：helper 校验并展示 `CHANGE_ROOT/completion.md` 与 `CHANGE_ROOT/decision.md` maintainer prose，同时用户只批准 `CHANGE_ROOT/completion.json`、`CHANGE_ROOT/decision.json`、`CHANGE_ROOT/finish-plan.json` 的 machine identity 与 `CHANGE_ROOT/state.json` version 后，才允许长期知识写入、归档或 finish apply。helper trim-only exact aliases 为 `accept`/`同意`、`request_changes`/`要求修改`、`defer`/`暂缓`、`reject`/`拒绝`，存储 canonical English decision；`继续` 不是 Finish accept。
 
 除这两个日常 Gate 外，Controller 可以要求澄清或修复，但不能把对话同意、agent claim 或 artifact 存在解释为 Gate approval。
 
@@ -20,7 +20,7 @@
 | `executing` | 一个或多个 Task 正在实现、review 或修复。 | 按 bound packet 派发 fresh implementer/reviewer/fixer；记录 `CHANGE_ROOT/evidence/tasks/<task-id>/...`；更新 Task 状态；完成后转入 `completing`。 |
 | `completing` | 所有 Task 候选实现完成，正在做 change-wide completion。 | 汇总 mutation map、checks、review evidence、risk；用 packet-bound `output_language` 写五文件 canonical handoff：`CHANGE_ROOT/completion.md`、`CHANGE_ROOT/completion.json`、`CHANGE_ROOT/decision.md`、`CHANGE_ROOT/decision.json`、`CHANGE_ROOT/finish-plan.json`；helper 验证 projected identity 后才转入 `decision_pending`。 |
 | `decision_pending` | Completion proposal 已可展示，等待 Finish Gate decision。 | 展示 before/after、residual risk、finish apply plan；等待 exact `accept`/`request_changes`/`defer`/`reject`；不得写长期知识或归档。 |
-| `folding` | 存在 fresh Finish approval，正在执行长期知识写入或归档。 | 应用 approved finish plan；按 finish target language metadata 处理 existing/new targets，unknown 时 STOP；记录 `CHANGE_ROOT/evidence/finish-apply.md` before/after evidence；归档 state；转入 `archived`。 |
+| `folding` | 存在 fresh Finish approval，正在执行长期知识写入或归档。 | 应用 approved finish plan；按 finish target language metadata 处理 existing/new targets，unknown 时 STOP；记录 `CHANGE_ROOT/evidence/finish-apply.json` machine before/after evidence；helper 验证 JSON identity 后才可渲染可选 `CHANGE_ROOT/evidence/finish-apply.md` prose；归档 state；转入 `archived`。 |
 | `archived` | Change 已结束且历史可追溯。 | 回到 `idle`；只允许只读审计或显式新 change。 |
 | `repair_required` | helper 发现 state、hash、ownership、dirty、schema 或 evidence 不一致。 | 停止自动推进；展示原因；执行授权 repair；必要时重新请求 Gate。 |
 | `context_stale` | context fingerprint 或 required source identity 与 approval/packet 不匹配。 | 停止执行；刷新 context；重新生成 packet 或回到 Contract Gate。 |

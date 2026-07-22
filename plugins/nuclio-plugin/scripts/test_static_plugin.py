@@ -785,6 +785,35 @@ class StaticPluginTests(unittest.TestCase):
         self.assertIn("不创建、不持久化、不批准", critic)
         self.assertIn("does not create, persist, or approve sidecars", refs)
 
+    def test_task4_finish_reference_authority_uses_json_with_markdown_display_layer(self):
+        corpus = "\n".join(read_text(REFERENCES / name) for name in ["lifecycle.md", "finish.md"])
+        stale_machine_authority = [
+            "CHANGE_ROOT/evidence/completion.md",
+            "CHANGE_ROOT/evidence/decision.md",
+            "journal file 必须是 `CHANGE_ROOT/evidence/finish-apply.md`",
+            "记录 `CHANGE_ROOT/evidence/finish-apply.md` before/after evidence",
+        ]
+        for needle in stale_machine_authority:
+            with self.subTest(forbidden=needle):
+                self.assertNotIn(needle, corpus)
+        for needle in [
+            "CHANGE_ROOT/completion.json",
+            "CHANGE_ROOT/decision.json",
+            "CHANGE_ROOT/finish-plan.json",
+            "CHANGE_ROOT/evidence/finish-apply.json",
+            "machine authority",
+            "maintainer prose 展示层",
+        ]:
+            with self.subTest(required=needle):
+                self.assertIn(needle, corpus)
+        for needle in [
+            "CHANGE_ROOT/completion.md",
+            "CHANGE_ROOT/decision.md",
+            "CHANGE_ROOT/evidence/finish-apply.md",
+        ]:
+            with self.subTest(display_layer=needle):
+                self.assertIn(needle, corpus)
+
     def test_task4_all_json_helper_parameters_use_json_not_markdown(self):
         corpus = "\n".join(read_text(path) for path in [SKILLS / "work" / "SKILL.md", SKILLS / "finish" / "SKILL.md", REFERENCES / "finish.md", REFERENCES / "eval-prompts.md"])
         self.assertIn("All `--*-json` arguments name canonical `.json` files, never Markdown", corpus)

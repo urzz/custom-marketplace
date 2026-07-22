@@ -107,7 +107,7 @@ Fresh accept 后允许的写入仅限：
 - `Knowledge Proposal` 中逐项列明且带有 target language metadata 的 knowledge targets。
 - `finish-plan.json` 中逐项列明且带有 target language metadata 的 `index_targets`，包括受控 `.dev-docs/changes/index.md`。
 - `Archive Decision` 中列明且带有 target language metadata 的 journal、state archive 或 `.dev-docs/archive/**` archive target。
-- finish apply evidence 中列明的 `finish_apply_journal`，其 journal file 必须是 `CHANGE_ROOT/evidence/finish-apply.md`。
+- finish apply evidence 中列明的 `finish_apply_journal`，其 machine journal file 必须是 `CHANGE_ROOT/evidence/finish-apply.json`；`CHANGE_ROOT/evidence/finish-apply.md` 只能在 JSON 验证通过后作为 maintainer prose 展示层渲染。
 
 Accept 不允许：
 
@@ -201,4 +201,4 @@ Finish 阶段禁止：
 - 在 unknown target language 下继续写入。
 - 使用 raw transcript、agent summary 或 chat history 作为 decision authority。
 - 因 artifact existence 推断 Finish approval。
-- 将 active change authority 写到 project-root `.dev-docs/` artifacts；必须使用 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl`、`CHANGE_ROOT/state.json`、`CHANGE_ROOT/research/`、`CHANGE_ROOT/completion.md`、`CHANGE_ROOT/decision.md` 与 `CHANGE_ROOT/evidence/finish-apply.md`。
+- 将 active change authority 写到 project-root `.dev-docs/` artifacts；必须使用 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl`、`CHANGE_ROOT/state.json`、`CHANGE_ROOT/research/`、`CHANGE_ROOT/completion.json`、`CHANGE_ROOT/decision.json`、`CHANGE_ROOT/finish-plan.json` 与 `CHANGE_ROOT/evidence/finish-apply.json` 作为 machine authority；`CHANGE_ROOT/completion.md`、`CHANGE_ROOT/decision.md` 与 `CHANGE_ROOT/evidence/finish-apply.md` 仅为 maintainer prose 展示层。
