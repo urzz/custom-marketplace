@@ -41,6 +41,7 @@ NEXT_ACTIONS = {
     "DISPATCH_FIXER",
     "RUN_COMPLETION_REVIEW",
     "REQUEST_FINISH_DECISION",
+    "REBUILD_FINISH_HANDOFF",
     "APPLY_FINISH",
     "HALT",
     "COMPLETE",
@@ -54,6 +55,15 @@ HASH_RE = "0123456789abcdef"
 MUTATION_MODES = {"create", "modify", "delete"}
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PACKET_SCHEMA = SCRIPTS_DIR.parent / "schemas" / "packet.schema.json"
+STATE_SCHEMA = SCRIPTS_DIR.parent / "schemas" / "state.schema.json"
+
+
+def _load_evidence_helper():
+    helper_path = SCRIPTS_DIR / "evidence-helper.py"
+    spec = importlib.util.spec_from_file_location("nuclio_evidence_helper_for_state", helper_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_json_schema_helper():
@@ -65,6 +75,7 @@ def _load_json_schema_helper():
 
 
 JSON_SCHEMA_HELPER = _load_json_schema_helper()
+EVIDENCE_HELPER = _load_evidence_helper()
 
 
 class ProtocolError(Exception):
@@ -130,6 +141,13 @@ def load_state(path: str | Path) -> dict[str, Any]:
     return state
 
 
+def _validate_state_schema(state: Any) -> None:
+    try:
+        JSON_SCHEMA_HELPER.validate_instance(STATE_SCHEMA, state)
+    except JSON_SCHEMA_HELPER.SchemaValidationError as exc:
+        raise ProtocolError("INVALID_STATE_SCHEMA", "state does not conform to canonical state.schema.json", exc.details()) from exc
+
+
 def validate_state_shape(state: Any) -> None:
     if not isinstance(state, dict):
         raise ProtocolError("INVALID_STATE", "state root must be an object")
@@ -157,6 +175,7 @@ def validate_state_shape(state: Any) -> None:
             raise ProtocolError("INVALID_STATE", "pending/ready task packet_sha256 must be omitted or a lowercase sha256")
     if state["status"] in {"context_stale", "deferred", "rejected"} and any(task["status"] == "completed" for task in state["tasks"]):
         raise ProtocolError("INVALID_STATE", "schema forbids completed tasks in stale/deferred/rejected states")
+    _validate_state_schema(state)
 
 
 def _write_state_atomic(path: str | Path, state: dict[str, Any]) -> None:
@@ -421,6 +440,39 @@ def inspect_state(state_or_path: dict[str, Any] | str | Path) -> dict[str, Any]:
     }
 
 
+def _finish_change_root_for_state(state: dict[str, Any], state_or_path: dict[str, Any] | str | Path) -> Path | None:
+    if isinstance(state_or_path, (str, Path)):
+        return Path(state_or_path).resolve().parent
+    try:
+        metadata = _metadata(state)
+    except ProtocolError:
+        return None
+    raw = metadata.get("finish_change_root")
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw).resolve()
+    return None
+
+
+def _has_canonical_finish_identity(state: dict[str, Any]) -> bool:
+    decision = state.get("decision") if isinstance(state.get("decision"), dict) else {}
+    completion = state.get("completion") if isinstance(state.get("completion"), dict) else {}
+    return all(_is_sha(decision.get(key)) for key in ("decision_sha256", "finish_plan_sha256", "completion_sha256")) and _is_sha(completion.get("completion_sha256")) and isinstance(decision.get("decision_state_version"), int)
+
+
+def _finish_route(state: dict[str, Any], state_or_path: dict[str, Any] | str | Path) -> dict[str, Any]:
+    if not _has_canonical_finish_identity(state):
+        return {"action": "REBUILD_FINISH_HANDOFF", "status": state["status"], "state_version": state["state_version"], "code": "LEGACY_FINISH_HANDOFF"}
+    change_root = _finish_change_root_for_state(state, state_or_path)
+    if change_root is None:
+        return {"action": "HALT", "status": state["status"], "state_version": state["state_version"], "code": "CHANGE_ROOT_REQUIRED"}
+    readiness = _readiness(change_root, state)
+    if readiness.get("ready") is True:
+        if readiness.get("decision_sha256") != state["decision"].get("decision_sha256") or readiness.get("finish_plan_sha256") != state["decision"].get("finish_plan_sha256") or readiness.get("decision_state_version") != state["decision"].get("decision_state_version"):
+            return {"action": "HALT", "status": state["status"], "state_version": state["state_version"], "code": "STALE_DECISION"}
+        return {"action": "REQUEST_FINISH_DECISION", "status": state["status"], "state_version": state["state_version"], "readiness": readiness}
+    return {"action": "HALT", "status": state["status"], "state_version": state["state_version"], "code": readiness.get("failure_code") or "FINISH_HANDOFF_NOT_READY", "readiness": readiness}
+
+
 def next_action(state_or_path: dict[str, Any] | str | Path) -> dict[str, Any]:
     state = load_state(state_or_path) if isinstance(state_or_path, (str, Path)) else state_or_path
     status = state["status"]
@@ -452,7 +504,7 @@ def next_action(state_or_path: dict[str, Any] | str | Path) -> dict[str, Any]:
     elif status == "completing":
         action = "RUN_COMPLETION_REVIEW"
     elif status == "decision_pending":
-        action = "REQUEST_FINISH_DECISION"
+        return _finish_route(state, state_or_path)
     elif status == "folding":
         action = "APPLY_FINISH"
     elif status == "archived":
@@ -741,6 +793,105 @@ def _require_completion_identity(state: dict[str, Any], payload: dict[str, Any])
     }
 
 
+def _wrap_evidence_error(exc: Exception) -> ProtocolError:
+    code = getattr(exc, "code", "FINISH_HANDOFF_INVALID")
+    message = getattr(exc, "message", str(exc))
+    details = getattr(exc, "details", {})
+    return ProtocolError(code, message, details)
+
+
+def _absolute_change_root(raw: Any) -> Path:
+    text = _non_empty(raw, "change_root")
+    path = Path(text)
+    if not path.is_absolute():
+        raise ProtocolError("CHANGE_ROOT_REQUIRED", "change_root must be an absolute path")
+    if not path.exists() or not path.is_dir():
+        raise ProtocolError("CHANGE_ROOT_NOT_FOUND", "change_root must name an existing directory", {"change_root": text})
+    return path.resolve()
+
+
+def _read_handoff_json(path: Path, label: str) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        raise ProtocolError("MISSING_FINISH_HANDOFF", "required finish handoff artifact is missing", {"artifact": label, "path": str(path)})
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ProtocolError("INVALID_JSON_FILE", "finish handoff artifact is not valid JSON", {"artifact": label, "path": str(path)}) from exc
+    return _require_object(value, label)
+
+
+def _finish_handoff_docs(change_root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    return (
+        _read_handoff_json(change_root / "completion.json", "completion.json"),
+        _read_handoff_json(change_root / "decision.json", "decision.json"),
+        _read_handoff_json(change_root / "finish-plan.json", "finish-plan.json"),
+    )
+
+
+def _repo_for_change_root(change_root: Path) -> Path:
+    if len(change_root.parents) >= 3:
+        return change_root.parents[2]
+    return change_root
+
+
+def _validate_finish_handoff(state: dict[str, Any], change_root: Path) -> dict[str, Any]:
+    completion_doc, decision_doc, finish_plan = _finish_handoff_docs(change_root)
+    try:
+        return EVIDENCE_HELPER.validate_finish_handoff(
+            state,
+            completion_doc,
+            decision_doc,
+            finish_plan,
+            {"completion_md": change_root / "completion.md", "decision_md": change_root / "decision.md", "repo": _repo_for_change_root(change_root)},
+        )
+    except Exception as exc:
+        if exc.__class__.__name__ == "ProtocolError":
+            raise _wrap_evidence_error(exc) from exc
+        raise
+
+
+def _readiness(change_root: Path, state: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return EVIDENCE_HELPER.finish_readiness(change_root, state["contract"]["sha256"], state["context"]["fingerprint"])
+    except Exception as exc:
+        if exc.__class__.__name__ == "ProtocolError":
+            raise _wrap_evidence_error(exc) from exc
+        raise
+
+
+def _completion_identity_from_doc(completion_doc: dict[str, Any], state_version: int) -> dict[str, Any]:
+    completion = _require_object(completion_doc.get("completion"), "completion evidence")
+    return {
+        "contract_sha256": _require_sha(completion_doc.get("contract_sha256"), "completion.contract_sha256"),
+        "context_fingerprint": _require_sha(completion_doc.get("context_fingerprint"), "completion.context_fingerprint"),
+        "completion_sha256": _require_sha(completion.get("completion_sha256"), "completion.completion_sha256"),
+        "proposal_sha256": _require_sha(completion.get("proposal_sha256"), "completion.proposal_sha256"),
+        "mutation_map_sha256": _require_sha(completion.get("mutation_map_sha256"), "completion.mutation_map_sha256"),
+        "task_heads": copy.deepcopy(_require_object(completion.get("task_heads"), "completion.task_heads")),
+        "implementation_range": copy.deepcopy(_require_object(completion.get("implementation_range"), "completion.implementation_range")),
+        "acceptance_index_sha256": _require_sha(completion.get("acceptance_index_sha256"), "completion.acceptance_index_sha256"),
+        "state_version": state_version,
+    }
+
+
+def _decision_identity_from_handoff(completion_identity: dict[str, Any], decision_doc: dict[str, Any], finish_plan: dict[str, Any], state_version: int, approved: bool = False) -> dict[str, Any]:
+    decision = _require_object(decision_doc.get("decision"), "decision evidence")
+    return {
+        **copy.deepcopy(completion_identity),
+        "decision_sha256": _require_sha(decision.get("decision_sha256"), "decision.decision_sha256"),
+        "finish_plan_sha256": _require_sha(finish_plan.get("finish_plan_sha256"), "finish_plan.finish_plan_sha256"),
+        "decision_state_version": _positive_int(decision.get("decision_state_version"), "decision.decision_state_version"),
+        "state_version": state_version,
+        "approved": approved,
+    }
+
+
+def _positive_int(value: Any, where: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ProtocolError("INVALID_STATE_VERSION", f"{where} must be a positive integer")
+    return value
+
+
 def start_completion(path: str | Path, expected_version: int, packet: dict[str, Any]) -> dict[str, Any]:
     before = load_state(path)
     _check_version(before, expected_version)
@@ -782,6 +933,7 @@ def record_completion(path: str | Path, expected_version: int, completion: dict[
         _task_state(after, task_id)["status"] = "blocked"
         after["blockers"].append(blocker)
         after.pop("decision", None)
+        after.pop("completion", None)
         metadata = _metadata(after)
         metadata.pop("completion_packet", None)
         metadata.pop("completion_identity", None)
@@ -791,18 +943,45 @@ def record_completion(path: str | Path, expected_version: int, completion: dict[
     if verdict != "PASS":
         raise ProtocolError("INVALID_COMPLETION", "completion verdict must be PASS or FAIL")
     identity = _require_completion_identity(after, completion)
-    proposal_sha = _require_sha(completion.get("proposal_sha256"), "proposal_sha256")
-    mutation_sha = _require_sha(completion.get("mutation_map_sha256"), "mutation_map_sha256")
     metadata = _metadata(after)
     packet_identity = metadata.get("completion_identity")
     if packet_identity != identity:
         raise ProtocolError("INVALID_IDENTITY", "completion PASS identity must match completion packet")
+    change_root = _absolute_change_root(completion.get("change_root") or completion.get("CHANGE_ROOT"))
+    completion_doc, decision_doc, finish_plan = _finish_handoff_docs(change_root)
+    projected = copy.deepcopy(after)
+    projected["status"] = "decision_pending"
+    projected["state_version"] = before["state_version"] + 1
+    projected_completion = _completion_identity_from_doc(completion_doc, before["state_version"])
+    projected_decision = _decision_identity_from_handoff(projected_completion, decision_doc, finish_plan, before["state_version"], False)
+    projected["completion"] = projected_completion
+    projected["decision"] = projected_decision
     metadata["completion"] = copy.deepcopy(completion)
+    metadata["finish_change_root"] = str(change_root)
+    _update_initial_metadata(projected, metadata)
+    _validate_finish_handoff(projected, change_root)
+    return _commit(path, before, projected, "COMPLETION_PASSED", artifact_sha256=projected_completion["proposal_sha256"])
+
+
+def record_finish_handoff(path: str | Path, expected_version: int, change_root: str | Path) -> dict[str, Any]:
+    before = load_state(path)
+    _check_version(before, expected_version)
+    if before["status"] != "decision_pending":
+        raise ProtocolError("DECISION_NOT_PENDING", "Finish handoff can be rebuilt only while decision is pending")
+    if _has_canonical_finish_identity(before):
+        raise ProtocolError("FINISH_HANDOFF_ALREADY_CANONICAL", "canonical Finish handoff identity is already recorded")
+    change_root_path = _absolute_change_root(change_root)
+    completion_doc, decision_doc, finish_plan = _finish_handoff_docs(change_root_path)
+    after = copy.deepcopy(before)
+    after["state_version"] = before["state_version"] + 1
+    completion_identity = _completion_identity_from_doc(completion_doc, before["state_version"])
+    after["completion"] = completion_identity
+    after["decision"] = _decision_identity_from_handoff(completion_identity, decision_doc, finish_plan, before["state_version"], False)
+    metadata = _metadata(after)
+    metadata["finish_change_root"] = str(change_root_path)
     _update_initial_metadata(after, metadata)
-    after["completion"] = {"proposal_sha256": proposal_sha, "mutation_map_sha256": mutation_sha, "state_version": before["state_version"], **identity}
-    after["decision"] = {"decision_sha256": sha256_value({"proposal_sha256": proposal_sha, "mutation_map_sha256": mutation_sha, "state_version": before["state_version"], **identity}), "state_version": before["state_version"], "approved": False}
-    after["status"] = "decision_pending"
-    return _commit(path, before, after, "COMPLETION_PASSED", artifact_sha256=proposal_sha)
+    _validate_finish_handoff(after, change_root_path)
+    return _commit(path, before, after, "FINISH_HANDOFF_REBUILT", artifact_sha256=after["decision"]["finish_plan_sha256"])
 
 
 def finish_decision(path: str | Path, expected_version: int, decision: str, metadata_in: dict[str, Any]) -> dict[str, Any]:
@@ -812,43 +991,61 @@ def finish_decision(path: str | Path, expected_version: int, decision: str, meta
         raise ProtocolError("DECISION_NOT_PENDING", "Finish decision is not pending")
     decision = _normalize_exact_alias(decision, FINISH_DECISION_ALIASES, "decision", "INVALID_FINISH_DECISION", "decision must be exact accept/request_changes/defer/reject or 同意/要求修改/暂缓/拒绝")
     metadata_in = _require_object(metadata_in, "decision metadata")
+    change_root = _absolute_change_root(metadata_in.get("change_root") or metadata_in.get("CHANGE_ROOT"))
+    readiness = _readiness(change_root, before)
+    if readiness.get("ready") is not True:
+        raise ProtocolError(readiness.get("failure_code") or "FINISH_HANDOFF_NOT_READY", "Finish handoff readiness failed", {"readiness": readiness})
     after = copy.deepcopy(before)
     generated_decision = _require_object(before.get("decision"), "generated decision")
     decision_sha = _require_sha(metadata_in.get("decision_sha256"), "decision_sha256")
-    if decision_sha != _require_sha(generated_decision.get("decision_sha256"), "generated decision.decision_sha256"):
+    finish_plan_sha = _require_sha(metadata_in.get("finish_plan_sha256"), "finish_plan_sha256")
+    expected_decision_state_version = _positive_int(metadata_in.get("expected_decision_state_version", readiness.get("decision_state_version")), "expected_decision_state_version")
+    if decision_sha != readiness.get("decision_sha256") or decision_sha != _require_sha(generated_decision.get("decision_sha256"), "generated decision.decision_sha256"):
         raise ProtocolError("STALE_DECISION", "Finish decision identity is stale")
-    if decision == "accept":
-        expected_decision_state_version = metadata_in.get("expected_decision_state_version")
-        if not isinstance(expected_decision_state_version, int) or isinstance(expected_decision_state_version, bool) or expected_decision_state_version != generated_decision.get("state_version"):
-            raise ProtocolError("STALE_DECISION", "Finish accept expected decision state version is stale")
-    finish_plan_sha = _require_sha(metadata_in.get("finish_plan_sha256"), "finish_plan_sha256") if "finish_plan_sha256" in metadata_in else None
+    if finish_plan_sha != readiness.get("finish_plan_sha256") or finish_plan_sha != generated_decision.get("finish_plan_sha256"):
+        raise ProtocolError("STALE_FINISH_PLAN", "Finish plan identity is stale")
+    if expected_decision_state_version != readiness.get("decision_state_version") or expected_decision_state_version != generated_decision.get("decision_state_version"):
+        raise ProtocolError("STALE_DECISION", "Finish accept expected decision state version is stale")
     decided_at = _non_empty(metadata_in.get("decided_at", "unknown"), "decided_at")
     notes = copy.deepcopy(metadata_in)
     notes["decision"] = decision
+    notes["readiness"] = {"decision_sha256": readiness.get("decision_sha256"), "finish_plan_sha256": readiness.get("finish_plan_sha256"), "decision_state_version": readiness.get("decision_state_version")}
     if decision == "accept":
-        if finish_plan_sha is None:
-            raise ProtocolError("MISSING_FINISH_PLAN", "accept requires finish_plan_sha256")
         after["status"] = "folding"
-        after["decision"] = {"decision_sha256": decision_sha, "state_version": before["state_version"], "approved": True}
-        after["gates"]["finish"] = {"status": "approved", "artifact_sha256": decision_sha, "decision_sha256": decision_sha, "state_version": before["state_version"], "approval_id": "finish-accept", "approved_at": decided_at, "notes": canonical_json(notes)}
+        after_decision = copy.deepcopy(generated_decision)
+        after_decision["approved"] = True
+        after_decision["state_version"] = before["state_version"]
+        after["decision"] = after_decision
+        approval_identity = _non_empty(metadata_in.get("approval_identity", f"accept:{decided_at}"), "approval_identity")
+        notes["approval_identity"] = approval_identity
+        after["gates"]["finish"] = {"status": "approved", "artifact_sha256": decision_sha, "decision_sha256": decision_sha, "state_version": before["state_version"], "approval_id": approval_identity, "approved_at": decided_at, "notes": canonical_json(notes)}
         action = "FINISH_ACCEPTED"
     elif decision == "request_changes":
         after["status"] = "ready_to_execute"
-        after["decision"] = {"decision_sha256": decision_sha, "state_version": generated_decision["state_version"], "approved": False}
+        after_decision = copy.deepcopy(generated_decision)
+        after_decision["approved"] = False
+        after["decision"] = after_decision
         after["gates"]["finish"] = {"status": "stale", "decision_sha256": decision_sha, "state_version": before["state_version"], "notes": canonical_json(notes)}
         action = "FINISH_REQUEST_CHANGES"
     elif decision == "defer":
         after["status"] = "deferred"
         _demote_completed_for_schema(after, "blocked")
-        after["decision"] = {"decision_sha256": decision_sha, "state_version": generated_decision["state_version"], "approved": False}
+        after_decision = copy.deepcopy(generated_decision)
+        after_decision["approved"] = False
+        after["decision"] = after_decision
         after["gates"]["finish"] = {"status": "deferred", "decision_sha256": decision_sha, "state_version": before["state_version"], "notes": canonical_json(notes)}
         action = "FINISH_DEFERRED"
     else:
         after["status"] = "rejected"
         _demote_completed_for_schema(after, "rejected")
-        after["decision"] = {"decision_sha256": decision_sha, "state_version": generated_decision["state_version"], "approved": False}
+        after_decision = copy.deepcopy(generated_decision)
+        after_decision["approved"] = False
+        after["decision"] = after_decision
         after["gates"]["finish"] = {"status": "rejected", "decision_sha256": decision_sha, "state_version": before["state_version"], "notes": canonical_json(notes)}
         action = "FINISH_REJECTED"
+    metadata = _metadata(after)
+    metadata["finish_change_root"] = str(change_root)
+    _update_initial_metadata(after, metadata)
     return _commit(path, before, after, action, artifact_sha256=decision_sha, event_reason=notes)
 
 
@@ -858,23 +1055,30 @@ def record_finish_apply(path: str | Path, expected_version: int, journal: dict[s
     if before["status"] != "folding" or before["gates"]["finish"].get("status") != "approved":
         raise ProtocolError("FINISH_NOT_ACCEPTED", "fresh Finish accept is required before archive")
     journal = _require_object(journal, "finish apply journal")
+    required = {"decision_sha256", "finish_plan_sha256", "approval_identity", "journal_sha256", "verified"}
+    missing = sorted(required - set(journal))
+    if missing:
+        raise ProtocolError("INVALID_FINISH_JOURNAL", "finish apply journal shape mismatch", {"missing": missing})
     decision_sha = _require_sha(journal.get("decision_sha256"), "decision_sha256")
+    finish_plan_sha = _require_sha(journal.get("finish_plan_sha256"), "finish_plan_sha256")
     if decision_sha != before["decision"]["decision_sha256"] or decision_sha != before["gates"]["finish"].get("decision_sha256"):
         raise ProtocolError("STALE_DECISION", "finish apply decision identity is stale")
+    if finish_plan_sha != before["decision"].get("finish_plan_sha256"):
+        raise ProtocolError("STALE_FINISH_PLAN", "finish apply finish plan identity is stale")
     notes = before["gates"]["finish"].get("notes", "{}")
     try:
         finish_meta = json.loads(notes)
     except json.JSONDecodeError as exc:
         raise ProtocolError("INVALID_DECISION_METADATA", "finish decision metadata is invalid") from exc
-    expected_plan = finish_meta.get("finish_plan_sha256")
-    if expected_plan and journal.get("finish_plan_sha256") != expected_plan:
-        raise ProtocolError("STALE_DECISION", "finish plan identity is stale")
+    approval_identity = _non_empty(journal.get("approval_identity"), "approval_identity")
+    if approval_identity != finish_meta.get("approval_identity"):
+        raise ProtocolError("STALE_DECISION", "finish apply approval identity is stale")
     if journal.get("verified") is not True:
         raise ProtocolError("APPLY_NOT_VERIFIED", "finish apply journal must be verified")
     journal_sha = _require_sha(journal.get("journal_sha256"), "journal_sha256")
     after = copy.deepcopy(before)
     after["status"] = "archived"
-    return _commit(path, before, after, "FINISH_APPLIED", artifact_sha256=journal_sha, event_reason={"journal_sha256": journal_sha, "decision_sha256": decision_sha})
+    return _commit(path, before, after, "FINISH_APPLIED", artifact_sha256=journal_sha, event_reason={"journal_sha256": journal_sha, "decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "approval_identity": approval_identity})
 
 
 def _json_arg(value: str, where: str) -> Any:
@@ -930,11 +1134,27 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--task-id", required=True)
     p.add_argument("--packet-json", required=True)
 
-    for name, arg in (("record-implementation", "--evidence-json"), ("record-fix", "--evidence-json"), ("record-completion", "--completion-json"), ("record-finish-apply", "--journal-json")):
+    for name, arg in (("record-implementation", "--evidence-json"), ("record-fix", "--evidence-json")):
         p = sub.add_parser(name)
         p.add_argument("state")
         p.add_argument("--expected-version", type=int, required=True)
         p.add_argument(arg, required=True)
+
+    p = sub.add_parser("record-completion")
+    p.add_argument("state")
+    p.add_argument("--expected-version", type=int, required=True)
+    p.add_argument("--completion-json", required=True)
+    p.add_argument("--change-root", required=True)
+
+    p = sub.add_parser("record-finish-handoff")
+    p.add_argument("state")
+    p.add_argument("--expected-version", type=int, required=True)
+    p.add_argument("--change-root", required=True)
+
+    p = sub.add_parser("record-finish-apply")
+    p.add_argument("state")
+    p.add_argument("--expected-version", type=int, required=True)
+    p.add_argument("--journal-json", required=True)
 
     p = sub.add_parser("import-task-review")
     p.add_argument("state")
@@ -958,6 +1178,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--expected-version", type=int, required=True)
     p.add_argument("--decision", required=True)
     p.add_argument("--metadata-json", required=True)
+    p.add_argument("--change-root", required=True)
 
     args = parser.parse_args(argv)
     try:
@@ -984,10 +1205,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "start-completion":
             return _ok({"state": start_completion(args.state, args.expected_version, _json_arg(args.packet_json, "packet"))})
         if args.command == "record-completion":
-            return _ok({"state": record_completion(args.state, args.expected_version, _json_arg(args.completion_json, "completion"))})
+            completion = _json_arg(args.completion_json, "completion")
+            completion.setdefault("change_root", args.change_root)
+            return _ok({"state": record_completion(args.state, args.expected_version, completion)})
+        if args.command == "record-finish-handoff":
+            return _ok({"state": record_finish_handoff(args.state, args.expected_version, args.change_root)})
         if args.command == "finish-decision":
-            return _ok({"state": finish_decision(args.state, args.expected_version, args.decision, _json_arg(args.metadata_json, "decision metadata"))})
+            metadata = _json_arg(args.metadata_json, "decision metadata")
+            metadata.setdefault("change_root", args.change_root)
+            return _ok({"state": finish_decision(args.state, args.expected_version, args.decision, metadata)})
         if args.command == "record-finish-apply":
+            raw_journal = args.journal_json.strip()
+            if not raw_journal.startswith(("{", "[", '"')) and Path(raw_journal).suffix == ".md":
+                raise ProtocolError("INVALID_FINISH_JOURNAL", "--journal-json must name verified finish-apply.json, not markdown")
             return _ok({"state": record_finish_apply(args.state, args.expected_version, _json_arg(args.journal_json, "journal"))})
         raise ProtocolError("INVALID_COMMAND", "unknown command")
     except ProtocolError as exc:

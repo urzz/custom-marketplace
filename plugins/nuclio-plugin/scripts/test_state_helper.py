@@ -21,6 +21,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 HELPER = ROOT / "plugins" / "nuclio-plugin" / "scripts" / "state-helper.py"
+EVIDENCE_HELPER = ROOT / "plugins" / "nuclio-plugin" / "scripts" / "evidence-helper.py"
+STATE_SCHEMA = ROOT / "plugins" / "nuclio-plugin" / "schemas" / "state.schema.json"
 A_HASH = "a" * 64
 B_HASH = "b" * 64
 C_HASH = "c" * 64
@@ -31,6 +33,13 @@ F_HASH = "f" * 64
 
 def load_helper():
     spec = importlib.util.spec_from_file_location("state_helper", HELPER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_evidence_helper():
+    spec = importlib.util.spec_from_file_location("evidence_helper_for_state_tests", EVIDENCE_HELPER)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -170,11 +179,84 @@ class StateHelperTests(unittest.TestCase):
     def current_decision_sha(self):
         return self.read_state()["decision"]["decision_sha256"]
 
+    def current_finish_plan_sha(self):
+        return self.read_state()["decision"]["finish_plan_sha256"]
+
+    def self_hash(self, payload, field):
+        return self.helper.sha256_value({key: payload[key] for key in sorted(payload) if key != field})
+
+    def ensure_change_root_state_path(self):
+        change_root = Path(self.temp.name) / "repo" / ".dev-docs" / "changes" / "change-alpha"
+        change_root.mkdir(parents=True, exist_ok=True)
+        target_state = change_root / "state.json"
+        if self.state_path.exists() and self.state_path != target_state:
+            target_state.write_bytes(self.state_path.read_bytes())
+        self.state_path = target_state
+        return change_root
+
+    def write_finish_handoff(self, change_root=None):
+        change_root = change_root or self.ensure_change_root_state_path()
+        repo = change_root.parents[2]
+        (repo / ".dev-docs" / "knowledge").mkdir(parents=True, exist_ok=True)
+        completion_md = change_root / "completion.md"
+        decision_md = change_root / "decision.md"
+        completion_md.write_text("# Completion\nAll tasks done.\n", encoding="utf-8")
+        decision_md.write_text("# Decision\nProposal only.\n", encoding="utf-8")
+        completion_payload = {
+            "proposal_sha256": C_HASH,
+            "mutation_map_sha256": D_HASH,
+            "check_summary_sha256": E_HASH,
+            "task_heads": {"T1": "def5678", "T2": "fedcba9"},
+            "task_evidence": {"T1": E_HASH, "T2": A_HASH},
+            "task_evidence_sha256": self.helper.sha256_value({"T1": E_HASH, "T2": A_HASH}),
+            "implementation_range": {"base": "abc1234", "head": "fedcba9"},
+            "acceptance_index_sha256": B_HASH,
+            "residual_risks": [],
+            "markdown_sha256": self.helper.sha256_value(completion_md.read_bytes().decode("utf-8")),
+        }
+        completion_payload["markdown_sha256"] = load_evidence_helper().sha256_bytes(completion_md.read_bytes())
+        completion_payload["completion_sha256"] = self.self_hash(completion_payload, "completion_sha256")
+        decision_payload = {
+            "completion_sha256": completion_payload["completion_sha256"],
+            "decision_state_version": self.read_state()["state_version"] + 2,
+            "markdown_sha256": load_evidence_helper().sha256_bytes(decision_md.read_bytes()),
+            "Completion Verdict": {"result": "PASS", "summary": "all tasks completed"},
+            "Remaining Risks": [],
+            "Knowledge Proposal": [{"path": ".dev-docs/knowledge/notes.md", "body": "preserve decision"}],
+            "Archive Decision": {"target": "archive", "body": "archive evidence"},
+        }
+        decision_payload["decision_sha256"] = self.self_hash(decision_payload, "decision_sha256")
+        finish_plan = {
+            "schema_version": 1,
+            "contract_sha256": A_HASH,
+            "context_fingerprint": B_HASH,
+            "completion_sha256": completion_payload["completion_sha256"],
+            "decision_sha256": decision_payload["decision_sha256"],
+            "mutation_map_sha256": D_HASH,
+            "acceptance_index_sha256": B_HASH,
+            "implementation_range": {"base": "abc1234", "head": "fedcba9"},
+            "task_heads": {"T1": "def5678", "T2": "fedcba9"},
+            "decision_state_version": decision_payload["decision_state_version"],
+            "archive_intent": "archive validated change-local evidence",
+            "knowledge_proposal": decision_payload["Knowledge Proposal"],
+            "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "proposed_after_summary": "new notes", "reason": "preserve validated decision", "source_evidence": completion_payload["completion_sha256"], "target_language": "zh-CN", "language_source": "contract_output_language"}],
+            "archive_targets": [{"path": ".dev-docs/archive/change-alpha.json", "before_sha256": None, "proposed_after_summary": "archive packet", "reason": "archive evidence", "source_evidence": decision_payload["decision_sha256"], "target_language": "zh-CN", "language_source": "contract_output_language"}],
+            "index_targets": [{"path": ".dev-docs/changes/index.md", "before_sha256": None, "proposed_after_summary": "change index", "reason": "index archived change", "source_evidence": decision_payload["decision_sha256"], "target_language": "zh-CN", "language_source": "contract_output_language"}],
+        }
+        finish_plan["finish_plan_sha256"] = self.self_hash(finish_plan, "finish_plan_sha256")
+        completion_doc = {"schema_version": 1, "evidence_id": "completion-1", "kind": "completion", "change_id": "change-alpha", "contract_sha256": A_HASH, "context_fingerprint": B_HASH, "state_version": self.read_state()["state_version"], "created_at": "2026-07-18T01:00:00Z", "completion": completion_payload}
+        decision_doc = {"schema_version": 1, "evidence_id": "decision-1", "kind": "decision", "change_id": "change-alpha", "contract_sha256": A_HASH, "context_fingerprint": B_HASH, "state_version": self.read_state()["state_version"], "created_at": "2026-07-18T01:00:00Z", "decision": decision_payload}
+        (change_root / "completion.json").write_text(json.dumps(completion_doc), encoding="utf-8")
+        (change_root / "decision.json").write_text(json.dumps(decision_doc), encoding="utf-8")
+        (change_root / "finish-plan.json").write_text(json.dumps(finish_plan), encoding="utf-8")
+        return change_root, completion_doc, decision_doc, finish_plan
+
     def start_completion_pass(self):
         self.complete_all_tasks()
         version = self.read_state()["state_version"]
         self.helper.start_completion(self.state_path, version, self.completion_packet())
-        return self.helper.record_completion(self.state_path, version + 1, self.completion_pass())
+        change_root, _completion_doc, _decision_doc, _finish_plan = self.write_finish_handoff()
+        return self.helper.record_completion(self.state_path, version + 1, self.completion_pass(change_root=str(change_root)))
 
     def assert_error(self, fn, code):
         before = self.state_path.read_bytes() if self.state_path.exists() else b""
@@ -250,12 +332,14 @@ class StateHelperTests(unittest.TestCase):
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "RUN_COMPLETION_REVIEW")
         self.helper.start_completion(self.state_path, 8, self.completion_packet())
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "RUN_COMPLETION_REVIEW")
-        self.helper.record_completion(self.state_path, 9, self.completion_pass())
-        self.assertEqual(self.helper.next_action(self.read_state())["action"], "REQUEST_FINISH_DECISION")
+        change_root, _completion_doc, _decision_doc, _finish_plan = self.write_finish_handoff()
+        self.helper.record_completion(self.state_path, 9, self.completion_pass(change_root=str(change_root)))
+        self.assertEqual(self.helper.next_action(self.state_path)["action"], "REQUEST_FINISH_DECISION")
         decision_sha = self.current_decision_sha()
-        self.helper.finish_decision(self.state_path, 10, "accept", {"decision_sha256": decision_sha, "expected_decision_state_version": 9, "finish_plan_sha256": F_HASH, "decided_at": "2026-07-18T01:00:00Z"})
+        finish_plan_sha = self.current_finish_plan_sha()
+        self.helper.finish_decision(self.state_path, 10, "accept", {"decision_sha256": decision_sha, "expected_decision_state_version": 11, "finish_plan_sha256": finish_plan_sha, "decided_at": "2026-07-18T01:00:00Z", "change_root": str(change_root)})
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "APPLY_FINISH")
-        self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True})
+        self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T01:00:00Z"})
         self.assertEqual(self.helper.next_action(self.read_state())["action"], "COMPLETE")
 
     def test_dependency_order_packet_and_task_pass_are_enforced(self):
@@ -400,21 +484,98 @@ class StateHelperTests(unittest.TestCase):
     def test_completion_pass_requires_full_identity_and_leaves_state_unchanged(self):
         self.init_state(); self.approve_contract(); self.complete_all_tasks()
         self.helper.start_completion(self.state_path, 8, self.completion_packet())
-        missing_range = self.completion_pass()
+        self.write_finish_handoff()
+        missing_range = self.completion_pass(change_root=str(self.state_path.parent))
         missing_range.pop("implementation_range")
         self.assert_error(lambda: self.helper.record_completion(self.state_path, 9, missing_range), "INVALID_IDENTITY")
-        missing_acceptance = self.completion_pass()
+        missing_acceptance = self.completion_pass(change_root=str(self.state_path.parent))
         missing_acceptance.pop("acceptance_index_sha256")
         self.assert_error(lambda: self.helper.record_completion(self.state_path, 9, missing_acceptance), "INVALID_IDENTITY")
 
-    def test_finish_accept_requires_generated_decision_hash_and_expected_state_version(self):
+    def test_record_completion_requires_projected_disk_handoff_and_schema_valid_state(self):
+        self.init_state(); self.approve_contract(); self.complete_all_tasks()
+        self.helper.start_completion(self.state_path, 8, self.completion_packet())
+        change_root, _completion_doc, _decision_doc, finish_plan = self.write_finish_handoff()
+        state = self.helper.record_completion(self.state_path, 9, self.completion_pass(change_root=str(change_root)))
+        self.assertEqual(state["status"], "decision_pending")
+        self.assertEqual(state["completion"]["completion_sha256"], finish_plan["completion_sha256"])
+        self.assertEqual(state["decision"]["decision_sha256"], finish_plan["decision_sha256"])
+        self.assertEqual(state["decision"]["finish_plan_sha256"], finish_plan["finish_plan_sha256"])
+        self.assertEqual(state["decision"]["decision_state_version"], 11)
+        self.helper.JSON_SCHEMA_HELPER.validate_instance(STATE_SCHEMA, state)
+
+    def test_record_completion_missing_sidecar_does_not_enter_decision_pending(self):
+        self.init_state(); self.approve_contract(); self.complete_all_tasks()
+        self.helper.start_completion(self.state_path, 8, self.completion_packet())
+        change_root, _completion_doc, _decision_doc, _finish_plan = self.write_finish_handoff()
+        (change_root / "finish-plan.json").unlink()
+        self.assert_error(lambda: self.helper.record_completion(self.state_path, 9, self.completion_pass(change_root=str(change_root))), "MISSING_FINISH_HANDOFF")
+        state = self.read_state()
+        self.assertEqual(state["status"], "completing")
+        self.assertNotIn("decision", state)
+
+    def test_legacy_rebuild_route_and_canonical_drift_halt(self):
+        self.init_state(); self.approve_contract(); self.complete_all_tasks()
+        self.helper.start_completion(self.state_path, 8, self.completion_packet())
+        self.write_finish_handoff()
+        state = self.read_state()
+        state["status"] = "decision_pending"
+        state["completion"] = {"proposal_sha256": C_HASH, "mutation_map_sha256": D_HASH, "state_version": 9, **self.completion_identity()}
+        state["decision"] = {"decision_sha256": E_HASH, "state_version": 9, "approved": False}
+        self.state_path.write_text(self.helper.canonical_json(state) + "\n", encoding="utf-8")
+        self.assertEqual(self.helper.next_action(self.state_path)["action"], "REBUILD_FINISH_HANDOFF")
+        self.assertEqual(self.helper.record_finish_handoff(self.state_path, 9, str(self.state_path.parent))["decision"]["approved"], False)
+        (self.state_path.parent / "decision.md").write_text("# Drift\n", encoding="utf-8")
+        halted = self.helper.next_action(self.state_path)
+        self.assertEqual(halted["action"], "HALT")
+        self.assertEqual(halted["code"], "MARKDOWN_HASH_MISMATCH")
+
+    def test_finish_accept_requires_fresh_readiness_not_bare_metadata_hash(self):
         self.init_state(); self.approve_contract(); self.start_completion_pass()
+        decision_sha = self.current_decision_sha()
+        finish_plan_sha = self.current_finish_plan_sha()
+        (self.state_path.parent / "finish-plan.json").unlink()
         self.assert_error(
             lambda: self.helper.finish_decision(
                 self.state_path,
                 10,
                 "accept",
-                {"decision_sha256": E_HASH, "expected_decision_state_version": 9, "finish_plan_sha256": F_HASH, "decided_at": "2026-07-18T03:00:00Z"},
+                {"decision_sha256": decision_sha, "expected_decision_state_version": 11, "finish_plan_sha256": finish_plan_sha, "decided_at": "2026-07-18T03:00:00Z", "change_root": str(self.state_path.parent)},
+            ),
+            "MISSING_FINISH_HANDOFF",
+        )
+
+    def test_finish_request_changes_defer_reject_do_not_apply_long_term_targets(self):
+        for decision, expected_status in (("request_changes", "ready_to_execute"), ("defer", "deferred"), ("reject", "rejected")):
+            with self.subTest(decision=decision):
+                self.state_path.unlink(missing_ok=True)
+                self.init_state(); self.approve_contract(); self.start_completion_pass()
+                decision_sha = self.current_decision_sha()
+                finish_plan_sha = self.current_finish_plan_sha()
+                state = self.helper.finish_decision(self.state_path, 10, decision, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "decided_at": "2026-07-18T03:00:00Z", "change_root": str(self.state_path.parent)})
+                self.assertEqual(state["status"], expected_status)
+                self.assertNotEqual(state["status"], "folding")
+                self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18"}), "FINISH_NOT_ACCEPTED")
+
+    def test_record_finish_apply_requires_verified_json_journal_and_approval_identity(self):
+        self.init_state(); self.approve_contract(); self.start_completion_pass()
+        decision_sha = self.current_decision_sha()
+        finish_plan_sha = self.current_finish_plan_sha()
+        self.helper.finish_decision(self.state_path, 10, "accept", {"decision_sha256": decision_sha, "expected_decision_state_version": 11, "finish_plan_sha256": finish_plan_sha, "decided_at": "2026-07-18T03:00:00Z", "change_root": str(self.state_path.parent)})
+        self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True}), "INVALID_FINISH_JOURNAL")
+        journal = {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T03:00:00Z"}
+        archived = self.helper.record_finish_apply(self.state_path, 11, journal)
+        self.assertEqual(archived["status"], "archived")
+
+    def test_finish_accept_requires_generated_decision_hash_and_expected_state_version(self):
+        self.init_state(); self.approve_contract(); self.start_completion_pass()
+        finish_plan_sha = self.current_finish_plan_sha()
+        self.assert_error(
+            lambda: self.helper.finish_decision(
+                self.state_path,
+                10,
+                "accept",
+                {"decision_sha256": E_HASH, "expected_decision_state_version": 11, "finish_plan_sha256": finish_plan_sha, "decided_at": "2026-07-18T03:00:00Z", "change_root": str(self.state_path.parent)},
             ),
             "STALE_DECISION",
         )
@@ -424,7 +585,7 @@ class StateHelperTests(unittest.TestCase):
                 self.state_path,
                 10,
                 "同意",
-                {"decision_sha256": decision_sha, "expected_decision_state_version": 8, "finish_plan_sha256": F_HASH, "decided_at": "2026-07-18T03:00:00Z"},
+                {"decision_sha256": decision_sha, "expected_decision_state_version": 8, "finish_plan_sha256": finish_plan_sha, "decided_at": "2026-07-18T03:00:00Z", "change_root": str(self.state_path.parent)},
             ),
             "STALE_DECISION",
         )
@@ -433,7 +594,7 @@ class StateHelperTests(unittest.TestCase):
         self.init_state(); self.approve_contract(); self.start_completion_pass()
         decision_sha = self.current_decision_sha()
         self.assert_error(lambda: self.helper.finish_decision(self.state_path, 10, "request changes", {"decision_sha256": decision_sha, "decided_at": "2026-07-18T03:00:00Z"}), "INVALID_FINISH_DECISION")
-        state = self.helper.finish_decision(self.state_path, 10, "request_changes", {"decision_sha256": decision_sha, "decided_at": "2026-07-18T03:00:00Z"})
+        state = self.helper.finish_decision(self.state_path, 10, "request_changes", {"decision_sha256": decision_sha, "finish_plan_sha256": self.current_finish_plan_sha(), "decided_at": "2026-07-18T03:00:00Z", "change_root": str(self.state_path.parent)})
         self.assertEqual(state["status"], "ready_to_execute")
         self.assertEqual(state["gates"]["finish"]["status"], "stale")
         self.assertFalse(state["decision"]["approved"])
@@ -455,14 +616,15 @@ class StateHelperTests(unittest.TestCase):
                 self.state_path.unlink(missing_ok=True)
                 self.init_state(); self.approve_contract(); self.start_completion_pass()
                 decision_sha = self.current_decision_sha()
-                metadata = {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "reason": "because", "decided_at": "2026-07-18T02:00:00Z"}
-                if canonical == "accept":
-                    metadata["expected_decision_state_version"] = 9
+                metadata = {"decision_sha256": decision_sha, "finish_plan_sha256": self.current_finish_plan_sha(), "reason": "because", "decided_at": "2026-07-18T02:00:00Z", "change_root": str(self.state_path.parent), "expected_decision_state_version": 11}
                 state = self.helper.finish_decision(self.state_path, 10, token, metadata)
                 self.assertEqual(state["status"], expected_status)
                 notes = json.loads(state["gates"]["finish"]["notes"])
                 self.assertEqual(notes["decision"], canonical)
-                self.assertEqual(state["history"][-1]["reason"], self.helper.canonical_json({**metadata, "decision": canonical}))
+                history_reason = json.loads(state["history"][-1]["reason"])
+                self.assertEqual(history_reason["decision"], canonical)
+                self.assertEqual(history_reason["readiness"]["decision_sha256"], decision_sha)
+                self.assertEqual(history_reason["readiness"]["finish_plan_sha256"], metadata["finish_plan_sha256"])
 
     def test_finish_rejects_non_exact_aliases_without_mutation(self):
         for token in ("继续", "我同意", "同意。", "request changes", "accept."):
@@ -470,7 +632,7 @@ class StateHelperTests(unittest.TestCase):
                 self.state_path.unlink(missing_ok=True)
                 self.init_state(); self.approve_contract(); self.start_completion_pass()
                 decision_sha = self.current_decision_sha()
-                self.assert_error(lambda: self.helper.finish_decision(self.state_path, 10, token, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "expected_decision_state_version": 9, "decided_at": "2026-07-18T03:00:00Z"}), "INVALID_FINISH_DECISION")
+                self.assert_error(lambda: self.helper.finish_decision(self.state_path, 10, token, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "expected_decision_state_version": 11, "decided_at": "2026-07-18T03:00:00Z"}), "INVALID_FINISH_DECISION")
 
     def test_finish_four_decisions_stale_decision_and_archive_gate(self):
         for decision, expected_status in [("defer", "deferred"), ("request_changes", "ready_to_execute"), ("reject", "rejected"), ("accept", "folding")]:
@@ -478,18 +640,17 @@ class StateHelperTests(unittest.TestCase):
                 self.state_path.unlink(missing_ok=True)
                 self.init_state(); self.approve_contract(); self.start_completion_pass()
                 decision_sha = self.current_decision_sha()
-                metadata = {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "reason": "because", "decided_at": "2026-07-18T02:00:00Z"}
-                if decision == "accept":
-                    metadata["expected_decision_state_version"] = 9
+                finish_plan_sha = self.current_finish_plan_sha()
+                metadata = {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "reason": "because", "decided_at": "2026-07-18T02:00:00Z", "change_root": str(self.state_path.parent), "expected_decision_state_version": 11}
                 state = self.helper.finish_decision(self.state_path, 10, decision, metadata)
                 self.assertEqual(state["status"], expected_status)
                 if decision == "accept":
-                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 10, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True}), "VERSION_MISMATCH")
-                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": B_HASH, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True}), "STALE_DECISION")
-                    archived = self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True})
+                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 10, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T02:00:00Z"}), "VERSION_MISMATCH")
+                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": B_HASH, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T02:00:00Z"}), "STALE_DECISION")
+                    archived = self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T02:00:00Z"})
                     self.assertEqual(archived["status"], "archived")
                 else:
-                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": F_HASH, "journal_sha256": A_HASH, "verified": True}), "FINISH_NOT_ACCEPTED")
+                    self.assert_error(lambda: self.helper.record_finish_apply(self.state_path, 11, {"decision_sha256": decision_sha, "finish_plan_sha256": finish_plan_sha, "journal_sha256": A_HASH, "verified": True, "approval_identity": "accept:2026-07-18T02:00:00Z"}), "FINISH_NOT_ACCEPTED")
 
     def test_invalid_transition_atomic_bytes_and_resume_next_action(self):
         self.init_state(); self.approve_contract()
@@ -513,25 +674,33 @@ class StateHelperTests(unittest.TestCase):
     def test_cli_record_finish_apply_accepts_journal_file_path(self):
         self.init_state(); self.approve_contract(); self.start_completion_pass()
         decision_sha = self.current_decision_sha()
+        finish_plan_sha = self.current_finish_plan_sha()
         self.helper.finish_decision(
             self.state_path,
             10,
             "accept",
             {
                 "decision_sha256": decision_sha,
-                "expected_decision_state_version": 9,
-                "finish_plan_sha256": F_HASH,
+                "expected_decision_state_version": 11,
+                "finish_plan_sha256": finish_plan_sha,
                 "decided_at": "2026-07-18T03:00:00Z",
+                "change_root": str(self.state_path.parent),
             },
         )
-        journal_path = Path(self.temp.name) / "finish-apply.md"
+        md_path = Path(self.temp.name) / "finish-apply.md"
+        md_path.write_text("# journal\n", encoding="utf-8")
+        rejected = subprocess.run([sys.executable, str(HELPER), "record-finish-apply", str(self.state_path), "--expected-version", "11", "--journal-json", str(md_path)], text=True, capture_output=True)
+        self.assertEqual(rejected.returncode, 2)
+        self.assertEqual(json.loads(rejected.stderr)["code"], "INVALID_FINISH_JOURNAL")
+        journal_path = Path(self.temp.name) / "finish-apply.json"
         journal_path.write_text(
             json.dumps(
                 {
                     "decision_sha256": decision_sha,
-                    "finish_plan_sha256": F_HASH,
+                    "finish_plan_sha256": finish_plan_sha,
                     "journal_sha256": A_HASH,
                     "verified": True,
+                    "approval_identity": "accept:2026-07-18T03:00:00Z",
                 }
             ),
             encoding="utf-8",

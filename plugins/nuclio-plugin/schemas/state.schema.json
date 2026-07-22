@@ -114,6 +114,9 @@
     "decision": {
       "$ref": "#/$defs/decision_identity"
     },
+    "legacy_evidence": {
+      "type": "object"
+    },
     "history": {
       "type": "array",
       "items": {
@@ -141,41 +144,6 @@
           "completion",
           "decision"
         ]
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "status": {
-            "enum": [
-              "repair_required",
-              "context_stale",
-              "deferred",
-              "rejected"
-            ]
-          }
-        },
-        "required": [
-          "status"
-        ]
-      },
-      "then": {
-        "properties": {
-          "tasks": {
-            "not": {
-              "contains": {
-                "properties": {
-                  "status": {
-                    "const": "completed"
-                  }
-                },
-                "required": [
-                  "status"
-                ]
-              }
-            }
-          }
-        }
       }
     }
   ],
@@ -235,8 +203,7 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/non_empty_string"
-          },
-          "uniqueItems": true
+          }
         }
       }
     },
@@ -279,29 +246,7 @@
         "notes": {
           "$ref": "#/$defs/non_empty_string"
         }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "status": {
-                "const": "approved"
-              }
-            },
-            "required": [
-              "status"
-            ]
-          },
-          "then": {
-            "required": [
-              "artifact_sha256",
-              "state_version",
-              "approval_id",
-              "approved_at"
-            ]
-          }
-        }
-      ]
+      }
     },
     "task_state": {
       "type": "object",
@@ -398,6 +343,12 @@
         },
         "owner": {
           "$ref": "#/$defs/non_empty_string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "source_gate": {
+          "$ref": "#/$defs/non_empty_string"
         }
       }
     },
@@ -410,10 +361,44 @@
         "state_version"
       ],
       "properties": {
+        "contract_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_fingerprint": {
+          "$ref": "#/$defs/sha256"
+        },
+        "completion_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
         "proposal_sha256": {
           "$ref": "#/$defs/sha256"
         },
         "mutation_map_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "task_heads": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "implementation_range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "base",
+            "head"
+          ],
+          "properties": {
+            "base": {
+              "$ref": "#/$defs/non_empty_string"
+            },
+            "head": {
+              "$ref": "#/$defs/non_empty_string"
+            }
+          }
+        },
+        "acceptance_index_sha256": {
           "$ref": "#/$defs/sha256"
         },
         "state_version": {
@@ -431,8 +416,55 @@
         "approved"
       ],
       "properties": {
+        "contract_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_fingerprint": {
+          "$ref": "#/$defs/sha256"
+        },
+        "completion_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "proposal_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "mutation_map_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "task_heads": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "implementation_range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "base",
+            "head"
+          ],
+          "properties": {
+            "base": {
+              "$ref": "#/$defs/non_empty_string"
+            },
+            "head": {
+              "$ref": "#/$defs/non_empty_string"
+            }
+          }
+        },
+        "acceptance_index_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
         "decision_sha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "finish_plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "decision_state_version": {
+          "type": "integer",
+          "minimum": 1
         },
         "state_version": {
           "type": "integer",
