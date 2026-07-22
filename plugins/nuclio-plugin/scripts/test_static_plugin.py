@@ -109,7 +109,7 @@ class StaticPluginTests(unittest.TestCase):
     def test_plugin_metadata_and_skill_directory_are_exact(self):
         metadata = load_json(PLUGIN / ".claude-plugin" / "plugin.json")
         self.assertEqual(metadata["name"], "nuclio")
-        self.assertEqual(metadata["version"], "1.0.1")
+        self.assertEqual(metadata["version"], "1.0.2")
         self.assertEqual(set(self.skills()), NEW_LIFECYCLE)
         self.assertEqual({path.name for path in SKILLS.iterdir() if path.is_dir()}, NEW_LIFECYCLE)
 
@@ -177,7 +177,7 @@ class StaticPluginTests(unittest.TestCase):
             "worker": {**common, "packet_id": sha("c"), "role": "worker", "task_id": "T1", "ownership": [{"path": "plugins/nuclio-plugin/skills/init/SKILL.md", "mode": "create"}], "range": {"base_head": "abcdef1", "expected_dirty_state": "clean"}, "snapshots": [{"path": "handoff.json", "state": "absent"}], "checks": checks},
             "reviewer": {**common, "packet_id": sha("d"), "role": "reviewer", "task_id": "T1", "ownership": [{"path": "plugins/nuclio-plugin/skills/init/SKILL.md", "mode": "read"}], "range": {"base_head": "abcdef1", "new_head": "abcdef2", "expected_dirty_state": "clean"}, "snapshots": [{"path": "iface.md", "state": "present", "sha256": sha("a")}], "checks": checks, "review_targets": ["plugins/nuclio-plugin/skills/init/SKILL.md"], "mutation_map_sha256": sha("e")},
             "completion": {**common, "packet_id": sha("e"), "role": "completion", "task_heads": {"T1": "abcdef2"}, "implementation_range": {"base": "abcdef1", "head": "abcdef2"}, "acceptance_index_sha256": sha("a"), "task_evidence": {"T1": sha("b")}, "task_evidence_sha256": sha("c"), "range": {"base_head": "abcdef1", "new_head": "abcdef2", "expected_dirty_state": "clean"}, "checks": {**checks, "change_wide": checks["focused"]}, "handoffs": ["task:T1@abcdef2"], "mutation_map_sha256": sha("d")},
-            "finish": {**common, "packet_id": sha("f"), "role": "finish", "range": {"base_head": "abcdef1", "new_head": "abcdef2", "expected_dirty_state": "clean"}, "snapshots": [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], "completion_sha256": sha("c"), "decision_sha256": sha("d"), "finish_plan_sha256": sha("e"), "knowledge_proposal": {"summary": "approved finish knowledge only"}, "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "target_language": "zh-CN", "language_source": "contract_output_language"}], "archive_targets": [{"path": ".dev-docs/archive/change.json", "before_sha256": sha("a"), "target_language": "en", "language_source": "existing_target"}], "archive_intent": "archive only after fresh accept"},
+            "finish": {**common, "packet_id": sha("f"), "role": "finish", "range": {"base_head": "abcdef1", "new_head": "abcdef2", "expected_dirty_state": "clean"}, "snapshots": [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}], "completion_sha256": sha("c"), "decision_sha256": sha("d"), "finish_plan_sha256": sha("e"), "knowledge_proposal": {"summary": "approved finish knowledge only"}, "knowledge_targets": [{"path": ".dev-docs/knowledge/notes.md", "before_sha256": None, "proposed_after_summary": "new notes", "reason": "preserve accepted decision", "source_evidence": sha("c"), "target_language": "zh-CN", "language_source": "contract_output_language"}], "archive_targets": [{"path": ".dev-docs/archive/change.json", "before_sha256": sha("a"), "proposed_after_summary": "archive summary", "reason": "archive accepted change", "source_evidence": sha("d"), "target_language": "en", "language_source": "existing_target"}], "index_targets": [{"path": ".dev-docs/changes/index.md", "before_sha256": None, "proposed_after_summary": "index archived change", "reason": "index archived change", "source_evidence": sha("d"), "target_language": "zh-CN", "language_source": "contract_output_language"}], "archive_intent": "archive only after fresh accept"},
         }
 
     def test_packet_fixtures_include_output_language_and_finish_target_metadata(self):
@@ -332,8 +332,8 @@ class StaticPluginTests(unittest.TestCase):
         finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]
         required = {
             "init": [".dev-docs/index.md", ".dev-docs/knowledge/product.md", ".dev-docs/changes/index.md", ".dev-docs/changes/<change-id>"],
-            "work": ["CHANGE_ROOT", "contract.yaml", "context.jsonl", "state.json", "research/", "evidence/tasks/<task-id>/...", "evidence/completion.md", "evidence/decision.md", "evidence/finish-apply.md"],
-            "finish": ["CHANGE_ROOT", "evidence/decision.md", "state.json", "contract.yaml", "context.jsonl", "evidence/completion.md", "evidence/finish-apply.md"],
+            "work": ["CHANGE_ROOT", "contract.yaml", "context.jsonl", "state.json", "research/", "evidence/tasks/<task-id>/...", "completion.md", "completion.json", "decision.md", "decision.json", "finish-plan.json", "evidence/finish-apply.json", "evidence/finish-apply.md"],
+            "finish": ["CHANGE_ROOT", "decision.md", "decision.json", "finish-plan.json", "state.json", "contract.yaml", "context.jsonl", "completion.md", "completion.json", "evidence/finish-apply.json", "evidence/finish-apply.md"],
         }
         for name, needles in required.items():
             body = {"init": init, "work": work, "finish": finish}[name]
@@ -351,8 +351,8 @@ class StaticPluginTests(unittest.TestCase):
     def test_finish_apply_journal_uses_evidence_path(self):
         finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]
         work = split_skill(SKILLS / "work" / "SKILL.md")[1]
-        canonical = "CHANGE_ROOT/evidence/finish-apply.md"
-        full_change_local = ".dev-docs/changes/<change-id>/evidence/finish-apply.md"
+        canonical = "CHANGE_ROOT/evidence/finish-apply.json"
+        full_change_local = ".dev-docs/changes/<change-id>/evidence/finish-apply.json"
         forbidden = [
             "CHANGE_ROOT/finish-apply.md",
             ".dev-docs/changes/<change-id>/finish-apply.md",
@@ -376,16 +376,16 @@ class StaticPluginTests(unittest.TestCase):
             self.assertTrue(
                 canonical in work_handoff_surface
                 or full_change_local in work_handoff_surface
-                or ("CHANGE_ROOT" in work_handoff_surface and "evidence/finish-apply.md" in work_handoff_surface),
+                or ("CHANGE_ROOT" in work_handoff_surface and "evidence/finish-apply" in work_handoff_surface),
                 work_handoff_surface,
             )
 
         for needle in [
-            "create or append the target entry to the change-local `CHANGE_ROOT/evidence/finish-apply.md` journal evidence",
-            "read back `CHANGE_ROOT/evidence/finish-apply.md`",
-            "evidence-helper.py validate-finish-apply --decision-sha256 <sha256> --finish-plan-json <plan> --journal-json CHANGE_ROOT/evidence/finish-apply.md",
-            "verified `CHANGE_ROOT/evidence/finish-apply.md` identity",
-            "state-helper.py record-finish-apply <state> --expected-version <n> --journal-json CHANGE_ROOT/evidence/finish-apply.md",
+            "create the machine journal `CHANGE_ROOT/evidence/finish-apply.json`",
+            "optionally render maintainer prose to `CHANGE_ROOT/evidence/finish-apply.md` after JSON validation",
+            "evidence-helper.py validate-finish-apply --repo <repo> --decision-sha256 <sha256> --finish-plan-json <finish-plan.json> --journal-json CHANGE_ROOT/evidence/finish-apply.json",
+            "verified JSON identity",
+            "state-helper.py record-finish-apply <state> --expected-version <n> --journal-json CHANGE_ROOT/evidence/finish-apply.json",
         ]:
             with self.subTest(needle=needle):
                 self.assertIn(needle, accept_sequence)
@@ -402,8 +402,12 @@ class StaticPluginTests(unittest.TestCase):
             "CHANGE_ROOT/context.jsonl",
             "CHANGE_ROOT/state.json",
             "CHANGE_ROOT/research/",
-            "CHANGE_ROOT/evidence/completion.md",
-            "CHANGE_ROOT/evidence/decision.md",
+            "CHANGE_ROOT/completion.md",
+            "CHANGE_ROOT/completion.json",
+            "CHANGE_ROOT/decision.md",
+            "CHANGE_ROOT/decision.json",
+            "CHANGE_ROOT/finish-plan.json",
+            "CHANGE_ROOT/evidence/finish-apply.json",
             "CHANGE_ROOT/evidence/finish-apply.md",
         ]
         authority_corpus = "\n".join(read_text(REFERENCES / filename) for filename in CHANGE_AUTHORITY_REFERENCES)
@@ -725,16 +729,16 @@ class StaticPluginTests(unittest.TestCase):
             "There is no separate finish applier agent or unsupported applier role",
             "state-helper.py inspect <state>",
             "state-helper.py next-action <state>",
-            "packet-helper.py finish --repo <repo> --contract-json <contract> --context-json <context> --state-json <state> --base <base> --head <head> --output <packet> --expected-state-version <n> --decision-json <decision> --completion-identity-json <identity> --finish-plan-json <plan> --knowledge-snapshots-json <json>",
+            "packet-helper.py finish --repo <repo> --contract-json <contract.json> --context-json <context.json> --state-json <state.json> --base <base> --head <head> --output <packet.json> --expected-state-version <n> --decision-json <decision.json> --completion-identity-json <completion.json> --finish-plan-json <finish-plan.json> --knowledge-snapshots-json <snapshots.json>",
             "compare `before_sha256`",
             "`before_sha256: null` as create-only absent",
             "no untracked/out-of-packet targets",
             "Controller Write/Edit is limited to exact approved",
             "Do not write product files",
-            "CHANGE_ROOT/evidence/finish-apply.md",
-            "evidence-helper.py validate-finish-apply --decision-sha256 <sha256> --finish-plan-json <plan> --journal-json CHANGE_ROOT/evidence/finish-apply.md",
-            "Only an ok JSON result for the verified `CHANGE_ROOT/evidence/finish-apply.md` identity permits setting `verified: true` and `journal_sha256`",
-            "state-helper.py record-finish-apply <state> --expected-version <n> --journal-json CHANGE_ROOT/evidence/finish-apply.md",
+            "CHANGE_ROOT/evidence/finish-apply.json",
+            "evidence-helper.py validate-finish-apply --repo <repo> --decision-sha256 <sha256> --finish-plan-json <finish-plan.json> --journal-json CHANGE_ROOT/evidence/finish-apply.json",
+            "Only an ok JSON result for the verified JSON identity permits rendering `finish-apply.md` and proceeding",
+            "state-helper.py record-finish-apply <state> --expected-version <n> --journal-json CHANGE_ROOT/evidence/finish-apply.json",
             "partial write failure",
             "do not invent rollback",
         ]
@@ -747,6 +751,79 @@ class StaticPluginTests(unittest.TestCase):
         self.assertNotRegex(finish, r"(?i)dispatch .*finish applier")
         self.assertNotRegex(finish, r"(?i)fresh finish applier")
         self.assertNotIn("rollback", finish.lower().replace("do not invent rollback", ""))
+
+    def test_task4_finish_resume_static_contract_surfaces_are_synchronized(self):
+        work = split_skill(SKILLS / "work" / "SKILL.md")[1]
+        finish = split_skill(SKILLS / "finish" / "SKILL.md")[1]
+        critic = split_skill(PLUGIN / "agents" / "nuclio-completion-critic.md")[1]
+        refs = "\n".join(read_text(REFERENCES / name) for name in ["authority.md", "lifecycle.md", "execution.md", "finish.md", "output-language.md"])
+        combined = "\n".join([work, finish, critic, refs])
+        for needle in [
+            "CHANGE_ROOT/completion.md",
+            "CHANGE_ROOT/completion.json",
+            "CHANGE_ROOT/decision.md",
+            "CHANGE_ROOT/decision.json",
+            "CHANGE_ROOT/finish-plan.json",
+            "state-helper.py record-completion <state> --expected-version <n> --completion-json <completion-pass.json> --change-root <CHANGE_ROOT>",
+            "state-helper.py record-finish-handoff <state> --expected-version <n> --change-root <CHANGE_ROOT>",
+            "finish-readiness",
+            "ready=true",
+            "decision_sha256",
+            "finish_plan_sha256",
+            "decision_state_version",
+            "REBUILD_FINISH_HANDOFF",
+            "MISSING_FINISH_HANDOFF",
+            "STALE_DECISION",
+            "STALE_FINISH_PLAN",
+            "STALE_TARGET",
+            "MARKDOWN_HASH_MISMATCH",
+            ".dev-docs/archive/**",
+            ".dev-docs/changes/index.md` 是受控 `index_targets`",
+        ]:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+        self.assertIn("不创建、不持久化、不批准", critic)
+        self.assertIn("does not create, persist, or approve sidecars", refs)
+
+    def test_task4_all_json_helper_parameters_use_json_not_markdown(self):
+        corpus = "\n".join(read_text(path) for path in [SKILLS / "work" / "SKILL.md", SKILLS / "finish" / "SKILL.md", REFERENCES / "finish.md", REFERENCES / "eval-prompts.md"])
+        self.assertIn("All `--*-json` arguments name canonical `.json` files, never Markdown", corpus)
+        bad_patterns = [
+            r"--decision-json\s+<[^>]*\.md>",
+            r"--completion-identity-json\s+<[^>]*\.md>",
+            r"--finish-plan-json\s+<[^>]*\.md>",
+            r"--journal-json\s+CHANGE_ROOT/evidence/finish-apply\.md",
+            r"--completion-json\s+<[^>]*\.md>",
+        ]
+        for pattern in bad_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertNotRegex(corpus, pattern)
+
+    def test_task4_eval_cases_and_docs_cover_fresh_process_finish_resume(self):
+        eval_prompts = read_text(REFERENCES / "eval-prompts.md")
+        rows = {}
+        for line in eval_prompts.splitlines():
+            match = re.match(r"\| `([^`]+)` \| (.*?) \| `(init|work|finish)` \| (.*?) \| (.*?) \| (.*?) \| (.*?) \|$", line)
+            if match:
+                rows[match.group(1)] = match.groups()[1:]
+        expected = {
+            "finish-cross-session-success",
+            "finish-missing-plan-fail-closed",
+            "finish-stale-decision-fail-closed",
+            "finish-markdown-as-json-rejected",
+            "finish-changes-index-group-positive",
+            "finish-changes-index-wrong-group-rejected",
+            "finish-target-before-drift-rejected",
+            "finish-journal-after-mismatch-rejected",
+        }
+        self.assertTrue(expected.issubset(rows), sorted(expected - set(rows)))
+        for case_id in expected:
+            with self.subTest(case=case_id):
+                self.assertEqual(rows[case_id][1], "finish")
+        combined_docs = read_text(ROOT / "README.md") + "\n" + read_text(ROOT / "CLAUDE.md")
+        for needle in ["five-file canonical handoff", "fresh-process readiness", "finish-plan.json", "index_targets", ".dev-docs/archive/**", "all `--*-json`", "Markdown remains prose"]:
+            with self.subTest(doc_needle=needle):
+                self.assertIn(needle, combined_docs)
 
 
 if __name__ == "__main__":

@@ -66,8 +66,8 @@ The `output_language` prose rule applies to maintainer-facing prose in:
 - whole-change completion critiques from `nuclio-completion-critic`;
 - `completion.md` body prose;
 - `decision.md` body prose;
-- Finish apply summaries and archive summaries;
-- knowledge proposal rationale, target notes, and maintainer explanation prose;
+- Finish apply summaries, index summaries, and archive summaries;
+- knowledge/index/archive proposal rationale, target notes, and maintainer explanation prose;
 - blocker explanations, concern descriptions, finding summaries, failure scenarios,
   required fixes, closure explanations, coverage explanations, remaining-risk prose,
   and nonblocking notes.
@@ -109,8 +109,8 @@ token. This includes:
   review notes;
 - fix actions, closure explanations, blocker explanations, and concerns;
 - completion coverage explanations, remaining risks, findings, notes, and critique prose;
-- Finish decision body prose, Finish apply prose, archive prose, and knowledge proposal
-  prose.
+- Finish decision body prose, Finish apply prose, index prose, archive prose, and knowledge
+  proposal prose.
 
 If a prose sentence includes a stable key, enum, path, command, or quoted raw output,
 keep that stable segment unchanged and write only the surrounding explanation in
