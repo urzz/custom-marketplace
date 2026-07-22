@@ -81,46 +81,117 @@
     {
       "if": {"properties": {"kind": {"const": "task_implementation"}}, "required": ["kind"]},
       "then": {
-        "required": ["task_id", "implementation"]
+        "required": ["task_id", "implementation"],
+        "not": {
+          "anyOf": [
+            {"required": ["validation"]},
+            {"required": ["review"]},
+            {"required": ["mutation_map"]},
+            {"required": ["completion"]},
+            {"required": ["decision"]},
+            {"required": ["finish_apply_journal"]}
+          ]
+        }
       }
     },
     {
       "if": {"properties": {"kind": {"const": "task_validation"}}, "required": ["kind"]},
       "then": {
-        "required": ["task_id", "validation"]
+        "required": ["task_id", "validation"],
+        "not": {
+          "anyOf": [
+            {"required": ["implementation"]},
+            {"required": ["review"]},
+            {"required": ["mutation_map"]},
+            {"required": ["completion"]},
+            {"required": ["decision"]},
+            {"required": ["finish_apply_journal"]}
+          ]
+        }
       }
     },
     {
       "if": {"properties": {"kind": {"const": "task_review"}}, "required": ["kind"]},
       "then": {
-        "required": ["task_id", "review"]
+        "required": ["task_id", "review"],
+        "not": {
+          "anyOf": [
+            {"required": ["implementation"]},
+            {"required": ["validation"]},
+            {"required": ["mutation_map"]},
+            {"required": ["completion"]},
+            {"required": ["decision"]},
+            {"required": ["finish_apply_journal"]}
+          ]
+        }
       }
     },
     {
       "if": {"properties": {"kind": {"const": "mutation_map"}}, "required": ["kind"]},
       "then": {
-        "required": ["mutation_map"]
+        "required": ["mutation_map"],
+        "not": {
+          "anyOf": [
+            {"required": ["task_id"]},
+            {"required": ["implementation"]},
+            {"required": ["validation"]},
+            {"required": ["review"]},
+            {"required": ["completion"]},
+            {"required": ["decision"]},
+            {"required": ["finish_apply_journal"]}
+          ]
+        }
       }
     },
     {
       "if": {"properties": {"kind": {"const": "completion"}}, "required": ["kind"]},
       "then": {
         "required": ["completion"],
-        "not": {"anyOf": [{"required": ["decision"]}, {"required": ["finish_apply_journal"]}]}
+        "not": {
+          "anyOf": [
+            {"required": ["task_id"]},
+            {"required": ["implementation"]},
+            {"required": ["validation"]},
+            {"required": ["review"]},
+            {"required": ["mutation_map"]},
+            {"required": ["decision"]},
+            {"required": ["finish_apply_journal"]}
+          ]
+        }
       }
     },
     {
       "if": {"properties": {"kind": {"const": "decision"}}, "required": ["kind"]},
       "then": {
         "required": ["decision"],
-        "not": {"anyOf": [{"required": ["completion"]}, {"required": ["finish_apply_journal"]}]}
+        "not": {
+          "anyOf": [
+            {"required": ["task_id"]},
+            {"required": ["implementation"]},
+            {"required": ["validation"]},
+            {"required": ["review"]},
+            {"required": ["mutation_map"]},
+            {"required": ["completion"]},
+            {"required": ["finish_apply_journal"]}
+          ]
+        }
       }
     },
     {
       "if": {"properties": {"kind": {"const": "finish_apply_journal"}}, "required": ["kind"]},
       "then": {
         "required": ["finish_apply_journal"],
-        "not": {"anyOf": [{"required": ["completion"]}, {"required": ["decision"]}]}
+        "not": {
+          "anyOf": [
+            {"required": ["task_id"]},
+            {"required": ["implementation"]},
+            {"required": ["validation"]},
+            {"required": ["review"]},
+            {"required": ["mutation_map"]},
+            {"required": ["completion"]},
+            {"required": ["decision"]}
+          ]
+        }
       }
     }
   ],

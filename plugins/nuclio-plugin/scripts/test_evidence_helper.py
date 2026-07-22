@@ -425,79 +425,7 @@ class EvidenceHelperTests(unittest.TestCase):
             self.helper.validate_finish_apply(decision_doc["decision"]["decision_sha256"], plan, journal, repo)
         self.assertEqual(ctx.exception.code, "STALE_TARGET")
 
-    def test_evidence_schema_enforces_existing_task_kind_payloads(self):
-        if jsonschema is None:
-            self.skipTest("jsonschema not installed")
-        schema = json.loads((ROOT / "plugins" / "nuclio-plugin" / "schemas" / "evidence.schema.json").read_text(encoding="utf-8"))
-        validator = jsonschema.Draft202012Validator(schema)
-        base_doc = {
-            "schema_version": 1,
-            "evidence_id": "existing-kind-1",
-            "change_id": "change-1",
-            "contract_sha256": A_HASH,
-            "context_fingerprint": B_HASH,
-            "state_version": 9,
-            "created_at": "2026-07-22T00:00:00Z",
-        }
-        for kind in ("task_implementation", "task_validation", "task_review", "mutation_map"):
-            with self.subTest(kind=kind):
-                missing = {**base_doc, "kind": kind}
-                with self.assertRaises(jsonschema.ValidationError):
-                    validator.validate(missing)
-        check = {"command": ["python3", "-m", "unittest"], "exit_code": 0, "output_sha256": C_HASH}
-        valid_docs = [
-            {
-                **base_doc,
-                "evidence_id": "task-implementation-1",
-                "kind": "task_implementation",
-                "task_id": "T1",
-                "implementation": {
-                    "base_head": "abcdef1",
-                    "new_head": "abcdef9",
-                    "changed_paths": ["plugins/nuclio-plugin/scripts/evidence-helper.py"],
-                    "ownership_sha256": D_HASH,
-                    "checks": [check],
-                },
-            },
-            {
-                **base_doc,
-                "evidence_id": "task-validation-1",
-                "kind": "task_validation",
-                "task_id": "T1",
-                "validation": {"checks": [check], "result": "success"},
-            },
-            {
-                **base_doc,
-                "evidence_id": "task-review-1",
-                "kind": "task_review",
-                "task_id": "T1",
-                "review": {
-                    "review_package_sha256": E_HASH,
-                    "findings": [{"id": "R1", "severity": "blocking", "summary": "review finding"}],
-                },
-            },
-            {
-                **base_doc,
-                "evidence_id": "mutation-map-1",
-                "kind": "mutation_map",
-                "mutation_map": {
-                    "entries": [
-                        {
-                            "path": "plugins/nuclio-plugin/schemas/evidence.schema.json",
-                            "mode": "modify",
-                            "before": {"path": "plugins/nuclio-plugin/schemas/evidence.schema.json", "sha256": A_HASH},
-                            "after": {"path": "plugins/nuclio-plugin/schemas/evidence.schema.json", "sha256": B_HASH},
-                        }
-                    ],
-                    "sha256": D_HASH,
-                },
-            },
-        ]
-        for doc in valid_docs:
-            with self.subTest(valid_kind=doc["kind"]):
-                validator.validate(doc)
-
-    def test_evidence_schema_rejects_cross_kind_payloads(self):
+    def test_evidence_schema_enforces_all_seven_kind_exclusivity_and_task_id_contract(self):
         if jsonschema is None:
             self.skipTest("jsonschema not installed")
         temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)
@@ -511,15 +439,108 @@ class EvidenceHelperTests(unittest.TestCase):
             entries.append({"path": target["path"], "before_sha256": target["before_sha256"], "after_sha256": self.helper.sha256_bytes((repo / target["path"]).read_bytes()), "reason": target["reason"], "target_language": target["target_language"], "language_source": target["language_source"], "apply_result": "applied", "archive_result": "archived" if target["path"].startswith(".dev-docs/archive/") else "not_applicable"})
         journal_payload = {"decision_sha256": decision_doc["decision"]["decision_sha256"], "finish_plan_sha256": plan["finish_plan_sha256"], "approval_identity": "accept:2026-07-22", "archive_intent": plan["archive_intent"], "entries": entries, "verified": True}
         journal_payload["journal_sha256"] = self.helper.self_hash(journal_payload, "journal_sha256")
-        journal_doc = evidence_doc("finish_apply_journal", journal_payload)
+        check = {"command": ["python3", "-m", "unittest"], "exit_code": 0, "output_sha256": C_HASH}
+        payloads = {
+            "implementation": {
+                "base_head": "abcdef1",
+                "new_head": "abcdef9",
+                "changed_paths": ["plugins/nuclio-plugin/scripts/evidence-helper.py"],
+                "ownership_sha256": D_HASH,
+                "checks": [check],
+            },
+            "validation": {"checks": [check], "result": "success"},
+            "review": {"review_package_sha256": E_HASH, "findings": [{"id": "R1", "severity": "blocking", "summary": "review finding"}]},
+            "mutation_map": {
+                "entries": [
+                    {
+                        "path": "plugins/nuclio-plugin/schemas/evidence.schema.json",
+                        "mode": "modify",
+                        "before": {"path": "plugins/nuclio-plugin/schemas/evidence.schema.json", "sha256": A_HASH},
+                        "after": {"path": "plugins/nuclio-plugin/schemas/evidence.schema.json", "sha256": B_HASH},
+                    }
+                ],
+                "sha256": D_HASH,
+            },
+            "completion": completion_doc["completion"],
+            "decision": decision_doc["decision"],
+            "finish_apply_journal": journal_payload,
+        }
+        kind_to_payload = {
+            "task_implementation": "implementation",
+            "task_validation": "validation",
+            "task_review": "review",
+            "mutation_map": "mutation_map",
+            "completion": "completion",
+            "decision": "decision",
+            "finish_apply_journal": "finish_apply_journal",
+        }
+        task_kinds = {"task_implementation", "task_validation", "task_review"}
+        finish_kinds = {"completion", "decision", "finish_apply_journal"}
+        base_doc = {
+            "schema_version": 1,
+            "evidence_id": "schema-kind-1",
+            "change_id": "change-1",
+            "contract_sha256": A_HASH,
+            "context_fingerprint": B_HASH,
+            "state_version": 9,
+            "created_at": "2026-07-22T00:00:00Z",
+        }
         schema = json.loads((ROOT / "plugins" / "nuclio-plugin" / "schemas" / "evidence.schema.json").read_text(encoding="utf-8"))
         validator = jsonschema.Draft202012Validator(schema)
-        for doc in (completion_doc, decision_doc, journal_doc):
-            validator.validate(doc)
-        mixed = json.loads(json.dumps(completion_doc))
-        mixed["decision"] = decision_doc["decision"]
-        with self.assertRaises(jsonschema.ValidationError):
-            validator.validate(mixed)
+
+        def fixture(kind):
+            payload_name = kind_to_payload[kind]
+            doc = {**base_doc, "evidence_id": f"{kind}-1", "kind": kind, payload_name: payloads[payload_name]}
+            if kind in task_kinds:
+                doc["task_id"] = "T1"
+            return doc
+
+        for kind in kind_to_payload:
+            with self.subTest(kind=kind, case="legal_fixture_pass"):
+                validator.validate(fixture(kind))
+            missing_payload = fixture(kind)
+            missing_payload.pop(kind_to_payload[kind])
+            with self.subTest(kind=kind, case="missing_payload_fail"):
+                with self.assertRaises(jsonschema.ValidationError):
+                    validator.validate(missing_payload)
+            if kind in task_kinds:
+                missing_task_id = fixture(kind)
+                missing_task_id.pop("task_id")
+                with self.subTest(kind=kind, case="task_kind_missing_task_id_fail"):
+                    with self.assertRaises(jsonschema.ValidationError):
+                        validator.validate(missing_task_id)
+            else:
+                illegal_task_id = fixture(kind)
+                illegal_task_id["task_id"] = "T1"
+                with self.subTest(kind=kind, case="non_task_kind_task_id_fail"):
+                    with self.assertRaises(jsonschema.ValidationError):
+                        validator.validate(illegal_task_id)
+            if kind in finish_kinds:
+                finish_task_id = fixture(kind)
+                finish_task_id["task_id"] = "T1"
+                with self.subTest(kind=kind, case="finish_sidecar_task_id_fail"):
+                    with self.assertRaises(jsonschema.ValidationError):
+                        validator.validate(finish_task_id)
+            for other_kind, other_payload_name in kind_to_payload.items():
+                if other_kind == kind:
+                    continue
+                mixed = fixture(kind)
+                mixed[other_payload_name] = payloads[other_payload_name]
+                with self.subTest(kind=kind, other_payload=other_payload_name, case="cross_kind_payload_fail"):
+                    with self.assertRaises(jsonschema.ValidationError):
+                        validator.validate(mixed)
+
+        for forbidden in ("implementation", "validation", "review", "mutation_map"):
+            explicit = fixture("completion")
+            explicit[forbidden] = payloads[forbidden]
+            with self.subTest(kind="completion", explicit_forbidden=forbidden):
+                with self.assertRaises(jsonschema.ValidationError):
+                    validator.validate(explicit)
+        explicit_task_id = fixture("completion")
+        explicit_task_id["task_id"] = "T1"
+        with self.subTest(kind="completion", explicit_forbidden="task_id"):
+            with self.assertRaises(jsonschema.ValidationError):
+                validator.validate(explicit_task_id)
 
     def test_cli_temporary_git_trajectory_json_envelope(self):
         temp, repo, base, head = make_repo(); self.addCleanup(temp.cleanup)
