@@ -221,12 +221,23 @@ def decision_doc():
     }
 
 
+def finish_gate_notes(plan):
+    return {
+        "change_root": "/tmp/change-alpha",
+        "decision": "accept",
+        "decision_sha256": F_HASH,
+        "finish_plan_sha256": plan["finish_plan_sha256"],
+        "expected_decision_state_version": 8,
+        "readiness": {"decision_sha256": F_HASH, "finish_plan_sha256": plan["finish_plan_sha256"], "decision_state_version": 8},
+    }
+
+
 def finish_state(plan=None):
     plan = plan or finish_plan()
     doc = state(all_completed=True)
     doc["completion"] = dict(completion_identity_doc()["completion_identity"])
     doc["decision"] = {**dict(completion_identity_doc()["completion_identity"]), "decision_sha256": F_HASH, "finish_plan_sha256": plan["finish_plan_sha256"], "decision_state_version": 8, "state_version": 7, "approved": True}
-    doc["gates"]["finish"] = {"status": "approved", "decision_sha256": F_HASH, "artifact_sha256": F_HASH, "state_version": 7}
+    doc["gates"]["finish"] = {"status": "approved", "decision_sha256": F_HASH, "artifact_sha256": F_HASH, "state_version": 7, "notes": json.dumps(finish_gate_notes(plan))}
     return doc
 
 
@@ -582,6 +593,9 @@ class PacketHelperTests(unittest.TestCase):
         self.assertNotIn("ownership", packet)
         self.assertNotIn("checks", packet)
         self.assertNotIn("fix", json.dumps(packet))
+        gate_notes = json.loads(finish_state(plan)["gates"]["finish"]["notes"])
+        self.assertEqual(gate_notes["finish_plan_sha256"], packet["finish_plan_sha256"])
+        self.assertEqual(gate_notes["readiness"]["finish_plan_sha256"], packet["finish_plan_sha256"])
         overreach = finish_plan(); overreach["knowledge_targets"] = [finish_target("plugins/nuclio-plugin/scripts/a.py", None, "bad", "bad", F_HASH, "en", "contract_output_language")]; overreach["finish_plan_sha256"] = self_hash(overreach, "finish_plan_sha256")
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.finish_packet(self.repo, contract(), context(), finish_state(overreach), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), overreach, [], 7)
@@ -619,6 +633,44 @@ class PacketHelperTests(unittest.TestCase):
         with self.assertRaises(self.helper.ProtocolError) as ctx:
             self.helper.finish_packet(self.repo, contract(), context(), finish_state(cross_group), "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), cross_group, [], 7)
         self.assertEqual(ctx.exception.code, "KNOWLEDGE_TARGET_OVERREACH")
+
+    def test_finish_packet_rejects_stale_approved_gate_plan_identity(self):
+        plan = finish_plan()
+        stale_gate = finish_state(plan)
+        notes = json.loads(stale_gate["gates"]["finish"]["notes"])
+        notes["finish_plan_sha256"] = D_HASH
+        stale_gate["gates"]["finish"]["notes"] = json.dumps(notes)
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), stale_gate, "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), plan, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_FINISH_PLAN")
+
+        stale_readiness = finish_state(plan)
+        notes = json.loads(stale_readiness["gates"]["finish"]["notes"])
+        notes["readiness"]["finish_plan_sha256"] = D_HASH
+        stale_readiness["gates"]["finish"]["notes"] = json.dumps(notes)
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), stale_readiness, "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), plan, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_FINISH_PLAN")
+
+        stale_version = finish_state(plan)
+        notes = json.loads(stale_version["gates"]["finish"]["notes"])
+        notes["readiness"]["decision_state_version"] = 9
+        stale_version["gates"]["finish"]["notes"] = json.dumps(notes)
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), stale_version, "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), plan, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_DECISION")
+
+        missing_notes = finish_state(plan)
+        missing_notes["gates"]["finish"].pop("notes")
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), missing_notes, "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), plan, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_DECISION")
+
+        invalid_notes = finish_state(plan)
+        invalid_notes["gates"]["finish"]["notes"] = "not json"
+        with self.assertRaises(self.helper.ProtocolError) as ctx:
+            self.helper.finish_packet(self.repo, contract(), context(), invalid_notes, "abcdef1", "abcdef9", decision_doc(), completion_identity_doc(), plan, [], 7)
+        self.assertEqual(ctx.exception.code, "STALE_DECISION")
 
     def test_finish_packet_rejects_stale_plan_decision_completion_and_identity(self):
         plan = finish_plan()

@@ -529,6 +529,55 @@ def _finish_payload(doc: dict[str, Any], key: str) -> dict[str, Any]:
     return _require_object(doc.get(key, doc), key)
 
 
+def _finish_gate_notes(gate: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    raw_notes = gate.get("notes")
+    if not isinstance(raw_notes, str) or not raw_notes.strip():
+        raise ProtocolError("STALE_DECISION", "approved finish gate is missing canonical decision metadata")
+    try:
+        notes = json.loads(raw_notes)
+    except json.JSONDecodeError as exc:
+        raise ProtocolError("STALE_DECISION", "approved finish gate decision metadata is not valid JSON") from exc
+    if not isinstance(notes, dict):
+        raise ProtocolError("STALE_DECISION", "approved finish gate decision metadata must be an object")
+    readiness = notes.get("readiness")
+    if not isinstance(readiness, dict):
+        raise ProtocolError("STALE_DECISION", "approved finish gate is missing canonical readiness identity")
+    return notes, readiness
+
+
+def _require_gate_identity_sha(value: Any, where: str, expected: str, code: str) -> str:
+    actual = _require_sha(value, where)
+    if actual != expected:
+        raise ProtocolError(code, "approved finish gate identity is stale", {"expected": expected, "actual": actual})
+    return actual
+
+
+def _require_gate_identity_version(value: Any, where: str, expected: int) -> int:
+    actual = _require_version(value, where)
+    if actual != expected:
+        raise ProtocolError("STALE_DECISION", "approved finish gate decision state version is stale", {"expected": expected, "actual": actual})
+    return actual
+
+
+def _check_approved_finish_gate_identity(gate: dict[str, Any], decision_sha: str, plan_sha: str, decision_state_version: int, state_decision: dict[str, Any]) -> None:
+    if gate.get("status") != "approved":
+        raise ProtocolError("STALE_DECISION", "finish packet requires an approved finish gate")
+    _require_gate_identity_sha(gate.get("decision_sha256"), "gates.finish.decision_sha256", decision_sha, "STALE_DECISION")
+    if gate.get("artifact_sha256") is not None:
+        _require_gate_identity_sha(gate.get("artifact_sha256"), "gates.finish.artifact_sha256", decision_sha, "STALE_DECISION")
+    notes, readiness = _finish_gate_notes(gate)
+    _require_gate_identity_sha(notes.get("decision_sha256"), "gates.finish.notes.decision_sha256", decision_sha, "STALE_DECISION")
+    _require_gate_identity_sha(notes.get("finish_plan_sha256"), "gates.finish.notes.finish_plan_sha256", plan_sha, "STALE_FINISH_PLAN")
+    if "expected_decision_state_version" in notes:
+        _require_gate_identity_version(notes.get("expected_decision_state_version"), "gates.finish.notes.expected_decision_state_version", decision_state_version)
+    if "decision_state_version" in notes:
+        _require_gate_identity_version(notes.get("decision_state_version"), "gates.finish.notes.decision_state_version", decision_state_version)
+    _require_gate_identity_sha(readiness.get("decision_sha256"), "gates.finish.notes.readiness.decision_sha256", decision_sha, "STALE_DECISION")
+    _require_gate_identity_sha(readiness.get("finish_plan_sha256"), "gates.finish.notes.readiness.finish_plan_sha256", plan_sha, "STALE_FINISH_PLAN")
+    _require_gate_identity_version(readiness.get("decision_state_version"), "gates.finish.notes.readiness.decision_state_version", decision_state_version)
+    _compare_identity(state_decision, {"decision_sha256": decision_sha, "finish_plan_sha256": plan_sha, "decision_state_version": decision_state_version}, ("decision_sha256", "finish_plan_sha256", "decision_state_version"), "STALE_DECISION")
+
+
 def finish_packet(repo_path: str | Path, contract: dict[str, Any], context: dict[str, Any], state: dict[str, Any], base: str, head: str, decision_doc: dict[str, Any], completion_identity_doc: dict[str, Any], finish_plan: dict[str, Any], knowledge_snapshots: list[Any], expected_state_version: int | None = None) -> dict[str, Any]:
     _repo(repo_path)
     fresh = _fresh_inputs(contract, context, state, expected_state_version)
@@ -578,8 +627,7 @@ def finish_packet(repo_path: str | Path, contract: dict[str, Any], context: dict
     state_decision_expected = {**state_completion_expected, "decision_sha256": decision_sha, "finish_plan_sha256": plan_sha, "decision_state_version": decision_state_version}
     _compare_identity(state_decision, state_decision_expected, tuple(state_decision_expected), "STALE_DECISION")
     gate = state.get("gates", {}).get("finish", {}) if isinstance(state.get("gates"), dict) else {}
-    if gate.get("status") != "approved" or gate.get("decision_sha256") != decision_sha:
-        raise ProtocolError("STALE_DECISION", "finish packet requires the approved finish decision identity")
+    _check_approved_finish_gate_identity(gate, decision_sha, plan_sha, decision_state_version, state_decision)
 
     finish_context_paths = _context_paths(context, "finish")
     snapshots = list(_require_list(knowledge_snapshots, "knowledge_snapshots"))
