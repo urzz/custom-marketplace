@@ -5,7 +5,7 @@
 ## 日常 Gate
 
 - Contract Gate：用户批准当前 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl` fingerprint、`CHANGE_ROOT/state.json` version、mutation_targets 和 Contract-bound `output_language` 后，才允许产品 mutation。helper trim-only exact aliases 为 `approve`、`批准`、`同意`、`继续`，存储 canonical `approve`。
-- Finish Gate：helper 校验并展示 `CHANGE_ROOT/completion.md` 与 `CHANGE_ROOT/decision.md` maintainer prose，同时用户只批准 `CHANGE_ROOT/completion.json`、`CHANGE_ROOT/decision.json`、`CHANGE_ROOT/finish-plan.json` 的 machine identity 与 `CHANGE_ROOT/state.json` version 后，才允许长期知识写入、归档或 finish apply。helper trim-only exact aliases 为 `accept`/`同意`、`request_changes`/`要求修改`、`defer`/`暂缓`、`reject`/`拒绝`，存储 canonical English decision；`继续` 不是 Finish accept。
+- Finish Gate：helper 校验并展示 `CHANGE_ROOT/evidence/completion.md` 与 `CHANGE_ROOT/evidence/decision.md` maintainer prose，同时用户只批准 `CHANGE_ROOT/evidence/completion.json`、`CHANGE_ROOT/evidence/decision.json`、`CHANGE_ROOT/evidence/finish-plan.json` 的 machine identity 与 `CHANGE_ROOT/state.json` version 后，才允许长期知识写入、归档或 finish apply。helper trim-only exact aliases 为 `accept`/`同意`、`request_changes`/`要求修改`、`defer`/`暂缓`、`reject`/`拒绝`，存储 canonical English decision；`继续` 不是 Finish accept。
 
 除这两个日常 Gate 外，Controller 可以要求澄清或修复，但不能把对话同意、agent claim 或 artifact 存在解释为 Gate approval。
 
@@ -18,7 +18,7 @@
 | `contract_pending` | Contract draft 已可展示，等待用户 Contract Gate decision。 | 展示摘要、风险、mutation_targets、validation；等待 explicit approve/defer/reject；不得执行 mutation。 |
 | `ready_to_execute` | 存在 fresh Contract approval，且 state/context/contract identity 未变。pending/ready tasks may be legally unbound；合法未绑定并不等于可派发。 | 先 packet-helper derive/write worker artifact，再由 state-helper 用 canonical packet schema 和 state identity 绑定并 start；重新校验 dirty/fingerprint；成功后才转入 `executing` 并派发 fresh implementer。 |
 | `executing` | 一个或多个 Task 正在实现、review 或修复。 | 按 bound packet 派发 fresh implementer/reviewer/fixer；记录 `CHANGE_ROOT/evidence/tasks/<task-id>/...`；更新 Task 状态；完成后转入 `completing`。 |
-| `completing` | 所有 Task 候选实现完成，正在做 change-wide completion。 | 汇总 mutation map、checks、review evidence、risk；用 packet-bound `output_language` 写五文件 canonical handoff：`CHANGE_ROOT/completion.md`、`CHANGE_ROOT/completion.json`、`CHANGE_ROOT/decision.md`、`CHANGE_ROOT/decision.json`、`CHANGE_ROOT/finish-plan.json`；helper 验证 projected identity 后才转入 `decision_pending`。 |
+| `completing` | 所有 Task 候选实现完成，正在做 change-wide completion。 | 汇总 mutation map、checks、review evidence、risk；用 packet-bound `output_language` 写五文件 canonical handoff：`CHANGE_ROOT/evidence/completion.md`、`CHANGE_ROOT/evidence/completion.json`、`CHANGE_ROOT/evidence/decision.md`、`CHANGE_ROOT/evidence/decision.json`、`CHANGE_ROOT/evidence/finish-plan.json`；helper 验证 projected identity 后才转入 `decision_pending`。 |
 | `decision_pending` | Completion proposal 已可展示，等待 Finish Gate decision。 | 展示 before/after、residual risk、finish apply plan；等待 exact `accept`/`request_changes`/`defer`/`reject`；不得写长期知识或归档。 |
 | `folding` | 存在 fresh Finish approval，正在执行长期知识写入或归档。 | 应用 approved finish plan；按 finish target language metadata 处理 existing/new targets，unknown 时 STOP；记录 `CHANGE_ROOT/evidence/finish-apply.json` machine before/after evidence；helper 验证 JSON identity 后才可渲染可选 `CHANGE_ROOT/evidence/finish-apply.md` prose；归档 state；转入 `archived`。 |
 | `archived` | Change 已结束且历史可追溯。 | 回到 `idle`；只允许只读审计或显式新 change。 |
@@ -31,7 +31,7 @@
 
 - Project-level `.dev-docs/` 只保留 index、knowledge、archive 和 changes/index：`.dev-docs/archive/**` 是 project-level archive authority，`.dev-docs/changes/index.md` 是受控 `index_targets`。
 - Active change contract、context、state、research 与 evidence 必须位于 `CHANGE_ROOT=.dev-docs/changes/<change-id>`。
-- Exact active paths are `CHANGE_ROOT/contract.yaml`, `CHANGE_ROOT/context.jsonl`, `CHANGE_ROOT/state.json`, `CHANGE_ROOT/research/`, `CHANGE_ROOT/evidence/tasks/<task-id>/...`, canonical Finish handoff `CHANGE_ROOT/completion.md`, `CHANGE_ROOT/completion.json`, `CHANGE_ROOT/decision.md`, `CHANGE_ROOT/decision.json`, `CHANGE_ROOT/finish-plan.json`, and finish apply evidence `CHANGE_ROOT/evidence/finish-apply.json` plus optional `CHANGE_ROOT/evidence/finish-apply.md` prose.
+- Exact active paths are `CHANGE_ROOT/contract.yaml`, `CHANGE_ROOT/context.jsonl`, `CHANGE_ROOT/state.json`, `CHANGE_ROOT/research/`, `CHANGE_ROOT/evidence/tasks/<task-id>/...`, canonical Finish handoff `CHANGE_ROOT/evidence/completion.md`, `CHANGE_ROOT/evidence/completion.json`, `CHANGE_ROOT/evidence/decision.md`, `CHANGE_ROOT/evidence/decision.json`, `CHANGE_ROOT/evidence/finish-plan.json`, and finish apply evidence `CHANGE_ROOT/evidence/finish-apply.json` plus optional `CHANGE_ROOT/evidence/finish-apply.md` prose. Root-level same-name Finish handoff files are not active authority.
 - Migration target authority must use the selected `CHANGE_ROOT`; a legacy source path may be user-specified, but migrated contract/context/state/evidence must be change-local.
 
 ## Resume 规则

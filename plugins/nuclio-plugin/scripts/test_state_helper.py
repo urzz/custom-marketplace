@@ -203,8 +203,9 @@ class StateHelperTests(unittest.TestCase):
         (repo / ".dev-docs" / "knowledge").mkdir(parents=True, exist_ok=True)
         (repo / ".dev-docs" / "archive").mkdir(parents=True, exist_ok=True)
         (repo / ".dev-docs" / "changes").mkdir(parents=True, exist_ok=True)
-        completion_md = change_root / "completion.md"
-        decision_md = change_root / "decision.md"
+        (change_root / "evidence").mkdir(parents=True, exist_ok=True)
+        completion_md = change_root / "evidence" / "completion.md"
+        decision_md = change_root / "evidence" / "decision.md"
         completion_md.write_text("# Completion\nAll tasks done.\n", encoding="utf-8")
         decision_md.write_text("# Decision\nProposal only.\n", encoding="utf-8")
         completion_payload = {
@@ -251,9 +252,9 @@ class StateHelperTests(unittest.TestCase):
         finish_plan["finish_plan_sha256"] = self.self_hash(finish_plan, "finish_plan_sha256")
         completion_doc = {"schema_version": 1, "evidence_id": "completion-1", "kind": "completion", "change_id": "change-alpha", "contract_sha256": A_HASH, "context_fingerprint": B_HASH, "state_version": self.read_state()["state_version"], "created_at": "2026-07-18T01:00:00Z", "completion": completion_payload}
         decision_doc = {"schema_version": 1, "evidence_id": "decision-1", "kind": "decision", "change_id": "change-alpha", "contract_sha256": A_HASH, "context_fingerprint": B_HASH, "state_version": self.read_state()["state_version"], "created_at": "2026-07-18T01:00:00Z", "decision": decision_payload}
-        (change_root / "completion.json").write_text(json.dumps(completion_doc), encoding="utf-8")
-        (change_root / "decision.json").write_text(json.dumps(decision_doc), encoding="utf-8")
-        (change_root / "finish-plan.json").write_text(json.dumps(finish_plan), encoding="utf-8")
+        (change_root / "evidence" / "completion.json").write_text(json.dumps(completion_doc), encoding="utf-8")
+        (change_root / "evidence" / "decision.json").write_text(json.dumps(decision_doc), encoding="utf-8")
+        (change_root / "evidence" / "finish-plan.json").write_text(json.dumps(finish_plan), encoding="utf-8")
         return change_root, completion_doc, decision_doc, finish_plan
 
     def write_finish_apply_targets(self, change_root=None):
@@ -273,7 +274,7 @@ class StateHelperTests(unittest.TestCase):
     def finish_apply_journal(self, approval_identity, change_root=None):
         change_root = change_root or self.state_path.parent
         repo = change_root.parents[2]
-        finish_plan = json.loads((change_root / "finish-plan.json").read_text(encoding="utf-8"))
+        finish_plan = json.loads((change_root / "evidence" / "finish-plan.json").read_text(encoding="utf-8"))
         self.write_finish_apply_targets(change_root)
         entries = []
         for group_name, archive_result in (("knowledge_targets", "not_applicable"), ("archive_targets", "archived"), ("index_targets", "not_applicable")):
@@ -558,7 +559,7 @@ class StateHelperTests(unittest.TestCase):
         self.init_state(); self.approve_contract(); self.complete_all_tasks()
         self.helper.start_completion(self.state_path, 8, self.completion_packet())
         change_root, _completion_doc, _decision_doc, _finish_plan = self.write_finish_handoff()
-        (change_root / "finish-plan.json").unlink()
+        (change_root / "evidence" / "finish-plan.json").unlink()
         self.assert_error(lambda: self.helper.record_completion(self.state_path, 9, self.completion_pass(change_root=str(change_root))), "MISSING_FINISH_HANDOFF")
         state = self.read_state()
         self.assertEqual(state["status"], "completing")
@@ -575,16 +576,36 @@ class StateHelperTests(unittest.TestCase):
         self.state_path.write_text(self.helper.canonical_json(state) + "\n", encoding="utf-8")
         self.assertEqual(self.helper.next_action(self.state_path)["action"], "REBUILD_FINISH_HANDOFF")
         self.assertEqual(self.helper.record_finish_handoff(self.state_path, 9, str(self.state_path.parent))["decision"]["approved"], False)
-        (self.state_path.parent / "decision.md").write_text("# Drift\n", encoding="utf-8")
+        (self.state_path.parent / "evidence" / "decision.md").write_text("# Drift\n", encoding="utf-8")
         halted = self.helper.next_action(self.state_path)
         self.assertEqual(halted["action"], "HALT")
         self.assertEqual(halted["code"], "MARKDOWN_HASH_MISMATCH")
+
+
+    def test_root_level_only_handoff_cannot_rebuild_or_ready(self):
+        self.init_state(); self.approve_contract(); self.complete_all_tasks()
+        self.helper.start_completion(self.state_path, 8, self.completion_packet())
+        change_root, _completion_doc, _decision_doc, _finish_plan = self.write_finish_handoff()
+        for name in ("completion.md", "completion.json", "decision.md", "decision.json", "finish-plan.json"):
+            (change_root / name).write_bytes((change_root / "evidence" / name).read_bytes())
+            (change_root / "evidence" / name).unlink()
+        self.assert_error(lambda: self.helper.record_completion(self.state_path, 9, self.completion_pass(change_root=str(change_root))), "MISSING_FINISH_HANDOFF")
+        state = self.read_state()
+        self.assertEqual(state["status"], "completing")
+
+    def test_canonical_state_with_missing_evidence_handoff_halts(self):
+        self.init_state(); self.approve_contract(); self.start_completion_pass()
+        for name in ("completion.md", "completion.json", "decision.md", "decision.json", "finish-plan.json"):
+            (self.state_path.parent / "evidence" / name).unlink()
+        halted = self.helper.next_action(self.state_path)
+        self.assertEqual(halted["action"], "HALT")
+        self.assertEqual(halted["code"], "MISSING_FINISH_HANDOFF")
 
     def test_finish_accept_requires_fresh_readiness_not_bare_metadata_hash(self):
         self.init_state(); self.approve_contract(); self.start_completion_pass()
         decision_sha = self.current_decision_sha()
         finish_plan_sha = self.current_finish_plan_sha()
-        (self.state_path.parent / "finish-plan.json").unlink()
+        (self.state_path.parent / "evidence" / "finish-plan.json").unlink()
         self.assert_error(
             lambda: self.helper.finish_decision(
                 self.state_path,

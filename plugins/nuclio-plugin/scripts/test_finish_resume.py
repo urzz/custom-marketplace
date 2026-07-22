@@ -169,8 +169,9 @@ class FinishResumeCLITests(unittest.TestCase):
         self.run_json([sys.executable, str(STATE_HELPER), "import-task-review", str(self.state_path), "--expected-version", str(version + 2), "--review-json", str(review_path)])
 
     def write_work_handoff(self, completion_packet):
-        completion_md = self.change_root / "completion.md"
-        decision_md = self.change_root / "decision.md"
+        (self.change_root / "evidence").mkdir(parents=True, exist_ok=True)
+        completion_md = self.change_root / "evidence" / "completion.md"
+        decision_md = self.change_root / "evidence" / "decision.md"
         completion_md.write_text("# Completion\n全部 Task 已完成，等待 Finish decision。\n", encoding="utf-8")
         decision_md.write_text("# Decision\n\n## Completion Verdict\nPASS\n\n## Remaining Risks\nnone\n\n## Knowledge Proposal\nwrite approved targets\n\n## Archive Decision\narchive accepted change\n", encoding="utf-8")
         completion_payload = {
@@ -216,9 +217,9 @@ class FinishResumeCLITests(unittest.TestCase):
         finish_plan["finish_plan_sha256"] = self_hash(finish_plan, "finish_plan_sha256")
         completion_doc = {"schema_version": 1, "evidence_id": "completion-1", "kind": "completion", "change_id": "change-alpha", "contract_sha256": A_HASH, "context_fingerprint": B_HASH, "state_version": self.read_state()["state_version"], "created_at": "2026-07-22T00:01:00Z", "completion": completion_payload}
         decision_doc = {"schema_version": 1, "evidence_id": "decision-1", "kind": "decision", "change_id": "change-alpha", "contract_sha256": A_HASH, "context_fingerprint": B_HASH, "state_version": self.read_state()["state_version"], "created_at": "2026-07-22T00:01:00Z", "decision": decision_payload}
-        write_json(self.change_root / "completion.json", completion_doc)
-        write_json(self.change_root / "decision.json", decision_doc)
-        write_json(self.change_root / "finish-plan.json", finish_plan)
+        write_json(self.change_root / "evidence" / "completion.json", completion_doc)
+        write_json(self.change_root / "evidence" / "decision.json", decision_doc)
+        write_json(self.change_root / "evidence" / "finish-plan.json", finish_plan)
         return completion_doc, decision_doc, finish_plan
 
     def accept_and_derive_finish_packet(self):
@@ -236,10 +237,10 @@ class FinishResumeCLITests(unittest.TestCase):
         self.assertEqual(self.run_json([sys.executable, str(STATE_HELPER), "next-action", str(self.state_path)])["next_action"]["action"], "APPLY_FINISH")
         snapshots_path = write_json(self.change_root / "knowledge-snapshots.json", [{"path": ".dev-docs/knowledge/notes.md", "state": "absent"}])
         packet_path = self.change_root / "finish-packet.json"
-        completion_payload = json.loads((self.change_root / "completion.json").read_text(encoding="utf-8"))["completion"]
+        completion_payload = json.loads((self.change_root / "evidence" / "completion.json").read_text(encoding="utf-8"))["completion"]
         completion_identity_path = write_json(self.change_root / "completion-identity.json", {"completion_identity": {"contract_sha256": A_HASH, "context_fingerprint": B_HASH, **completion_payload}})
         self.run_json([
-            sys.executable, str(PACKET_HELPER), "finish", "--repo", str(self.repo), "--contract-json", str(self.contract_path), "--context-json", str(self.context_path), "--state-json", str(self.state_path), "--base", "abcdef1", "--head", "2222222", "--decision-json", str(self.change_root / "decision.json"), "--completion-identity-json", str(completion_identity_path), "--finish-plan-json", str(self.change_root / "finish-plan.json"), "--knowledge-snapshots-json", str(snapshots_path), "--output", str(packet_path), "--expected-state-version", str(self.read_state()["state_version"]),
+            sys.executable, str(PACKET_HELPER), "finish", "--repo", str(self.repo), "--contract-json", str(self.contract_path), "--context-json", str(self.context_path), "--state-json", str(self.state_path), "--base", "abcdef1", "--head", "2222222", "--decision-json", str(self.change_root / "evidence" / "decision.json"), "--completion-identity-json", str(completion_identity_path), "--finish-plan-json", str(self.change_root / "evidence" / "finish-plan.json"), "--knowledge-snapshots-json", str(snapshots_path), "--output", str(packet_path), "--expected-state-version", str(self.read_state()["state_version"]),
         ])
         return json.loads(packet_path.read_text(encoding="utf-8"))
 
@@ -261,7 +262,7 @@ class FinishResumeCLITests(unittest.TestCase):
                 entries.append({"path": target["path"], "before_sha256": target["before_sha256"], "after_sha256": (A_HASH if wrong_after and target["path"] == ".dev-docs/knowledge/notes.md" else after), "reason": target["reason"], "target_language": target["target_language"], "language_source": target["language_source"], "apply_result": "applied", "archive_result": archive_result})
         journal = {"decision_sha256": finish_packet["decision_sha256"], "finish_plan_sha256": finish_packet["finish_plan_sha256"], "approval_identity": "accept:fresh-process", "archive_intent": finish_packet["archive_intent"], "entries": entries, "verified": True}
         journal["journal_sha256"] = self_hash(journal, "journal_sha256")
-        return write_json(self.change_root / "finish-apply.json", journal)
+        return write_json(self.change_root / "evidence" / "finish-apply.json", journal)
 
     def test_fresh_process_work_handoff_finish_accept_packet_apply_archive(self):
         self.initialize_and_complete_work()
@@ -273,7 +274,7 @@ class FinishResumeCLITests(unittest.TestCase):
         finish_packet = self.accept_and_derive_finish_packet()
         self.assertEqual([target["path"] for target in finish_packet["index_targets"]], [".dev-docs/changes/index.md"])
         journal_path = self.apply_targets_and_write_journal(finish_packet)
-        self.run_json([sys.executable, str(EVIDENCE_HELPER), "validate-finish-apply", "--repo", str(self.repo), "--decision-sha256", finish_packet["decision_sha256"], "--finish-plan-json", str(self.change_root / "finish-plan.json"), "--journal-json", str(journal_path)])
+        self.run_json([sys.executable, str(EVIDENCE_HELPER), "validate-finish-apply", "--repo", str(self.repo), "--decision-sha256", finish_packet["decision_sha256"], "--finish-plan-json", str(self.change_root / "evidence" / "finish-plan.json"), "--journal-json", str(journal_path)])
         self.run_json([sys.executable, str(STATE_HELPER), "record-finish-apply", str(self.state_path), "--expected-version", str(self.read_state()["state_version"]), "--journal-json", str(journal_path)])
         self.assertEqual(self.run_json([sys.executable, str(STATE_HELPER), "next-action", str(self.state_path)])["next_action"]["action"], "COMPLETE")
         self.assertIn("已接受", (self.repo / ".dev-docs" / "knowledge" / "notes.md").read_text(encoding="utf-8"))
@@ -282,29 +283,29 @@ class FinishResumeCLITests(unittest.TestCase):
     def test_legacy_handoff_rebuild_then_canonical_drift_halts(self):
         self.initialize_and_complete_work()
         state = self.read_state()
-        completion_doc = json.loads((self.change_root / "completion.json").read_text())
-        decision_doc = json.loads((self.change_root / "decision.json").read_text())
-        finish_plan = json.loads((self.change_root / "finish-plan.json").read_text())
+        completion_doc = json.loads((self.change_root / "evidence" / "completion.json").read_text())
+        decision_doc = json.loads((self.change_root / "evidence" / "decision.json").read_text())
+        finish_plan = json.loads((self.change_root / "evidence" / "finish-plan.json").read_text())
         decision_doc["decision"]["decision_state_version"] = 12
         decision_doc["decision"]["decision_sha256"] = self_hash(decision_doc["decision"], "decision_sha256")
         finish_plan["decision_state_version"] = 12
         finish_plan["decision_sha256"] = decision_doc["decision"]["decision_sha256"]
         finish_plan["finish_plan_sha256"] = self_hash(finish_plan, "finish_plan_sha256")
-        write_json(self.change_root / "decision.json", decision_doc)
-        write_json(self.change_root / "finish-plan.json", finish_plan)
+        write_json(self.change_root / "evidence" / "decision.json", decision_doc)
+        write_json(self.change_root / "evidence" / "finish-plan.json", finish_plan)
         state["completion"] = {"proposal_sha256": C_HASH, "mutation_map_sha256": D_HASH, "state_version": 9, "contract_sha256": A_HASH, "context_fingerprint": B_HASH, "task_heads": {"T1": "1111111", "T2": "2222222"}, "implementation_range": {"base": "abcdef1", "head": "2222222"}, "acceptance_index_sha256": completion_doc["completion"]["acceptance_index_sha256"]}
         state["decision"] = {"decision_sha256": E_HASH, "state_version": 9, "approved": False}
         self.state_path.write_text(canonical_json(state) + "\n", encoding="utf-8")
         self.assertEqual(self.run_json([sys.executable, str(STATE_HELPER), "next-action", str(self.state_path)])["next_action"]["action"], "REBUILD_FINISH_HANDOFF")
         self.run_json([sys.executable, str(STATE_HELPER), "record-finish-handoff", str(self.state_path), "--expected-version", "10", "--change-root", str(self.change_root)])
-        (self.change_root / "decision.md").write_text("# drift\n", encoding="utf-8")
+        (self.change_root / "evidence" / "decision.md").write_text("# drift\n", encoding="utf-8")
         halted = self.run_json([sys.executable, str(STATE_HELPER), "next-action", str(self.state_path)])["next_action"]
         self.assertEqual(halted["action"], "HALT")
         self.assertEqual(halted["code"], "MARKDOWN_HASH_MISMATCH")
 
     def test_missing_plan_stale_decision_markdown_json_and_target_failures(self):
         self.initialize_and_complete_work()
-        plan_path = self.change_root / "finish-plan.json"
+        plan_path = self.change_root / "evidence" / "finish-plan.json"
         saved_plan = plan_path.read_text(encoding="utf-8")
         plan_path.unlink()
         readiness = self.run_json([sys.executable, str(EVIDENCE_HELPER), "finish-readiness", "--change-root", str(self.change_root), "--contract-sha256", A_HASH, "--context-fingerprint", B_HASH])
@@ -312,24 +313,24 @@ class FinishResumeCLITests(unittest.TestCase):
         self.assertEqual(readiness["failure_code"], "MISSING_FINISH_HANDOFF")
         plan_path.write_text(saved_plan, encoding="utf-8")
 
-        decision_doc = json.loads((self.change_root / "decision.json").read_text(encoding="utf-8"))
+        decision_doc = json.loads((self.change_root / "evidence" / "decision.json").read_text(encoding="utf-8"))
         decision_doc["decision"]["completion_sha256"] = E_HASH
         decision_doc["decision"]["decision_sha256"] = self_hash(decision_doc["decision"], "decision_sha256")
-        write_json(self.change_root / "decision.json", decision_doc)
+        write_json(self.change_root / "evidence" / "decision.json", decision_doc)
         readiness = self.run_json([sys.executable, str(EVIDENCE_HELPER), "finish-readiness", "--change-root", str(self.change_root), "--contract-sha256", A_HASH, "--context-fingerprint", B_HASH])
         self.assertEqual(readiness["failure_code"], "STALE_DECISION")
         self.write_work_handoff(json.loads((self.change_root / "completion-packet.json").read_text(encoding="utf-8")))
 
         out = self.change_root / "bad-finish-packet.json"
-        proc = subprocess.run([sys.executable, str(PACKET_HELPER), "finish", "--repo", str(self.repo), "--contract-json", str(self.contract_path), "--context-json", str(self.context_path), "--state-json", str(self.state_path), "--base", "abcdef1", "--head", "2222222", "--decision-json", str(self.change_root / "decision.md"), "--completion-identity-json", str(self.change_root / "completion.json"), "--finish-plan-json", str(self.change_root / "finish-plan.json"), "--output", str(out)], text=True, capture_output=True)
+        proc = subprocess.run([sys.executable, str(PACKET_HELPER), "finish", "--repo", str(self.repo), "--contract-json", str(self.contract_path), "--context-json", str(self.context_path), "--state-json", str(self.state_path), "--base", "abcdef1", "--head", "2222222", "--decision-json", str(self.change_root / "evidence" / "decision.md"), "--completion-identity-json", str(self.change_root / "evidence" / "completion.json"), "--finish-plan-json", str(self.change_root / "evidence" / "finish-plan.json"), "--output", str(out)], text=True, capture_output=True)
         self.assertEqual(proc.returncode, 2)
         self.assertEqual(json.loads(proc.stderr)["code"], "INVALID_JSON_ARGUMENT")
 
-        bad_plan = json.loads((self.change_root / "finish-plan.json").read_text(encoding="utf-8"))
+        bad_plan = json.loads((self.change_root / "evidence" / "finish-plan.json").read_text(encoding="utf-8"))
         bad_plan["knowledge_targets"] = [{**bad_plan["knowledge_targets"][0], "path": ".dev-docs/changes/index.md"}]
         bad_plan["finish_plan_sha256"] = self_hash(bad_plan, "finish_plan_sha256")
         bad_plan_path = write_json(self.change_root / "bad-classification-plan.json", bad_plan)
-        proc = subprocess.run([sys.executable, str(EVIDENCE_HELPER), "validate-finish-handoff", "--state-json", str(self.state_path), "--completion-json", str(self.change_root / "completion.json"), "--decision-json", str(self.change_root / "decision.json"), "--finish-plan-json", str(bad_plan_path), "--completion-md", str(self.change_root / "completion.md"), "--decision-md", str(self.change_root / "decision.md"), "--repo", str(self.repo)], text=True, capture_output=True)
+        proc = subprocess.run([sys.executable, str(EVIDENCE_HELPER), "validate-finish-handoff", "--state-json", str(self.state_path), "--completion-json", str(self.change_root / "evidence" / "completion.json"), "--decision-json", str(self.change_root / "evidence" / "decision.json"), "--finish-plan-json", str(bad_plan_path), "--completion-md", str(self.change_root / "evidence" / "completion.md"), "--decision-md", str(self.change_root / "evidence" / "decision.md"), "--repo", str(self.repo)], text=True, capture_output=True)
         self.assertEqual(proc.returncode, 2)
         self.assertEqual(json.loads(proc.stderr)["code"], "KNOWLEDGE_TARGET_OVERREACH")
 
@@ -338,11 +339,24 @@ class FinishResumeCLITests(unittest.TestCase):
         readiness = self.run_json([sys.executable, str(EVIDENCE_HELPER), "finish-readiness", "--change-root", str(self.change_root), "--contract-sha256", A_HASH, "--context-fingerprint", B_HASH])
         self.assertEqual(readiness["failure_code"], "STALE_TARGET")
 
+
+    def test_root_level_only_handoff_is_not_recoverable_authority(self):
+        self.initialize_and_complete_work()
+        for name in ("completion.md", "completion.json", "decision.md", "decision.json", "finish-plan.json"):
+            (self.change_root / name).write_bytes((self.change_root / "evidence" / name).read_bytes())
+            (self.change_root / "evidence" / name).unlink()
+        readiness = self.run_json([sys.executable, str(EVIDENCE_HELPER), "finish-readiness", "--change-root", str(self.change_root), "--contract-sha256", A_HASH, "--context-fingerprint", B_HASH])
+        self.assertFalse(readiness["ready"])
+        self.assertEqual(readiness["failure_code"], "MISSING_FINISH_HANDOFF")
+        halted = self.run_json([sys.executable, str(STATE_HELPER), "next-action", str(self.state_path)])["next_action"]
+        self.assertEqual(halted["action"], "HALT")
+        self.assertEqual(halted["code"], "MISSING_FINISH_HANDOFF")
+
     def test_journal_after_hash_mismatch_fails_closed(self):
         self.initialize_and_complete_work()
         finish_packet = self.accept_and_derive_finish_packet()
         journal_path = self.apply_targets_and_write_journal(finish_packet, wrong_after=True)
-        proc = subprocess.run([sys.executable, str(EVIDENCE_HELPER), "validate-finish-apply", "--repo", str(self.repo), "--decision-sha256", finish_packet["decision_sha256"], "--finish-plan-json", str(self.change_root / "finish-plan.json"), "--journal-json", str(journal_path)], text=True, capture_output=True)
+        proc = subprocess.run([sys.executable, str(EVIDENCE_HELPER), "validate-finish-apply", "--repo", str(self.repo), "--decision-sha256", finish_packet["decision_sha256"], "--finish-plan-json", str(self.change_root / "evidence" / "finish-plan.json"), "--journal-json", str(journal_path)], text=True, capture_output=True)
         self.assertEqual(proc.returncode, 2)
         self.assertEqual(json.loads(proc.stderr)["code"], "STALE_TARGET")
         self.assertEqual(self.read_state()["status"], "folding")

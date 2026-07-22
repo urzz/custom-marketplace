@@ -145,8 +145,9 @@ def evidence_doc(kind, payload):
 def make_handoff(helper, repo):
     change_root = repo / ".dev-docs" / "changes" / "change-1"
     change_root.mkdir(parents=True, exist_ok=True)
-    completion_md = change_root / "completion.md"
-    decision_md = change_root / "decision.md"
+    (change_root / "evidence").mkdir(parents=True, exist_ok=True)
+    completion_md = change_root / "evidence" / "completion.md"
+    decision_md = change_root / "evidence" / "decision.md"
     completion_md.write_text("# Completion\nAll tasks done.\n", encoding="utf-8")
     decision_md.write_text("# Decision\nProposal only.\n", encoding="utf-8")
     (repo / ".dev-docs" / "knowledge").mkdir(parents=True, exist_ok=True)
@@ -201,9 +202,9 @@ def make_handoff(helper, repo):
     completion_doc = evidence_doc("completion", completion_payload)
     decision_doc = evidence_doc("decision", decision_payload)
     (change_root / "state.json").write_text(json.dumps(state()), encoding="utf-8")
-    (change_root / "completion.json").write_text(json.dumps(completion_doc), encoding="utf-8")
-    (change_root / "decision.json").write_text(json.dumps(decision_doc), encoding="utf-8")
-    (change_root / "finish-plan.json").write_text(json.dumps(finish_plan), encoding="utf-8")
+    (change_root / "evidence" / "completion.json").write_text(json.dumps(completion_doc), encoding="utf-8")
+    (change_root / "evidence" / "decision.json").write_text(json.dumps(decision_doc), encoding="utf-8")
+    (change_root / "evidence" / "finish-plan.json").write_text(json.dumps(finish_plan), encoding="utf-8")
     return change_root, completion_doc, decision_doc, finish_plan, completion_md, decision_md
 
 
@@ -338,16 +339,30 @@ class EvidenceHelperTests(unittest.TestCase):
         self.assertEqual(ready["current_action"], "request_finish_acceptance")
         for key in ("ready", "current_action", "artifacts", "identity_comparison", "failure_code", "repair_hint", "decision_sha256", "finish_plan_sha256", "decision_state_version"):
             self.assertIn(key, ready)
-        (change_root / "finish-plan.json").unlink()
+        (change_root / "evidence" / "finish-plan.json").unlink()
         missing = self.helper.finish_readiness(change_root, A_HASH, B_HASH)
         self.assertFalse(missing["ready"])
         self.assertEqual(missing["failure_code"], "MISSING_FINISH_HANDOFF")
         _change_root, _completion_doc, decision_doc, _plan, _completion_md, _decision_md = make_handoff(self.helper, repo)
         decision_doc["decision"]["completion_sha256"] = C_HASH
-        (change_root / "decision.json").write_text(json.dumps(decision_doc), encoding="utf-8")
+        (change_root / "evidence" / "decision.json").write_text(json.dumps(decision_doc), encoding="utf-8")
         stale = self.helper.finish_readiness(change_root, A_HASH, B_HASH)
         self.assertFalse(stale["ready"])
         self.assertEqual(stale["failure_code"], "STALE_DECISION")
+
+
+    def test_finish_readiness_ignores_root_level_only_handoff(self):
+        temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)
+        change_root, _completion_doc, _decision_doc, _plan, _completion_md, _decision_md = make_handoff(self.helper, repo)
+        for name in ("completion.md", "completion.json", "decision.md", "decision.json", "finish-plan.json"):
+            (change_root / name).write_bytes((change_root / "evidence" / name).read_bytes())
+            (change_root / "evidence" / name).unlink()
+        readiness = self.helper.finish_readiness(change_root, A_HASH, B_HASH)
+        self.assertFalse(readiness["ready"])
+        self.assertEqual(readiness["failure_code"], "MISSING_FINISH_HANDOFF")
+        for artifact_name in ("completion_md", "completion_json", "decision_md", "decision_json", "finish_plan_json"):
+            self.assertFalse(readiness["artifacts"][artifact_name]["exists"])
+            self.assertIn("/evidence/", readiness["artifacts"][artifact_name].get("path", "") if "path" in readiness["artifacts"][artifact_name] else str(change_root / "evidence"))
 
     def test_markdown_json_mismatch_self_hash_and_invalid_markdown_as_json(self):
         temp, repo, _base, _head = make_repo(); self.addCleanup(temp.cleanup)

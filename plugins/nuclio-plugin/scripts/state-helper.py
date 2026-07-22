@@ -820,11 +820,16 @@ def _read_handoff_json(path: Path, label: str) -> dict[str, Any]:
     return _require_object(value, label)
 
 
+def _finish_handoff_dir(change_root: Path) -> Path:
+    return change_root / "evidence"
+
+
 def _finish_handoff_docs(change_root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    handoff_dir = _finish_handoff_dir(change_root)
     return (
-        _read_handoff_json(change_root / "completion.json", "completion.json"),
-        _read_handoff_json(change_root / "decision.json", "decision.json"),
-        _read_handoff_json(change_root / "finish-plan.json", "finish-plan.json"),
+        _read_handoff_json(handoff_dir / "completion.json", "completion.json"),
+        _read_handoff_json(handoff_dir / "decision.json", "decision.json"),
+        _read_handoff_json(handoff_dir / "finish-plan.json", "finish-plan.json"),
     )
 
 
@@ -842,7 +847,7 @@ def _validate_finish_handoff(state: dict[str, Any], change_root: Path) -> dict[s
             completion_doc,
             decision_doc,
             finish_plan,
-            {"completion_md": change_root / "completion.md", "decision_md": change_root / "decision.md", "repo": _repo_for_change_root(change_root)},
+            {"completion_md": _finish_handoff_dir(change_root) / "completion.md", "decision_md": _finish_handoff_dir(change_root) / "decision.md", "repo": _repo_for_change_root(change_root)},
         )
     except Exception as exc:
         if exc.__class__.__name__ == "ProtocolError":
@@ -1056,7 +1061,7 @@ def record_finish_apply(path: str | Path, expected_version: int, journal: dict[s
         raise ProtocolError("FINISH_NOT_ACCEPTED", "fresh Finish accept is required before archive")
     journal = _require_object(journal, "finish apply journal")
     change_root = Path(path).resolve().parent
-    finish_plan = _read_handoff_json(change_root / "finish-plan.json", "finish-plan.json")
+    finish_plan = _read_handoff_json(_finish_handoff_dir(change_root) / "finish-plan.json", "finish-plan.json")
     expected_decision_sha = _require_sha(before["decision"].get("decision_sha256"), "state.decision.decision_sha256")
     try:
         validation = EVIDENCE_HELPER.validate_finish_apply(expected_decision_sha, finish_plan, journal, _repo_for_change_root(change_root))

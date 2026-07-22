@@ -755,20 +755,22 @@ def _read_json_file(path: Path, label: str) -> dict[str, Any]:
 
 
 def _artifact_status(path: Path) -> dict[str, Any]:
+    artifact_path = str(path.resolve())
     if not path.exists() or not path.is_file():
-        return {"exists": False, "sha256": None}
-    return {"exists": True, "sha256": sha256_bytes(path.read_bytes())}
+        return {"exists": False, "sha256": None, "path": artifact_path}
+    return {"exists": True, "sha256": sha256_bytes(path.read_bytes()), "path": artifact_path}
 
 
 def finish_readiness(change_root: str | Path, contract_sha256: str, context_fingerprint: str) -> dict[str, Any]:
     change_root = Path(change_root).resolve()
+    evidence_dir = change_root / "evidence"
     artifacts_paths = {
         "state_json": change_root / "state.json",
-        "completion_md": change_root / "completion.md",
-        "completion_json": change_root / "completion.json",
-        "decision_md": change_root / "decision.md",
-        "decision_json": change_root / "decision.json",
-        "finish_plan_json": change_root / "finish-plan.json",
+        "completion_md": evidence_dir / "completion.md",
+        "completion_json": evidence_dir / "completion.json",
+        "decision_md": evidence_dir / "decision.md",
+        "decision_json": evidence_dir / "decision.json",
+        "finish_plan_json": evidence_dir / "finish-plan.json",
     }
     artifacts = {name: _artifact_status(path) for name, path in artifacts_paths.items()}
     base_payload = {

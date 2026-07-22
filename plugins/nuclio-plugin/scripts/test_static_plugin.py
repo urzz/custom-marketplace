@@ -109,7 +109,7 @@ class StaticPluginTests(unittest.TestCase):
     def test_plugin_metadata_and_skill_directory_are_exact(self):
         metadata = load_json(PLUGIN / ".claude-plugin" / "plugin.json")
         self.assertEqual(metadata["name"], "nuclio")
-        self.assertEqual(metadata["version"], "1.0.2")
+        self.assertEqual(metadata["version"], "1.0.3")
         self.assertEqual(set(self.skills()), NEW_LIFECYCLE)
         self.assertEqual({path.name for path in SKILLS.iterdir() if path.is_dir()}, NEW_LIFECYCLE)
 
@@ -402,11 +402,11 @@ class StaticPluginTests(unittest.TestCase):
             "CHANGE_ROOT/context.jsonl",
             "CHANGE_ROOT/state.json",
             "CHANGE_ROOT/research/",
-            "CHANGE_ROOT/completion.md",
-            "CHANGE_ROOT/completion.json",
-            "CHANGE_ROOT/decision.md",
-            "CHANGE_ROOT/decision.json",
-            "CHANGE_ROOT/finish-plan.json",
+            "CHANGE_ROOT/evidence/completion.md",
+            "CHANGE_ROOT/evidence/completion.json",
+            "CHANGE_ROOT/evidence/decision.md",
+            "CHANGE_ROOT/evidence/decision.json",
+            "CHANGE_ROOT/evidence/finish-plan.json",
             "CHANGE_ROOT/evidence/finish-apply.json",
             "CHANGE_ROOT/evidence/finish-apply.md",
         ]
@@ -759,11 +759,11 @@ class StaticPluginTests(unittest.TestCase):
         refs = "\n".join(read_text(REFERENCES / name) for name in ["authority.md", "lifecycle.md", "execution.md", "finish.md", "output-language.md"])
         combined = "\n".join([work, finish, critic, refs])
         for needle in [
-            "CHANGE_ROOT/completion.md",
-            "CHANGE_ROOT/completion.json",
-            "CHANGE_ROOT/decision.md",
-            "CHANGE_ROOT/decision.json",
-            "CHANGE_ROOT/finish-plan.json",
+            "CHANGE_ROOT/evidence/completion.md",
+            "CHANGE_ROOT/evidence/completion.json",
+            "CHANGE_ROOT/evidence/decision.md",
+            "CHANGE_ROOT/evidence/decision.json",
+            "CHANGE_ROOT/evidence/finish-plan.json",
             "state-helper.py record-completion <state> --expected-version <n> --completion-json <completion-pass.json> --change-root <CHANGE_ROOT>",
             "state-helper.py record-finish-handoff <state> --expected-version <n> --change-root <CHANGE_ROOT>",
             "finish-readiness",
@@ -788,8 +788,8 @@ class StaticPluginTests(unittest.TestCase):
     def test_task4_finish_reference_authority_uses_json_with_markdown_display_layer(self):
         corpus = "\n".join(read_text(REFERENCES / name) for name in ["lifecycle.md", "finish.md"])
         stale_machine_authority = [
-            "CHANGE_ROOT/evidence/completion.md",
-            "CHANGE_ROOT/evidence/decision.md",
+            "`CHANGE_ROOT/evidence/completion.md` machine authority",
+            "`CHANGE_ROOT/evidence/decision.md` machine authority",
             "journal file 必须是 `CHANGE_ROOT/evidence/finish-apply.md`",
             "记录 `CHANGE_ROOT/evidence/finish-apply.md` before/after evidence",
         ]
@@ -797,9 +797,9 @@ class StaticPluginTests(unittest.TestCase):
             with self.subTest(forbidden=needle):
                 self.assertNotIn(needle, corpus)
         for needle in [
-            "CHANGE_ROOT/completion.json",
-            "CHANGE_ROOT/decision.json",
-            "CHANGE_ROOT/finish-plan.json",
+            "CHANGE_ROOT/evidence/completion.json",
+            "CHANGE_ROOT/evidence/decision.json",
+            "CHANGE_ROOT/evidence/finish-plan.json",
             "CHANGE_ROOT/evidence/finish-apply.json",
             "machine authority",
             "maintainer prose 展示层",
@@ -807,12 +807,49 @@ class StaticPluginTests(unittest.TestCase):
             with self.subTest(required=needle):
                 self.assertIn(needle, corpus)
         for needle in [
-            "CHANGE_ROOT/completion.md",
-            "CHANGE_ROOT/decision.md",
+            "CHANGE_ROOT/evidence/completion.md",
+            "CHANGE_ROOT/evidence/decision.md",
             "CHANGE_ROOT/evidence/finish-apply.md",
         ]:
             with self.subTest(display_layer=needle):
                 self.assertIn(needle, corpus)
+
+
+    def test_finish_handoff_paths_are_evidence_only_and_no_root_fallback(self):
+        corpus_paths = [
+            SKILLS / "work" / "SKILL.md",
+            SKILLS / "finish" / "SKILL.md",
+            REFERENCES / "authority.md",
+            REFERENCES / "execution.md",
+            REFERENCES / "finish.md",
+            REFERENCES / "lifecycle.md",
+            REFERENCES / "eval-prompts.md",
+            ROOT / "README.md",
+            ROOT / "CLAUDE.md",
+        ]
+        corpus = "\n".join(read_text(path) for path in corpus_paths)
+        for needle in [
+            "CHANGE_ROOT/evidence/completion.md",
+            "CHANGE_ROOT/evidence/completion.json",
+            "CHANGE_ROOT/evidence/decision.md",
+            "CHANGE_ROOT/evidence/decision.json",
+            "CHANGE_ROOT/evidence/finish-plan.json",
+        ]:
+            with self.subTest(required=needle):
+                self.assertIn(needle, corpus)
+        forbidden_patterns = [
+            r"(?<!evidence/)CHANGE_ROOT/completion\.(?:md|json)",
+            r"(?<!evidence/)CHANGE_ROOT/decision\.(?:md|json)",
+            r"(?<!evidence/)CHANGE_ROOT/finish-plan\.json",
+            r"change_root\s*/\s*[\"]completion\.(?:md|json)[\"]",
+            r"change_root\s*/\s*[\"]decision\.(?:md|json)[\"]",
+            r"change_root\s*/\s*[\"]finish-plan\.json[\"]",
+        ]
+        helper_and_protocol = corpus + "\n" + read_text(SCRIPTS / "evidence-helper.py") + "\n" + read_text(SCRIPTS / "state-helper.py")
+        for pattern in forbidden_patterns:
+            with self.subTest(forbidden_pattern=pattern):
+                self.assertNotRegex(helper_and_protocol, pattern)
+        self.assertNotIn(".claude-plugin/marketplace.json", "\n".join(path.as_posix() for path in corpus_paths))
 
     def test_task4_all_json_helper_parameters_use_json_not_markdown(self):
         corpus = "\n".join(read_text(path) for path in [SKILLS / "work" / "SKILL.md", SKILLS / "finish" / "SKILL.md", REFERENCES / "finish.md", REFERENCES / "eval-prompts.md"])
@@ -844,6 +881,7 @@ class StaticPluginTests(unittest.TestCase):
             "finish-changes-index-wrong-group-rejected",
             "finish-target-before-drift-rejected",
             "finish-journal-after-mismatch-rejected",
+            "finish-root-level-handoff-ignored",
         }
         self.assertTrue(expected.issubset(rows), sorted(expected - set(rows)))
         for case_id in expected:

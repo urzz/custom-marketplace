@@ -14,7 +14,7 @@ Use progressive disclosure instead of copying protocol detail: [authority](../..
 ## Entry guard
 
 1. Select exactly one active change-id first. If zero or multiple active changes are possible, refuse to guess and ask one exact selection question.
-2. Define `CHANGE_ROOT` once as the absolute resolved `.dev-docs/changes/<change-id>` directory. The canonical handoff paths are exactly `CHANGE_ROOT/completion.md`, `CHANGE_ROOT/completion.json`, `CHANGE_ROOT/decision.md`, `CHANGE_ROOT/decision.json`, `CHANGE_ROOT/finish-plan.json`, `CHANGE_ROOT/state.json`, `CHANGE_ROOT/contract.yaml`, and `CHANGE_ROOT/context.jsonl`; the finish apply journal is `CHANGE_ROOT/evidence/finish-apply.md` for prose and `CHANGE_ROOT/evidence/finish-apply.json` for machine validation.
+2. Define `CHANGE_ROOT` once as the absolute resolved `.dev-docs/changes/<change-id>` directory. The canonical handoff paths are exactly `CHANGE_ROOT/evidence/completion.md`, `CHANGE_ROOT/evidence/completion.json`, `CHANGE_ROOT/evidence/decision.md`, `CHANGE_ROOT/evidence/decision.json`, `CHANGE_ROOT/evidence/finish-plan.json`, `CHANGE_ROOT/state.json`, `CHANGE_ROOT/contract.yaml`, and `CHANGE_ROOT/context.jsonl`; root-level same-name handoff files under `CHANGE_ROOT` are not active authority and must not be fallback or auto-migrated. The finish apply journal is `CHANGE_ROOT/evidence/finish-apply.md` for prose and `CHANGE_ROOT/evidence/finish-apply.json` for machine validation.
 3. Call `state-helper.py inspect <state>` and then `state-helper.py next-action <state>` with the absolute resolved `CHANGE_ROOT/state.json`.
 4. If `next-action` is `REBUILD_FINISH_HANDOFF`, STOP or route to `/nuclio:work` to rebuild only proposal sidecars; do not accept Finish, rerun product Tasks, or reuse chat history as authority.
 5. Continue only when `next-action` returns `REQUEST_FINISH_DECISION` and includes `finish-readiness` with `ready=true`. The readiness identity must bind current `decision_sha256`, `finish_plan_sha256`, and `decision_state_version` to the same `CHANGE_ROOT`.
@@ -23,7 +23,7 @@ Use progressive disclosure instead of copying protocol detail: [authority](../..
 
 ## Present decision packet
 
-Only after readiness `ready=true`, show the current `CHANGE_ROOT/decision.md` identity from readiness: `decision_sha256`, `finish_plan_sha256`, and `decision_state_version`. Present exactly these four sections:
+Only after readiness `ready=true`, show the current `CHANGE_ROOT/evidence/decision.md` identity from readiness: `decision_sha256`, `finish_plan_sha256`, and `decision_state_version`. Present exactly these four sections:
 
 - `Completion Verdict`
 - `Remaining Risks`

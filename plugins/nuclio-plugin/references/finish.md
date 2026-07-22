@@ -23,18 +23,18 @@ Finish 只能在 helper 判定 `CHANGE_ROOT=.dev-docs/changes/<change-id>` 下�
 - `CHANGE_ROOT/context.jsonl` 的 `context_fingerprint`
 - `CHANGE_ROOT/state.json` 的 `state_version`
 - `CHANGE_ROOT/research/` 中 relevant research identity when referenced by the completion proposal
-- `CHANGE_ROOT/completion.md` prose hash and `CHANGE_ROOT/completion.json` machine identity
+- `CHANGE_ROOT/evidence/completion.md` prose hash and `CHANGE_ROOT/evidence/completion.json` machine identity
 - mutation map hash
 - change-wide check summary hash
-- `CHANGE_ROOT/decision.md` prose hash and `CHANGE_ROOT/decision.json` identity
-- `CHANGE_ROOT/finish-plan.json` identity, including `knowledge_targets`, `archive_targets`, and `index_targets`
+- `CHANGE_ROOT/evidence/decision.md` prose hash and `CHANGE_ROOT/evidence/decision.json` identity
+- `CHANGE_ROOT/evidence/finish-plan.json` identity, including `knowledge_targets`, `archive_targets`, and `index_targets`
 - finish apply journal targets `CHANGE_ROOT/evidence/finish-apply.json` and optional `CHANGE_ROOT/evidence/finish-apply.md` prose
 
-Finish Gate 的用户 decision 只对这些 identity 生效。任何 artifact hash、state version、context fingerprint、completion proposal、Contract-bound `output_language`、target before hash 或 finish plan 改变，都必须重新请求 decision。Legacy 缺 sidecar 时只允许 `REBUILD_FINISH_HANDOFF` 受控重建 proposal sidecars；canonical artifact drift such as `MARKDOWN_HASH_MISMATCH`, `STALE_DECISION`, `STALE_FINISH_PLAN`, or `STALE_TARGET` must HALT rather than silently rebuild or accept.
+Finish Gate 的用户 decision 只对这些 identity 生效。任何 artifact hash、state version、context fingerprint、completion proposal、Contract-bound `output_language`、target before hash 或 finish plan 改变，都必须重新请求 decision。Legacy 缺 sidecar 时只允许 `REBUILD_FINISH_HANDOFF` 受控重建 proposal sidecars；root-level same-name `completion.*`, `decision.*`, or `finish-plan.json` under `CHANGE_ROOT` is not active authority and must not be migrated or used as fallback; canonical artifact drift such as `MARKDOWN_HASH_MISMATCH`, `STALE_DECISION`, `STALE_FINISH_PLAN`, or `STALE_TARGET` must HALT rather than silently rebuild or accept.
 
 ## decision.md 四段
 
-Finish 展示给用户的 `CHANGE_ROOT/decision.md` 必须只包含以下四个顶层决策段，段名固定为 English。段内维护者 prose 使用 Contract-bound `output_language`；machine fields、hash、path、command、enum、raw output 与 quoted evidence 保持 English/original：
+Finish 展示给用户的 `CHANGE_ROOT/evidence/decision.md` 必须只包含以下四个顶层决策段，段名固定为 English。段内维护者 prose 使用 Contract-bound `output_language`；machine fields、hash、path、command、enum、raw output 与 quoted evidence 保持 English/original：
 
 1. `Completion Verdict`
 2. `Remaining Risks`
@@ -96,7 +96,7 @@ Finish 只接受用户以 trim-only exact token 表达的四种 decision，且 h
 - `defer`（alias：`暂缓`）
 - `reject`（alias：`拒绝`）
 
-这些 token 必须针对当前展示的 `CHANGE_ROOT/decision.md` identity。Controller 可以要求用户选择其中之一或列出的 exact alias，但不能把“看起来不错”、“继续吧”、“继续”、“可以”、“我同意”、“LGTM”或其它模糊肯定推断为 `accept`。Finish 中 `继续` 无效且不会 apply。
+这些 token 必须针对当前展示的 `CHANGE_ROOT/evidence/decision.md` identity。Controller 可以要求用户选择其中之一或列出的 exact alias，但不能把“看起来不错”、“继续吧”、“继续”、“可以”、“我同意”、“LGTM”或其它模糊肯定推断为 `accept`。Finish 中 `继续` 无效且不会 apply。
 
 ## accept
 
@@ -180,7 +180,7 @@ Reject 不能被 Controller 转换为 request_changes，也不能保留隐含 ap
 
 Fresh accept 后，helper 派生 finish packet，packet `role` 为 `finish`，包含 `completion_sha256`、`decision_sha256`、`finish_plan_sha256`、Contract-bound `output_language`、target `target_language`/`language_source` metadata 与 `snapshots`。Finish apply 的执行必须满足：
 
-1. 重新校验 `CHANGE_ROOT/state.json` version、`CHANGE_ROOT/decision.md` identity、`CHANGE_ROOT/completion.md` proposal hash 与 finish plan hash。
+1. 重新校验 `CHANGE_ROOT/state.json` version、`CHANGE_ROOT/evidence/decision.md` identity、`CHANGE_ROOT/evidence/completion.md` proposal hash 与 finish plan hash。
 2. 读取所有 knowledge target 的 before identity 与 target language metadata。
 3. 对 existing target 保持现有主要语言或 `user_confirmed` 语言；对 new target 使用 Contract-bound `output_language`；若 metadata missing/unknown/contradictory，STOP before write。
 4. 按 `Archive Decision` 的 apply order 写入列明 targets。
@@ -201,4 +201,4 @@ Finish 阶段禁止：
 - 在 unknown target language 下继续写入。
 - 使用 raw transcript、agent summary 或 chat history 作为 decision authority。
 - 因 artifact existence 推断 Finish approval。
-- 将 active change authority 写到 project-root `.dev-docs/` artifacts；必须使用 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl`、`CHANGE_ROOT/state.json`、`CHANGE_ROOT/research/`、`CHANGE_ROOT/completion.json`、`CHANGE_ROOT/decision.json`、`CHANGE_ROOT/finish-plan.json` 与 `CHANGE_ROOT/evidence/finish-apply.json` 作为 machine authority；`CHANGE_ROOT/completion.md`、`CHANGE_ROOT/decision.md` 与 `CHANGE_ROOT/evidence/finish-apply.md` 仅为 maintainer prose 展示层。
+- 将 active change authority 写到 project-root `.dev-docs/` artifacts；必须使用 `CHANGE_ROOT/contract.yaml`、`CHANGE_ROOT/context.jsonl`、`CHANGE_ROOT/state.json`、`CHANGE_ROOT/research/`、`CHANGE_ROOT/evidence/completion.json`、`CHANGE_ROOT/evidence/decision.json`、`CHANGE_ROOT/evidence/finish-plan.json` 与 `CHANGE_ROOT/evidence/finish-apply.json` 作为 machine authority；`CHANGE_ROOT/evidence/completion.md`、`CHANGE_ROOT/evidence/decision.md` 与 `CHANGE_ROOT/evidence/finish-apply.md` 仅为 maintainer prose 展示层。

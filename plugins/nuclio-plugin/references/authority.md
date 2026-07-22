@@ -10,7 +10,7 @@ Nuclio 的 authority 只来自项目内 `.dev-docs/` 文件和 deterministic hel
 - `CHANGE_ROOT/context.jsonl` 是允许读取的 bounded context 事实源；它只授权读取，不授权写入。
 - `CHANGE_ROOT/state.json` 是 lifecycle、Gate ledger、Task 状态、blocker、completion、decision 与 history 的事实源。
 - `CHANGE_ROOT/research/` 只保存当前 change 的 bounded research artifact；它不能扩展 context 读授权或写授权。
-- Canonical Finish handoff sidecars are `CHANGE_ROOT/completion.md`, `CHANGE_ROOT/completion.json`, `CHANGE_ROOT/decision.md`, `CHANGE_ROOT/decision.json`, and `CHANGE_ROOT/finish-plan.json`; these are the cross-Session Work→Finish machine/prose handoff.
+- Canonical Finish handoff sidecars are `CHANGE_ROOT/evidence/completion.md`, `CHANGE_ROOT/evidence/completion.json`, `CHANGE_ROOT/evidence/decision.md`, `CHANGE_ROOT/evidence/decision.json`, and `CHANGE_ROOT/evidence/finish-plan.json`; these are the cross-Session Work→Finish machine/prose handoff. Root-level same-name `completion.*`, `decision.*`, or `finish-plan.json` under `CHANGE_ROOT` is not active authority and must not be used as fallback.
 - Evidence authority 只在 `CHANGE_ROOT/evidence/`：Task evidence 位于 `CHANGE_ROOT/evidence/tasks/<task-id>/...`，finish apply journal evidence 位于 `CHANGE_ROOT/evidence/finish-apply.json`，可选维护者 prose 位于 `CHANGE_ROOT/evidence/finish-apply.md`。
 - Evidence 文件记录 helper 可校验的 hash、fingerprint、snapshot、check output 与 before/after identity；它们不能绕过 Gate。
 - Worker packet artifact existence、packet hash 或 bare SHA 不是 dispatch authority。`packet.schema.json is the only packet shape/role authority`；state-helper is the state-specific packet identity and transition authority for packet id, current state identity, freshness, Task, ownership, and atomic bind/start.
@@ -20,7 +20,7 @@ Nuclio 的 authority 只来自项目内 `.dev-docs/` 文件和 deterministic hel
 - Artifact existence != approval。存在 contract、packet、evidence、report 或 summary 不代表用户批准。
 - Contract Gate 和 Finish Gate 是唯一日常用户 Gate，必须由当前轮 explicit approval 表达。
 - Fresh Contract approval 必须绑定 `CHANGE_ROOT/contract.yaml` artifact hash、`CHANGE_ROOT/context.jsonl` fingerprint、`CHANGE_ROOT/state.json` version、mutation_targets、Contract-bound `output_language` 与 approval identity；产品 mutation 前必须存在该 fresh approval。
-- Fresh Finish approval 必须绑定 `CHANGE_ROOT/completion.json` proposal、`CHANGE_ROOT/decision.json` identity、`CHANGE_ROOT/finish-plan.json`、`CHANGE_ROOT/state.json` version 与 approval identity；长期 knowledge、index、archive 或 `CHANGE_ROOT/evidence/finish-apply.json`/`.md` 写入前必须存在该 fresh approval。
+- Fresh Finish approval 必须绑定 `CHANGE_ROOT/evidence/completion.json` proposal、`CHANGE_ROOT/evidence/decision.json` identity、`CHANGE_ROOT/evidence/finish-plan.json`、`CHANGE_ROOT/state.json` version 与 approval identity；长期 knowledge、index、archive 或 `CHANGE_ROOT/evidence/finish-apply.json`/`.md` 写入前必须存在该 fresh approval。
 - Contract Gate 只接受 helper 定义的 trim-only exact aliases `approve`、`批准`、`同意`、`继续` 并存储 canonical `approve`；Finish Gate 只接受 `accept`/`同意`、`request_changes`/`要求修改`、`defer`/`暂缓`、`reject`/`拒绝` 并存储 canonical English decision。不要把所有中文肯定词都视为 accept；Finish 中 `继续`、`可以`、`我同意` 等不是 exact accept。
 - 如果 contract、context、state version、mutation_targets、`output_language`、decision 或 relevant artifact hash 改变，旧 approval 失效，状态必须转入需要重新决策或 repair 的路径。
 
