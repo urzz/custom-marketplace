@@ -28,18 +28,18 @@ Some plugins may also include shared references and helper scripts. The Nuclio v
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator`。
 - `dev-stack`：提供 `/skill-forge` 和 `/commit`；`/skill-forge` 是 risk-adaptive skill 创建、修改、审查与验证入口，覆盖 L0-L3、deterministic-first、单 Controller 顺序执行、L2/L3 file-backed 状态、conditional review/eval 和 L3 strict 路径。
-- `nuclio`：提供 `/nuclio:init` 和 `/nuclio:work`；`/nuclio:init` 负责 v2 `.dev-docs` setup/repair/`legacy/v1` 整体移动，`/nuclio:work` 负责基于 `change.md` 的人本 change 工作流。
+- `nuclio`：提供 `/nuclio:init` 和 `/nuclio:work`；`/nuclio:init` 只负责 v2 `.dev-docs` skeleton setup/repair/`legacy/v1` 整体移动，`/nuclio:work` 负责三层 `change.md` Spec、`plan.yaml` 批准合同、`state.yaml` 当前恢复状态的人本 change 工作流。
 
 ## Key Files
 
 - `.claude-plugin/marketplace.json`: Determines which plugins Claude Code can discover.
-- `plugins/<plugin-name>/.claude-plugin/plugin.json`: Defines a plugin's name, description, version, and author metadata.
+- `plugins/<plugin-name>/.claude-plugin/plugin.json`: Defines the plugin's name, description, version, and author metadata.
 - `plugins/<plugin-name>/skills/<skill-name>/SKILL.md`: Defines skill metadata and the actual prompt.
 - `plugins/<plugin-name>/skills/<skill-name>/references/`: Optional skill-local references. Dev-stack uses this for the skill-forge review-state protocol, templates, and validation checklist.
 - `plugins/<plugin-name>/skills/<skill-name>/agents/`: Optional skill-local agents. Dev-stack uses this for `skills/skill-forge/agents/skill-creator-eval.md`.
 - `plugins/<plugin-name>/skills/<skill-name>/scripts/`: Optional skill-local deterministic helper scripts and tests. Dev-stack uses this for `review-state-helper.py`, `plan_contract.py`, `plan-task-query.py`, and unittest coverage.
 - `plugins/<plugin-name>/references/`: Optional plugin-level shared references. Nuclio v2 uses `workflow.md`, `change-format.md`, `knowledge.md`, `context-hygiene.md`, and `eval-prompts.md` as current runtime authority.
-- `plugins/<plugin-name>/scripts/`: Optional plugin-level deterministic helper scripts and tests. Nuclio v2 uses `change.py`, `test_change.py`, and `test_static_plugin.py`.
+- `plugins/<plugin-name>/scripts/`: Optional plugin-level deterministic helper scripts and tests. Nuclio v2 has exactly one runtime helper, `change.py`, plus `test_change.py` and `test_static_plugin.py`.
 - `plugins/nuclio-plugin/docs/research/contract-workbench-redesign/`: Historical research and design inputs for the earlier Nuclio redesign. These documents preserve design rationale but are not runtime authority.
 - `plugins/nuclio-plugin/docs/research/human-centered-workflow-redesign/`: Historical research and design inputs for the Nuclio v2 human-centered workflow. The proposal is preserved as design context only; canonical behavior remains in Nuclio skills, references, and scripts.
 
@@ -94,13 +94,19 @@ For Nuclio v2 changes, keep all of the following in sync:
 
 Nuclio v2 current behavior:
 
-- Daily use goes through `/nuclio:work`; `/nuclio:init` is limited to v2 skeleton setup, navigation repair, and whole-directory movement of old `.dev-docs` content into `.dev-docs/legacy/v1/`.
-- A normal change keeps one persistent process file at `.dev-docs/changes/<change-id>/change.md`; Git working tree, code, configuration, tests, and CI are execution facts.
-- Work follows a sequential lifecycle: locate/create change, clarify intent, draft a human-readable plan, obtain user approval, implement, validate, apply risk-based review, optionally distill long-term knowledge after user confirmation, and archive.
-- Human-in-the-Loop approval is mandatory before implementation plans are executed. Knowledge confirmation is conditional: only qualified candidates are proposed, and refusal does not affect validated product results or archive.
-- The main session acts as coordinator/orchestrator. It may handle small low-risk work directly or use generic subagents based on complexity; extra critic/review is conditional on risk or explicit user request, not a fixed protocol-agent pipeline.
+- Daily use goes through `/nuclio:work`; `/nuclio:init` is limited to v2 skeleton setup, navigation repair, and whole-directory movement of old `.dev-docs` content into `.dev-docs/legacy/v1/`. `init` never creates ordinary change artifacts, never approves a Plan, never initializes State, and never implements product work.
+- Ordinary active changes use three file-backed artifacts under `.dev-docs/changes/<change-id>/`: `change.md` is the human-readable Spec authority, `plan.yaml` is the approved execution contract, and `state.yaml` is the only dynamic recovery-state artifact.
+- `plugins/nuclio-plugin/scripts/change.py` is the only runtime helper and the only writer for `state.yaml`; no `workflow.py`, second helper, subprocess state protocol, or hidden runtime state store exists.
+- Nuclio runtime depends on PyYAML. `plan.yaml` and `state.yaml` use native YAML with duplicate-key rejection, safe loading/dumping, input-size limits, explicit schema/type checks, and a stable dependency error when PyYAML is missing.
+- Product mutation is gated by file-first approval: complete Spec and Plan are written to files and `validate-plan` passes; the terminal default shows only artifact paths, a 1-3 line summary, risk/review/repair policy, Task count, `allowed_paths` summary, key exit code, and a natural-language approval prompt.
+- Plan uses change-level `allowed_paths` for write boundaries. Nuclio runtime does not use per-Task files ownership, owner mapping, finding owner routing, or behavioral-eval owner fields.
+- Each implementation Task and each approved in-scope repair creates exactly one selective-stage local checkpoint commit. Helper validation checks parent, subject, changed paths, clean index, PASS validation, and allowed-path boundaries; Nuclio never auto-squashes, resets, rebases, stashes, or rewrites history.
+- `state.yaml` stays light: it stores current phase, current Task, review, validation, repair, blocker, `next_action`, checkpoint identities, and hashes needed for recovery. It must not store complete transition history, full diffs, transcript, long test logs, agent messages, file-content snapshots, or duplicate Git history.
+- Small, well-bounded single-Task changes may be handled by the main session directly. Larger changes default to bounded generic subagent units when useful for context control, with sequential product writes and compact returns; only read-only exploration/review without write conflicts may run concurrently.
+- Review/validation failures may use `repair_policy: in-scope` only when paths remain inside `allowed_paths` and the approved Goal/Constraints/Acceptance/risk/contract do not change. Scope expansion, dependency/API/migration changes, irreversible/outward actions, or risk increases require a Plan revision and renewed file-first approval.
+- Work follows a sequential lifecycle: locate/create/resume change, clarify intent, write Spec and Plan, validate Plan, obtain user approval, initialize State, execute ordered Tasks with checkpoint commits, apply risk-based review and validation, decide in-scope repair when needed, report product results, optionally distill long-term knowledge after user confirmation, complete, and archive.
 - User-visible prose defaults to the user's current primary language; code, commands, paths, field names, and raw output remain literal.
-- The v2 maintenance boundary forbids runtime hooks, daemon behavior, MCP integration, project-local `.claude/` installation, `.nuclio/` runtime state, external Superpowers dependency, a v1 compatibility converter, a v1/v2 dual stack, or `changes/index.md`.
+- The v2 maintenance boundary forbids runtime hooks, daemon behavior, MCP integration, network service, project-local `.claude/` installation, `.nuclio/` runtime state, external Superpowers dependency, persistent process JSON, `changes/index.md`, a v1 compatibility converter, a v1/v2 dual stack, content snapshots, full State history, automatic fixer, owner budget, DAG scheduler, or parallel product write engine.
 
 Dev-stack skill 的通用同步原则：修改任一 skill 时，保持对应 `plugins/dev-stack/skills/<skill-name>/SKILL.md`、一层 `references/`、插件元数据、README / CLAUDE 说明与本地校验命令一致。`/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时必须同步这些文件、`plugins/dev-stack/.claude-plugin/plugin.json` 的版本、README / CLAUDE 说明与本地校验命令。`/commit` 必须维持自包含执行边界：不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，不使用 skill-forge 的 file-backed review-state、bounded agents、scripts 或 review-state helper，也不新增 runtime hook、daemon 或本地状态机制。最终 Conventional Commit 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未进入最终 staged diff 的内容不得影响最终消息。内部行为变更不得误写成 marketplace source、plugin name 或外部依赖变化。
 
@@ -162,6 +168,14 @@ claude plugin validate plugins/dev-stack --strict
 ```
 
 ```bash
+python3 -c 'import yaml; print(yaml.__version__)'
+```
+
+```bash
+python3 plugins/nuclio-plugin/scripts/change.py --help >/dev/null
+```
+
+```bash
 python3 -m unittest discover -s plugins/nuclio-plugin/scripts -p 'test_*.py'
 ```
 
@@ -175,11 +189,18 @@ claude --version
 
 ## Current Known Constraints
 
-- The repository currently has no application code, test code, package manager manifest, or build scripts; do not assume any npm / pnpm / bun workflow exists.
+- The repository currently has no application code, package manager manifest, or build scripts; do not assume any npm / pnpm / bun workflow exists.
 - This is a marketplace/plugin repository. Preserve the hierarchy “marketplace manifest → plugin metadata → skill directory,” with optional references and scripts when a plugin needs them.
 - Dev-stack skill-forge review state is file-backed only under ignored `.skill-forge/<run>/` directories. It is not a daemon, runtime service, background worker, external orchestration layer, MCP integration, runtime hook, DAG scheduler, parallel write engine, or external state store.
 - Dev-stack skill-forge first-version product writes are sequential; do not add parallel implementation dispatch or cross-owner auto-selection without a new confirmed contract.
 - Dev-stack skill-forge L2/L3 state, ledger, budget, hash drift, recovery, completion, risk/review policy, and transition behavior are maintained by `review-state-helper.py`, `plan_contract.py`, `plan-task-query.py`, and the canonical review-state protocol.
 - Nuclio v2 source of truth is the native plugin runtime under `plugins/nuclio-plugin/skills/{init,work}/`, `plugins/nuclio-plugin/references/{workflow,change-format,knowledge,context-hygiene,eval-prompts}.md`, and `plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}`.
-- Nuclio v2 deliberately does not add runtime hooks, daemon behavior, MCP server integration, project-local `.claude/` installation, `.nuclio/` runtime state, external Superpowers dependency, v1 compatibility converter, or a v1/v2 dual-stack runtime.
-- Nuclio v2 recovery is centered on `.dev-docs/changes/<change-id>/change.md`; old `.dev-docs` content may only be moved as a whole into `.dev-docs/legacy/v1/`.
+- Nuclio v2 runtime helper is exactly `plugins/nuclio-plugin/scripts/change.py`; do not add `workflow.py`, a second State writer, subprocess status protocol, runtime schema service, daemon, hook, MCP server, network service, or hidden state directory.
+- Nuclio v2 depends on PyYAML and no other third-party runtime dependency. Keep YAML safety checks, duplicate-key rejection, explicit schema/type validation, safe dump, and stable missing-dependency behavior intact.
+- Nuclio v2 active changes use three artifacts: `change.md` for Spec, `plan.yaml` for approved contract, and `state.yaml` for current recovery State. Do not reintroduce a single mixed process file, dynamic status authority in `change.md`, or full transition history in State.
+- Nuclio v2 Plan uses change-level `allowed_paths`; do not add runtime per-Task files ownership, path owner uniqueness, owner mapping, finding routing, behavioral eval owner fields, or automatic fixer routing.
+- Nuclio v2 checkpoints use one selective-stage local commit per implementation Task or in-scope repair. Do not introduce content snapshots, automatic squash/reset/rebase/stash/history rewrite, or checkpoint-less completion.
+- Nuclio v2 product writes remain sequential. Do not add DAG scheduling, parallel write execution, cross-owner task routing, or a fixed Nuclio-specific implementer/reviewer/fixer pipeline.
+- Nuclio v2 recovery starts from `change.py status` and `change.py next-action`, then Git HEAD/status/diff, checkpoint commits, and deterministic evidence. Do not use chat transcript, agent claim, long logs in State, or archived v1 protocol files as current authority.
+- Nuclio v2 deliberately does not add project-local `.claude/` installation, `.nuclio/` runtime state, persistent process JSON, `.dev-docs/changes/index.md`, external Superpowers dependency, v1 compatibility converter, or a v1/v2 dual-stack runtime.
+- Nuclio v2 clear legacy content may only be moved as a whole into `.dev-docs/legacy/v1/`; it is not parsed, converted, or restored as current runtime authority.
