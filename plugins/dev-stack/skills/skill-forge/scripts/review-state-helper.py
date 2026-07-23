@@ -13,7 +13,13 @@ import subprocess
 import sys
 import tempfile
 
-import yaml
+from plan_contract import (
+    PlanContractError,
+    expected_fix_subject,
+    expected_task_subject,
+    load_plan_contract,
+    valid_ownership_path,
+)
 
 
 SCHEMA_VERSION = 1
@@ -24,7 +30,6 @@ GATES = (
 FINAL_GATES = set(GATES[1:])
 HALTED_PREFIX = "HALTED_"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-INVALID_PATH_MARKERS = set("*?[]{}")
 
 
 class ReviewStateError(Exception):
@@ -197,49 +202,40 @@ def load_and_validate_state(path, repo_root=None, check_hashes=True):
             artifact = Path(workflow.get(path_key, ""))
             if not artifact.is_file() or sha256_file(artifact) != workflow.get(hash_key):
                 raise ReviewStateError("ARTIFACT_HASH_DRIFT", str(artifact))
+    hydrate_legacy_state_contract(state)
     return state
 
 
-def valid_ownership_path(value):
-    if not isinstance(value, str) or not value or value != value.strip():
-        return False
-    if "\\" in value or any(marker in value for marker in INVALID_PATH_MARKERS):
-        return False
-    path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts or "." in path.parts:
-        return False
-    if any(character.isspace() for character in value):
-        return False
-    return path.as_posix() == value
+def hydrate_legacy_state_contract(state):
+    try:
+        contract = load_plan_contract(state["workflow"]["plan_path"])
+    except PlanContractError as exc:
+        raise ReviewStateError(exc.code, exc.detail) from exc
+    state["artifacts"].setdefault("run_risk_level", contract.run_risk_level)
+    scope = state["workflow"].get("scope")
+    for task_id, task in state["tasks"].items():
+        raw = contract.tasks.get(str(task_id))
+        require(raw is not None, "INVALID_STATE_SCHEMA", task_id)
+        meta = raw["meta"]
+        task.setdefault("risk_level", meta["risk_level"])
+        task.setdefault("review_policy", meta["review_policy"])
+        task.setdefault("expected_subject", expected_task_subject(scope, task_id, raw["name"]))
+        task.setdefault("deterministic_evidence", [])
 
 
-def parse_tasks(plan):
-    tasks = plan.get("tasks")
-    require(isinstance(tasks, list) and tasks, "INVALID_PLAN_TASKS")
+def parse_tasks(contract):
     parsed = {}
-    for raw in tasks:
-        require(isinstance(raw, dict) and "id" in raw, "INVALID_PLAN_TASK")
-        task_id = str(raw["id"])
-        require(task_id not in parsed, "DUPLICATE_TASK_ID", task_id)
-        files = raw.get("files", {})
-        require(isinstance(files, dict), "INVALID_PLAN_TASK")
-        ownership = {}
-        seen = set()
-        for operation in ("create", "modify", "delete"):
-            paths = files.get(operation, [])
-            require(isinstance(paths, list), "INVALID_PLAN_TASK")
-            normalized = []
-            for path in paths:
-                require(valid_ownership_path(path), "INVALID_OWNERSHIP_PATH", path)
-                require(path not in seen, "DUPLICATE_OWNERSHIP_PATH", path)
-                seen.add(path)
-                normalized.append(path)
-            ownership[operation] = normalized
+    for task_id in contract.task_order:
+        raw = contract.tasks[task_id]
+        meta = raw["meta"]
         parsed[task_id] = {
             "status": "READY",
             "task_base": None,
             "task_head": None,
-            "ownership": ownership,
+            "ownership": raw["files"],
+            "risk_level": meta["risk_level"],
+            "review_policy": meta["review_policy"],
+            "expected_subject": None,
             "fix_budget": {"maximum": 2, "used": 0, "remaining": 2},
             "review_attempt": 0,
             "fix_attempt": 0,
@@ -249,6 +245,7 @@ def parse_tasks(plan):
             "authorized_finding_ids": [],
             "previous_open_blocker_fingerprints": [],
             "cannot_verify": [],
+            "deterministic_evidence": [],
         }
     return parsed
 
@@ -265,11 +262,14 @@ def cmd_init(args):
     validate_commit(repo_root, args.initial_base)
     require(current_head(repo_root) == args.initial_base, "HEAD_MISMATCH")
     try:
-        plan = yaml.safe_load(Path(args.plan).read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise ReviewStateError("INVALID_PLAN", str(exc)) from exc
-    require(isinstance(plan, dict), "INVALID_PLAN")
-    tasks = parse_tasks(plan)
+        contract = load_plan_contract(args.plan)
+    except PlanContractError as exc:
+        raise ReviewStateError(exc.code, exc.detail) from exc
+    tasks = parse_tasks(contract)
+    for task_id in contract.task_order:
+        task = tasks[task_id]
+        raw = contract.tasks[task_id]
+        task["expected_subject"] = expected_task_subject(args.scope, task_id, raw["name"])
 
     snapshot.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.rubric_source, snapshot)
@@ -295,6 +295,7 @@ def cmd_init(args):
         "workflow": workflow,
         "artifacts": {
             "task_order": list(tasks),
+            "run_risk_level": contract.run_risk_level,
             "gate_attempts": {gate: 0 for gate in FINAL_GATES},
             "controller_resolutions": [],
         },
@@ -359,6 +360,62 @@ def validate_head_change(repo_root, base, head):
     require_ancestor(repo_root, base, head)
 
 
+def commit_count(repo_root, base, head):
+    return int(run_git(repo_root, "rev-list", "--count", f"{base}..{head}"))
+
+
+def commit_subject(repo_root, head):
+    return run_git(repo_root, "log", "-1", "--format=%s", head)
+
+
+def validate_single_commit_subject(repo_root, base, head, expected_subject):
+    require(commit_count(repo_root, base, head) == 1, "COMMIT_COUNT_MISMATCH")
+    require(commit_subject(repo_root, head) == expected_subject, "COMMIT_SUBJECT_MISMATCH")
+
+
+def derive_expected_fix_subject_for_task(state, task_id, task):
+    return expected_fix_subject(state["workflow"]["scope"], task_id, task["fix_attempt"])
+
+
+def expected_fix_subject_for_task(state, task_id, task):
+    stored = task.get("expected_fix_subject")
+    if non_empty_string(stored):
+        return stored
+    return derive_expected_fix_subject_for_task(state, task_id, task)
+
+
+def load_optional_json(path):
+    if path is None:
+        return None
+    return load_json_object(path)
+
+
+def validate_deterministic_evidence(payload, task_id, base_sha, head_sha):
+    require(isinstance(payload, dict), "INVALID_DETERMINISTIC_EVIDENCE")
+    evidence = payload.get("checks", payload)
+    if isinstance(evidence, dict):
+        evidence = [evidence]
+    require(isinstance(evidence, list) and evidence, "INVALID_DETERMINISTIC_EVIDENCE")
+    normalized = []
+    for item in evidence:
+        require(isinstance(item, dict), "INVALID_DETERMINISTIC_EVIDENCE")
+        require(str(item.get("task_id")) == str(task_id), "INVALID_DETERMINISTIC_EVIDENCE")
+        require(item.get("base_sha") == base_sha, "BASE_MISMATCH")
+        require(item.get("head_sha") == head_sha, "HEAD_MISMATCH")
+        require(non_empty_string(item.get("command")), "INVALID_DETERMINISTIC_EVIDENCE")
+        require(protocol_integer(item.get("exit_code")), "INVALID_DETERMINISTIC_EVIDENCE")
+        require(non_empty_string(item.get("result_summary")), "INVALID_DETERMINISTIC_EVIDENCE")
+        artifact = item.get("artifact_identity")
+        require(
+            (isinstance(artifact, dict) and bool(artifact)) or non_empty_string(artifact),
+            "INVALID_DETERMINISTIC_EVIDENCE",
+        )
+        if item["exit_code"] != 0:
+            raise ReviewStateError("DETERMINISTIC_CHECK_FAILED", item)
+        normalized.append(copy.deepcopy(item))
+    return normalized
+
+
 def changed_paths(repo_root, base, head):
     output = run_git(repo_root, "diff", "--name-only", f"{base}..{head}")
     return [line for line in output.splitlines() if line]
@@ -378,6 +435,26 @@ def cmd_record_implementation(args, state):
     require(args.base_head == task["task_base"] == task["task_head"], "BASE_MISMATCH")
     validate_head_change(state["workflow"]["repo_root"], args.base_head, args.new_head)
     paths = require_owned_diff(state, task, args.base_head, args.new_head)
+    validate_single_commit_subject(
+        state["workflow"]["repo_root"], args.base_head, args.new_head, task["expected_subject"]
+    )
+    evidence_payload = load_optional_json(args.deterministic_evidence)
+    if task["review_policy"] == "final-only":
+        evidence = validate_deterministic_evidence(evidence_payload, args.task_id, args.base_head, args.new_head)
+        task["deterministic_evidence"] = evidence
+        task["task_head"] = args.new_head
+        state["workflow"]["current_head"] = args.new_head
+        before = task["status"]
+        advance_after_pass(state, str(args.task_id), {
+            "gate": "TASK_REVIEW",
+            "attempt": 0,
+            "base_sha": args.base_head,
+            "head_sha": args.new_head,
+        })
+        state["history"][-1]["event"] = "DETERMINISTIC_TASK_PASSED"
+        state["history"][-1]["from"] = before
+        return {"task_id": args.task_id, "changed_paths": paths, "status": state["workflow"]["status"]}
+    require(evidence_payload is None, "INVALID_DETERMINISTIC_EVIDENCE")
     task["task_head"] = args.new_head
     task["review_attempt"] = 1
     state["workflow"]["current_head"] = args.new_head
@@ -423,6 +500,12 @@ def cmd_record_fix(args, state):
     status = report.get("status")
     if status == "FIXED":
         validate_head_change(state["workflow"]["repo_root"], args.base_head, args.new_head)
+        validate_single_commit_subject(
+            state["workflow"]["repo_root"],
+            args.base_head,
+            args.new_head,
+            expected_fix_subject_for_task(state, str(args.task_id), task),
+        )
         expected_base = (
             state["workflow"]["current_head"]
             if state["workflow"]["current_gate"] in FINAL_GATES
@@ -1021,6 +1104,7 @@ def cmd_authorize_fix(args, state):
     task["fix_budget"]["remaining"] -= 1
     task["fix_attempt"] += 1
     task["authorized_finding_ids"] = expected
+    task["expected_fix_subject"] = derive_expected_fix_subject_for_task(state, str(args.task_id), task)
     before = transition_task(state, args.task_id, "FIXING")
     append_history(state, "FIX_AUTHORIZED", before, "FIXING", task_id=args.task_id,
                    gate=state["workflow"]["current_gate"], attempt=task["fix_attempt"],
@@ -1146,13 +1230,20 @@ def build_parser():
     command.add_argument("--task-id", required=True)
     command.add_argument("--expected-head", required=True)
 
-    for name in ("record-implementation", "record-fix"):
-        command = subparsers.add_parser(name)
-        command.add_argument("--state", required=True)
-        command.add_argument("--task-id", required=True)
-        command.add_argument("--base-head", required=True)
-        command.add_argument("--new-head", required=True)
-        command.add_argument("--report", required=True)
+    command = subparsers.add_parser("record-implementation")
+    command.add_argument("--state", required=True)
+    command.add_argument("--task-id", required=True)
+    command.add_argument("--base-head", required=True)
+    command.add_argument("--new-head", required=True)
+    command.add_argument("--report", required=True)
+    command.add_argument("--deterministic-evidence")
+
+    command = subparsers.add_parser("record-fix")
+    command.add_argument("--state", required=True)
+    command.add_argument("--task-id", required=True)
+    command.add_argument("--base-head", required=True)
+    command.add_argument("--new-head", required=True)
+    command.add_argument("--report", required=True)
 
     command = subparsers.add_parser("import-review")
     command.add_argument("--state", required=True)

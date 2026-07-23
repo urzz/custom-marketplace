@@ -27,7 +27,7 @@ Some plugins may also include shared references and helper scripts. The Nuclio v
 当前 marketplace 注册三个插件：
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator`。
-- `dev-stack`：提供 `/skill-forge` 和 `/commit`。
+- `dev-stack`：提供 `/skill-forge` 和 `/commit`；`/skill-forge` 是 risk-adaptive skill 创建、修改、审查与验证入口，覆盖 L0-L3、deterministic-first、单 Controller 顺序执行、L2/L3 file-backed 状态、conditional review/eval 和 L3 strict 路径。
 - `nuclio`：提供 `/nuclio:init` 和 `/nuclio:work`；`/nuclio:init` 负责 v2 `.dev-docs` setup/repair/`legacy/v1` 整体移动，`/nuclio:work` 负责基于 `change.md` 的人本 change 工作流。
 
 ## Key Files
@@ -37,7 +37,7 @@ Some plugins may also include shared references and helper scripts. The Nuclio v
 - `plugins/<plugin-name>/skills/<skill-name>/SKILL.md`: Defines skill metadata and the actual prompt.
 - `plugins/<plugin-name>/skills/<skill-name>/references/`: Optional skill-local references. Dev-stack uses this for the skill-forge review-state protocol, templates, and validation checklist.
 - `plugins/<plugin-name>/skills/<skill-name>/agents/`: Optional skill-local agents. Dev-stack uses this for `skills/skill-forge/agents/skill-creator-eval.md`.
-- `plugins/<plugin-name>/skills/<skill-name>/scripts/`: Optional skill-local deterministic helper scripts and tests. Dev-stack uses this for `review-state-helper.py`, `plan-task-query.py`, and unittest coverage.
+- `plugins/<plugin-name>/skills/<skill-name>/scripts/`: Optional skill-local deterministic helper scripts and tests. Dev-stack uses this for `review-state-helper.py`, `plan_contract.py`, `plan-task-query.py`, and unittest coverage.
 - `plugins/<plugin-name>/references/`: Optional plugin-level shared references. Nuclio v2 uses `workflow.md`, `change-format.md`, `knowledge.md`, `context-hygiene.md`, and `eval-prompts.md` as current runtime authority.
 - `plugins/<plugin-name>/scripts/`: Optional plugin-level deterministic helper scripts and tests. Nuclio v2 uses `change.py`, `test_change.py`, and `test_static_plugin.py`.
 - `plugins/nuclio-plugin/docs/research/contract-workbench-redesign/`: Historical research and design inputs for the earlier Nuclio redesign. These documents preserve design rationale but are not runtime authority.
@@ -111,8 +111,24 @@ Dev-stack `skill-forge` 变更还需要保持以下专用文件同步：
 - `plugins/dev-stack/agents/*.md`
 - `plugins/dev-stack/skills/skill-forge/agents/skill-creator-eval.md`
 - `plugins/dev-stack/skills/skill-forge/scripts/*.py`
+- `plugins/dev-stack/.claude-plugin/plugin.json`
+- `.claude-plugin/marketplace.json`
+- `README.md`
+- `CLAUDE.md`
 
-对于 dev-stack `skill-forge`，`plugins/dev-stack/skills/skill-forge/scripts/review-state-helper.py` 是 file-backed review state 的唯一写入者。Bounded implementer 和 fixer agents 仅限 `Read, Edit, Write, Grep, Glob, Bash`；bounded reviewer 和 final-reviewer agents 仅限 `Read, Grep, Glob, Bash`；skill-local eval agent 仍保持 simulation-only 且由 flag gate 控制。
+维护 dev-stack `skill-forge` 时保持以下不变量：
+
+- L0/L1/L2/L3 语义必须与 `plugins/dev-stack/skills/skill-forge/SKILL.md` 和 `references/review-state-protocol.md` 一致：L0 机械直改、L1 常规有界、L2 structural file-backed、L3 high-risk strict。
+- `plan_contract.py` 是 L2/L3 Plan meta 的确定性合同校验入口；`risk_level` 仅接受 `L2`/`L3`，`review_policy` 仅接受 `final-only`/`task-and-final`，L3 必须 `task-and-final`，含任一 L3 Task 的 run 中每个 Task 都必须 `task-and-final`。
+- deterministic-first 是强制维护原则：JSON/YAML/schema/static/test/plugin validation 等可本地运行的检查必须先于 LLM reviewer/eval；LLM review 不能替代失败的确定性校验。
+- 主 Session 是唯一 Controller；bounded agents 不得修改 state、Gate、rubric、review-state.json、helper ledgers 或 Controller resolutions。
+- L2/L3 中 `plugins/dev-stack/skills/skill-forge/scripts/review-state-helper.py` 是 file-backed `review-state.json` 的唯一写入者，`next-action` 是状态跳转唯一权威；`plan-task-query.py` 负责生成 stable task brief。
+- Bounded implementer 和 fixer agents 仅限 `Read, Edit, Write, Grep, Glob, Bash`；bounded reviewer 和 final-reviewer agents 仅限 `Read, Grep, Glob, Bash`；skill-local eval agent 保持 simulation-only 且由 flag gate 控制。
+- L2/L3 保留 checkpoint commits、cumulative review package、恢复语义、helper ledger、共享 owner-level fix budget、final review、structural validation 和适用 behavioral validation。
+- conditional review/eval 必须按风险和 `risk/review policy` 触发：L2 可 `final-only` 或 `task-and-final`，E 为 0 或 1；L3 strict 保证每个 Task 都有 task-and-final review、mandatory final review、structural validation 和适用 behavioral validation。
+- L2/L3 Spec 与 Plan 使用一次联合实施批准；用户修改、scope 扩张、ownership 不清、验证不可观察、不可逆或外向动作出现时必须停止并升级或回到 Phase 3 重新确认。
+- 第一版不并行执行产品写入，不新增 DAG scheduler、外部 orchestration、MCP、network service、daemon、runtime hook、worktree 强依赖或新的项目外状态体系。
+- Squash/reset/rebase/history rewrite 不得进入 bounded agent prompt；只有验证完成后由主 Session 在当前用户明确同意下执行，用户拒绝 squash 仍可合法完成为 unsquashed。
 
 ## Common Commands
 
@@ -138,6 +154,10 @@ python3 -m unittest discover -s plugins/dev-stack/skills/skill-forge/scripts -p 
 ```
 
 ```bash
+python3 plugins/dev-stack/skills/skill-forge/scripts/plan_contract.py --help >/dev/null
+```
+
+```bash
 claude plugin validate plugins/dev-stack --strict
 ```
 
@@ -157,7 +177,9 @@ claude --version
 
 - The repository currently has no application code, test code, package manager manifest, or build scripts; do not assume any npm / pnpm / bun workflow exists.
 - This is a marketplace/plugin repository. Preserve the hierarchy “marketplace manifest → plugin metadata → skill directory,” with optional references and scripts when a plugin needs them.
-- Dev-stack skill-forge review state is file-backed only under ignored `.skill-forge/<run>/` directories. It is not a daemon, runtime service, background worker, or external state store.
+- Dev-stack skill-forge review state is file-backed only under ignored `.skill-forge/<run>/` directories. It is not a daemon, runtime service, background worker, external orchestration layer, MCP integration, runtime hook, DAG scheduler, parallel write engine, or external state store.
+- Dev-stack skill-forge first-version product writes are sequential; do not add parallel implementation dispatch or cross-owner auto-selection without a new confirmed contract.
+- Dev-stack skill-forge L2/L3 state, ledger, budget, hash drift, recovery, completion, risk/review policy, and transition behavior are maintained by `review-state-helper.py`, `plan_contract.py`, `plan-task-query.py`, and the canonical review-state protocol.
 - Nuclio v2 source of truth is the native plugin runtime under `plugins/nuclio-plugin/skills/{init,work}/`, `plugins/nuclio-plugin/references/{workflow,change-format,knowledge,context-hygiene,eval-prompts}.md`, and `plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}`.
 - Nuclio v2 deliberately does not add runtime hooks, daemon behavior, MCP server integration, project-local `.claude/` installation, `.nuclio/` runtime state, external Superpowers dependency, v1 compatibility converter, or a v1/v2 dual-stack runtime.
 - Nuclio v2 recovery is centered on `.dev-docs/changes/<change-id>/change.md`; old `.dev-docs` content may only be moved as a whole into `.dev-docs/legacy/v1/`.

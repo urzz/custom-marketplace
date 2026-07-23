@@ -11,7 +11,7 @@
 当前仓库包含：
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator` 技能，用于帮助用户起草 OpenClaw skill。
-- `dev-stack`：提供 `/skill-forge` 与 `/commit` 技能；`/skill-forge` 用于创建、设计和改进 Claude Code skill，`/commit` 用于自包含分析当前 Git 变更、生成单个 Conventional Commit，并在安全门禁下选择性暂存和提交。`/commit` 不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务；最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff。
+- `dev-stack`：提供 `/skill-forge` 与 `/commit` 技能；`/skill-forge` 用于创建、设计、修改、审查和验证 Claude Code skill，采用 L0-L3 风险自适应路径、deterministic-first 校验、单 Controller 顺序执行、L2/L3 file-backed 状态、conditional review/eval 和 L3 strict 高风险治理；`/commit` 用于自包含分析当前 Git 变更、生成单个 Conventional Commit，并在安全门禁下选择性暂存和提交。`/commit` 不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务；最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff。
 - `nuclio`：提供 Nuclio v2：`/nuclio:init` 负责 v2 `.dev-docs` setup、repair 和整个旧目录移动到 `legacy/v1`，`/nuclio:work` 是日常入口，围绕单一 `change.md` 执行可恢复的人类可读 change 工作流。
 
 ## 仓库结构
@@ -19,8 +19,9 @@
 - `.claude-plugin/marketplace.json`：市场清单，声明当前 marketplace 暴露的插件。
 - `plugins/<plugin-name>/.claude-plugin/plugin.json`：插件元数据。
 - `plugins/<plugin-name>/skills/<skill-name>/SKILL.md`：技能定义。
-- `plugins/<plugin-name>/skills/<skill-name>/references/`：skill 级协议、设计约束或参考资料（如 dev-stack/skill-forge 的 review-state 协议与模板；`plugins/dev-stack/skills/commit/references/` 存放 `/commit` 的变更分析和提交策略）。
-- `plugins/<plugin-name>/skills/<skill-name>/scripts/`：skill 级确定性辅助脚本与测试（如 dev-stack/skill-forge 的 `review-state-helper.py`、`plan-task-query.py` 与 unittest；`/commit` 自包含执行，不使用 skill-forge agents、scripts 或 review-state helper，也不新增 runtime hook、daemon、MCP 或本地状态机制）。
+- `plugins/<plugin-name>/skills/<skill-name>/references/`：skill 级协议、设计约束或参考资料（如 dev-stack/skill-forge 的 review-state 协议、模板和校验清单；`plugins/dev-stack/skills/commit/references/` 存放 `/commit` 的变更分析和提交策略）。
+- `plugins/<plugin-name>/skills/<skill-name>/agents/`：skill 级 agent 定义（如 dev-stack/skill-forge 的 `skill-creator-eval.md`，仅在明确 flag gate 下做 simulation-only eval）。
+- `plugins/<plugin-name>/skills/<skill-name>/scripts/`：skill 级确定性辅助脚本与测试（如 dev-stack/skill-forge 的 `review-state-helper.py`、`plan_contract.py`、`plan-task-query.py` 与 unittest；`/commit` 自包含执行，不使用 skill-forge agents、scripts 或 review-state helper，也不新增 runtime hook、daemon、MCP 或本地状态机制）。
 - `plugins/<plugin-name>/references/`：插件级共享参考资料。Nuclio v2 的当前运行时权威位于 `plugins/nuclio-plugin/references/`，包括 `workflow.md`、`change-format.md`、`knowledge.md`、`context-hygiene.md` 和 `eval-prompts.md`。
 - `plugins/<plugin-name>/scripts/`：插件级确定性辅助脚本与测试。Nuclio v2 使用 `plugins/nuclio-plugin/scripts/change.py`，并由 `test_change.py` 与 `test_static_plugin.py` 覆盖。
 - `plugins/nuclio-plugin/docs/research/contract-workbench-redesign/`：Nuclio 早期重构的历史研究与设计材料；用于追溯设计依据，不是 runtime authority。
@@ -39,6 +40,29 @@
 ```text
 plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 ```
+
+Dev-stack 的 `/skill-forge` 是风险自适应 skill 创建与维护入口：
+
+- L0 Mechanical：主 Session 直接做可逆、局部、机械变更，运行目标确定性检查，不派发 agent。
+- L1 Routine：默认主 Session 实施；需要时最多使用一个有界 implementation unit，并做相关确定性检查和一次 whole-diff review。
+- L2 Structural：使用 file-backed helper flow；Plan 中的 `risk_level` / `review_policy` 由 `plan_contract.py` 校验，可采用 `final-only` 或 `task-and-final`，只对风险任务进行 task review，并保留 mandatory final review 与至多一次行为 eval。
+- L3 High Risk：使用 strict file-backed path；所有 Task 都必须 `task-and-final`，保留 per-task review、mandatory final review、structural validation 和适用的 behavioral validation。
+- 所有级别都遵循 deterministic-first：能本地运行的 JSON/schema/static/test 检查必须先于 LLM review；失败时先修复或按协议报告，而不是用 reviewer 代替确定性校验。
+- 主 Session 是唯一 Controller，产品写入在第一版仍顺序执行；L2/L3 中 `review-state-helper.py` 是 `review-state.json` 唯一写入者，`next-action` 是状态跳转唯一权威。
+- Review/eval 是 conditional review/eval：L0 不派发，L1 只做 whole-diff review，L2 按 `review_policy` 和风险选择 task review/final review/eval，L3 走严格 task-and-final；行为 eval 只在用户行为、Routing、Gate、Pattern 或 Architecture 改动时运行。
+- 用户会在实施前遇到确认：L2/L3 对正式 Spec 与 YAML Plan 做一次联合批准；L0/L1 若用户已明确授权可逆有界变更且没有待选项，不重复确认，但不可逆、外向、扩范围或需用户选择的动作必须先确认。
+- 第一版不实现并行产品写入、DAG scheduler、外部 orchestration、MCP、daemon、runtime hook 或新的项目外状态体系。
+
+修改 `/skill-forge` 时需要保持以下内容同步：
+
+- `plugins/dev-stack/skills/skill-forge/SKILL.md`
+- `plugins/dev-stack/skills/skill-forge/references/*.md`
+- `plugins/dev-stack/agents/*.md`
+- `plugins/dev-stack/skills/skill-forge/agents/skill-creator-eval.md`
+- `plugins/dev-stack/skills/skill-forge/scripts/*.py`
+- `plugins/dev-stack/.claude-plugin/plugin.json`
+- `.claude-plugin/marketplace.json`
+- `README.md` 与 `CLAUDE.md`
 
 Dev-stack 的 `/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时需同步这些文件、`plugins/dev-stack/.claude-plugin/plugin.json` 的版本、README / CLAUDE 说明与本地校验命令。`/commit` 必须维持自包含执行边界：不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，不绑定 skill-forge 的 agents、scripts 或 review-state helper，也不新增 runtime hook、daemon 或本地状态机制。最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未进入最终 staged diff 的内容不得影响最终消息。内部协议更新不应误写成 marketplace source、plugin name 或外部依赖变化。
 
@@ -83,6 +107,7 @@ Dev-stack / Nuclio helper 与插件严格校验：
 
 ```bash
 python3 -m unittest discover -s plugins/dev-stack/skills/skill-forge/scripts -p 'test_*.py'
+python3 plugins/dev-stack/skills/skill-forge/scripts/plan_contract.py --help >/dev/null
 claude plugin validate plugins/dev-stack --strict
 python3 -m unittest discover -s plugins/nuclio-plugin/scripts -p 'test_*.py'
 claude plugin validate plugins/nuclio-plugin --strict

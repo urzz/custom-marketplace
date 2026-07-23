@@ -1,7 +1,7 @@
 {
   "name": "dev-stack",
-  "description": "dev skills",
-  "version": "0.1.9",
+  "description": "Use when teams need /skill-forge for risk-adaptive Claude Code skill creation, modification, audit, deterministic-first validation, and L3 strict governance, plus /commit for self-contained Conventional Commits.",
+  "version": "0.2.0",
   "author": {
     "name": "Jade Liu",
     "email": "[redacted-email]"

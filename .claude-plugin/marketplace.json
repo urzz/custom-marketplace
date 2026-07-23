@@ -13,7 +13,7 @@
     {
       "name": "dev-stack",
       "source": "./plugins/dev-stack",
-      "description": "Dev stack plugin with dev rel skills"
+      "description": "Adds /skill-forge for risk-adaptive Claude Code skill creation, modification, audit, deterministic-first validation, and L3 strict governance, plus /commit for self-contained Conventional Commits"
     },
     {
       "name": "nuclio",

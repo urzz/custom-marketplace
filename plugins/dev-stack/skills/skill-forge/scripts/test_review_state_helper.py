@@ -51,6 +51,7 @@ class ReviewStateHelperTests(unittest.TestCase):
                         "modify": ["owned/shared.txt"],
                         "delete": [],
                     },
+                    "interfaces": {"consumes": "input", "produces": "output"},
                     "steps": ["Implement one"],
                     "acceptance_criteria": ["One works"],
                     "meta": {"model": "sonnet", "file_type": "script", "requires_execution_check": True},
@@ -63,6 +64,7 @@ class ReviewStateHelperTests(unittest.TestCase):
                         "modify": [],
                         "delete": [],
                     },
+                    "interfaces": {"consumes": "input", "produces": "output"},
                     "steps": ["Implement two"],
                     "acceptance_criteria": ["Two works"],
                     "meta": {"model": "haiku", "file_type": "script", "requires_execution_check": False},
@@ -162,7 +164,7 @@ class ReviewStateHelperTests(unittest.TestCase):
     def implement_task(self, path="owned/one.txt", content="implementation\n"):
         self.json_stdout(self.start_task())
         base = self.head()
-        new_head = self.commit_file(path, content, "implement")
+        new_head = self.commit_file(path, content, "feat(skill-forge): [Task 1] Task One")
         self.report.write_text("DONE\n", encoding="utf-8")
         result = self.run_helper(
             "record-implementation", "--state", self.state, "--task-id", "1",
@@ -275,7 +277,7 @@ class ReviewStateHelperTests(unittest.TestCase):
         self.pass_task_one()
         self.json_stdout(self.start_task(task_id=2))
         base = self.head()
-        task_two_head = self.commit_file("owned/two.txt", "two\n", "two")
+        task_two_head = self.commit_file("owned/two.txt", "two\n", "feat(skill-forge): [Task 2] Task Two")
         self.report.write_text("DONE\n", encoding="utf-8")
         self.json_stdout(self.run_helper(
             "record-implementation", "--state", self.state, "--task-id", "2",
@@ -297,12 +299,13 @@ class ReviewStateHelperTests(unittest.TestCase):
             "--finding-ids-json", json.dumps(finding_ids),
         )
 
-    def record_fixed_commit(self, finding_ids, path="owned/one.txt", attempt=None):
+    def record_fixed_commit(self, finding_ids, path="owned/one.txt", attempt=None, subject=None):
         state = self.read_state()
         task = state["tasks"]["1"]
         attempt = attempt or task["fix_attempt"]
+        subject = subject or f"fix(skill-forge): [Task 1 Fix {attempt}] address authorized findings"
         base = self.head()
-        new_head = self.commit_file(path, f"fix {attempt}\n", f"fix {attempt}")
+        new_head = self.commit_file(path, f"fix {attempt}\n", subject)
         report = self.repo / f"fix-{attempt}.json"
         report.write_text(
             json.dumps(
@@ -359,10 +362,10 @@ class ReviewStateHelperTests(unittest.TestCase):
             "current_task_id",
         }
         task_keys = {
-            "status", "task_base", "task_head", "ownership", "fix_budget",
-            "review_attempt", "fix_attempt", "open_blocking_findings",
+            "status", "task_base", "task_head", "ownership", "risk_level", "review_policy",
+            "expected_subject", "fix_budget", "review_attempt", "fix_attempt", "open_blocking_findings",
             "resolved_findings", "baseline_findings", "authorized_finding_ids",
-            "previous_open_blocker_fingerprints", "cannot_verify",
+            "previous_open_blocker_fingerprints", "cannot_verify", "deterministic_evidence",
         }
         history_keys = {
             "event", "from", "to", "task_id", "gate", "attempt",
@@ -370,6 +373,10 @@ class ReviewStateHelperTests(unittest.TestCase):
         }
         self.assertEqual(set(state["workflow"]), workflow_keys)
         self.assertEqual(set(state["tasks"]["1"]), task_keys)
+        self.assertEqual(state["artifacts"]["run_risk_level"], "L3")
+        self.assertEqual(state["tasks"]["1"]["risk_level"], "L3")
+        self.assertEqual(state["tasks"]["1"]["review_policy"], "task-and-final")
+        self.assertEqual(state["tasks"]["1"]["expected_subject"], "feat(skill-forge): [Task 1] Task One")
         self.assertEqual(state["artifacts"]["controller_resolutions"], [])
         self.assertEqual(set(state["history"][0]), history_keys)
         self.assertEqual(state["history"][0]["event"], "INITIALIZED")
@@ -398,6 +405,356 @@ class ReviewStateHelperTests(unittest.TestCase):
             "--rubric-snapshot", self.rubric_snapshot, "--scope", "skill-forge",
             "--ticket", "none", "--initial-base", self.initial_base,
         ), "DUPLICATE_OWNERSHIP_PATH")
+
+    def test_risk_policy_plan_contract_accepts_l2_mixed_and_rejects_illegal_downgrade(self):
+        self.write_plan([
+            {
+                "id": 1,
+                "name": "Docs deterministic",
+                "files": {"create": ["owned/one.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "doc", "produces": "doc"},
+                "steps": ["Edit documentation"],
+                "acceptance_criteria": ["Static check passes"],
+                "meta": {
+                    "model": "sonnet", "file_type": "markdown", "requires_execution_check": False,
+                    "risk_level": "L2", "review_policy": "final-only",
+                },
+            },
+            {
+                "id": 2,
+                "name": "Routing gate update",
+                "files": {"create": ["owned/two.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "Routing", "produces": "Gate behavior"},
+                "steps": ["Update routing"],
+                "acceptance_criteria": ["Reviewer still runs"],
+                "meta": {
+                    "model": "sonnet", "file_type": "script", "requires_execution_check": True,
+                    "risk_level": "L2", "review_policy": "task-and-final",
+                },
+            },
+        ])
+        self.init_state()
+        state = self.read_state()
+        self.assertEqual(state["artifacts"]["run_risk_level"], "L2")
+        self.assertEqual(state["tasks"]["1"]["review_policy"], "final-only")
+        self.assertEqual(state["tasks"]["2"]["review_policy"], "task-and-final")
+
+        self.reset_to_initial_base()
+        self.write_plan([
+            {
+                "id": 1,
+                "name": "Gate shortcut",
+                "files": {"create": ["owned/one.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "Gate", "produces": "state"},
+                "steps": ["Change Gate authority"],
+                "acceptance_criteria": ["Covered"],
+                "meta": {
+                    "model": "sonnet", "file_type": "script", "requires_execution_check": True,
+                    "risk_level": "L2", "review_policy": "final-only",
+                },
+            }
+        ])
+        self.json_error(self.run_helper(
+            "init", "--state", self.state, "--repo-root", self.repo, "--spec", self.spec,
+            "--plan", self.plan, "--rubric-source", self.rubric_source,
+            "--rubric-snapshot", self.rubric_snapshot, "--scope", "skill-forge",
+            "--ticket", "none", "--initial-base", self.initial_base,
+        ), "INVALID_REVIEW_POLICY")
+
+    def test_l3_run_rejects_l2_final_only_mixed_policy(self):
+        self.write_plan([
+            {
+                "id": 1,
+                "name": "High risk helper state change",
+                "files": {"create": ["owned/one.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "state", "produces": "helper transition"},
+                "steps": ["Change review-state transition"],
+                "acceptance_criteria": ["Per-task review required"],
+                "meta": {
+                    "model": "sonnet", "file_type": "script", "requires_execution_check": True,
+                    "risk_level": "L3", "review_policy": "task-and-final",
+                },
+            },
+            {
+                "id": 2,
+                "name": "Doc deterministic cleanup",
+                "files": {"create": ["owned/two.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "doc", "produces": "doc"},
+                "steps": ["Edit documentation"],
+                "acceptance_criteria": ["Static check passes"],
+                "meta": {
+                    "model": "sonnet", "file_type": "markdown", "requires_execution_check": False,
+                    "risk_level": "L2", "review_policy": "final-only",
+                },
+            },
+        ])
+        self.json_error(self.run_helper(
+            "init", "--state", self.state, "--repo-root", self.repo, "--spec", self.spec,
+            "--plan", self.plan, "--rubric-source", self.rubric_source,
+            "--rubric-snapshot", self.rubric_snapshot, "--scope", "skill-forge",
+            "--ticket", "none", "--initial-base", self.initial_base,
+        ), "INVALID_REVIEW_POLICY")
+
+        self.reset_to_initial_base()
+        self.write_plan([
+            {
+                "id": 1,
+                "name": "Strict task one",
+                "files": {"create": ["owned/one.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "state", "produces": "helper transition"},
+                "steps": ["Change review-state transition"],
+                "acceptance_criteria": ["Per-task review required"],
+                "meta": {
+                    "model": "sonnet", "file_type": "script", "requires_execution_check": True,
+                    "risk_level": "L3", "review_policy": "task-and-final",
+                },
+            },
+            {
+                "id": 2,
+                "name": "Strict task two",
+                "files": {"create": ["owned/two.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "state", "produces": "helper transition"},
+                "steps": ["Change helper transition"],
+                "acceptance_criteria": ["Per-task review required"],
+                "meta": {
+                    "model": "sonnet", "file_type": "script", "requires_execution_check": True,
+                    "risk_level": "L3", "review_policy": "task-and-final",
+                },
+            },
+        ])
+        self.init_state()
+        state = self.read_state()
+        self.assertEqual(state["artifacts"]["run_risk_level"], "L3")
+        self.assertEqual(state["tasks"]["1"]["review_policy"], "task-and-final")
+        self.assertEqual(state["tasks"]["2"]["review_policy"], "task-and-final")
+
+    def test_l3_requires_task_and_final_policy(self):
+        self.write_plan([
+            {
+                "id": 1,
+                "name": "Strict task",
+                "files": {"create": ["owned/one.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "input", "produces": "output"},
+                "steps": ["Implement"],
+                "acceptance_criteria": ["Works"],
+                "meta": {
+                    "model": "sonnet", "file_type": "script", "requires_execution_check": True,
+                    "risk_level": "L3", "review_policy": "final-only",
+                },
+            }
+        ])
+        self.json_error(self.run_helper(
+            "init", "--state", self.state, "--repo-root", self.repo, "--spec", self.spec,
+            "--plan", self.plan, "--rubric-source", self.rubric_source,
+            "--rubric-snapshot", self.rubric_snapshot, "--scope", "skill-forge",
+            "--ticket", "none", "--initial-base", self.initial_base,
+        ), "INVALID_REVIEW_POLICY")
+
+    def test_final_only_requires_fresh_pass_evidence_and_skips_task_reviewer(self):
+        self.write_plan([
+            {
+                "id": 1,
+                "name": "Task One",
+                "files": {"create": ["owned/one.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "input", "produces": "output"},
+                "steps": ["Implement one"],
+                "acceptance_criteria": ["One works"],
+                "meta": {
+                    "model": "sonnet", "file_type": "script", "requires_execution_check": True,
+                    "risk_level": "L2", "review_policy": "final-only",
+                },
+            },
+            {
+                "id": 2,
+                "name": "Task Two",
+                "files": {"create": ["owned/two.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "input", "produces": "output"},
+                "steps": ["Implement two"],
+                "acceptance_criteria": ["Two works"],
+                "meta": {
+                    "model": "haiku", "file_type": "script", "requires_execution_check": False,
+                    "risk_level": "L2", "review_policy": "task-and-final",
+                },
+            },
+        ])
+        self.init_state()
+        self.json_stdout(self.start_task())
+        base = self.head()
+        new_head = self.commit_file("owned/one.txt", "implementation\n", "feat(skill-forge): [Task 1] Task One")
+        evidence = self.repo / "deterministic.json"
+        evidence.write_text(json.dumps({
+            "task_id": 1,
+            "base_sha": base,
+            "head_sha": new_head,
+            "command": "python3 -m unittest focused",
+            "exit_code": 0,
+            "result_summary": "fresh PASS",
+            "artifact_identity": {"path": "owned/one.txt", "sha256": "abc"},
+        }), encoding="utf-8")
+        self.report.write_text("DONE\n", encoding="utf-8")
+        self.json_stdout(self.run_helper(
+            "record-implementation", "--state", self.state, "--task-id", "1",
+            "--base-head", base, "--new-head", new_head, "--report", self.report,
+            "--deterministic-evidence", evidence,
+        ))
+        state = self.read_state()
+        self.assertEqual(state["tasks"]["1"]["status"], "PASSED")
+        self.assertEqual(state["workflow"]["current_task_id"], 2)
+        self.assertEqual(self.json_stdout(self.run_helper("next-action", "--state", self.state))["action"], "DISPATCH_IMPLEMENTER")
+
+    def test_final_only_deterministic_fail_does_not_dispatch_reviewer(self):
+        self.write_plan([
+            {
+                "id": 1,
+                "name": "Task One",
+                "files": {"create": ["owned/one.txt"], "modify": [], "delete": []},
+                "interfaces": {"consumes": "input", "produces": "output"},
+                "steps": ["Implement one"],
+                "acceptance_criteria": ["One works"],
+                "meta": {
+                    "model": "sonnet", "file_type": "script", "requires_execution_check": True,
+                    "risk_level": "L2", "review_policy": "final-only",
+                },
+            }
+        ])
+        self.init_state()
+        self.json_stdout(self.start_task())
+        base = self.head()
+        new_head = self.commit_file("owned/one.txt", "implementation\n", "feat(skill-forge): [Task 1] Task One")
+        evidence = self.repo / "deterministic-fail.json"
+        evidence.write_text(json.dumps({
+            "task_id": 1,
+            "base_sha": base,
+            "head_sha": new_head,
+            "command": "python3 check.py",
+            "exit_code": 1,
+            "result_summary": "fresh FAIL",
+            "artifact_identity": "check-log:1",
+        }), encoding="utf-8")
+        self.report.write_text("DONE\n", encoding="utf-8")
+        before = self.state.read_bytes()
+        self.json_error(self.run_helper(
+            "record-implementation", "--state", self.state, "--task-id", "1",
+            "--base-head", base, "--new-head", new_head, "--report", self.report,
+            "--deterministic-evidence", evidence,
+        ), "DETERMINISTIC_CHECK_FAILED")
+        self.assertEqual(self.state.read_bytes(), before)
+        self.assertEqual(self.json_stdout(self.run_helper("next-action", "--state", self.state))["action"], "DISPATCH_IMPLEMENTER")
+
+    def test_pre_upgrade_implementing_state_hydrates_legacy_contract_on_record_implementation(self):
+        self.init_state()
+        self.json_stdout(self.start_task())
+        legacy_state = self.read_state()
+        legacy_state["artifacts"].pop("run_risk_level", None)
+        for task in legacy_state["tasks"].values():
+            task.pop("risk_level", None)
+            task.pop("review_policy", None)
+            task.pop("expected_subject", None)
+            task.pop("deterministic_evidence", None)
+        self.state.write_text(json.dumps(legacy_state), encoding="utf-8")
+        base = self.head()
+        new_head = self.commit_file("owned/one.txt", "implementation\n", "feat(skill-forge): [Task 1] Task One")
+        self.report.write_text("DONE\n", encoding="utf-8")
+        self.json_stdout(self.run_helper(
+            "record-implementation", "--state", self.state, "--task-id", "1",
+            "--base-head", base, "--new-head", new_head, "--report", self.report,
+        ))
+        state = self.read_state()
+        self.assertEqual(state["artifacts"]["run_risk_level"], "L3")
+        self.assertEqual(state["tasks"]["1"]["risk_level"], "L3")
+        self.assertEqual(state["tasks"]["1"]["review_policy"], "task-and-final")
+        self.assertEqual(state["tasks"]["1"]["expected_subject"], "feat(skill-forge): [Task 1] Task One")
+        self.assertEqual(state["tasks"]["1"]["status"], "REVIEWING")
+        self.assertEqual(self.json_stdout(self.run_helper("next-action", "--state", self.state))["action"], "DISPATCH_REVIEWER")
+
+    def test_pre_upgrade_legacy_state_next_action_does_not_persist_new_fields(self):
+        self.init_state()
+        self.json_stdout(self.start_task())
+        legacy_state = self.read_state()
+        legacy_state["artifacts"].pop("run_risk_level", None)
+        legacy_state["tasks"]["1"].pop("expected_subject", None)
+        self.state.write_text(json.dumps(legacy_state), encoding="utf-8")
+        before = self.state.read_bytes()
+        self.assertEqual(self.json_stdout(self.run_helper("next-action", "--state", self.state))["action"], "DISPATCH_IMPLEMENTER")
+        self.assertEqual(self.state.read_bytes(), before)
+
+    def test_record_implementation_enforces_single_commit_and_expected_subject(self):
+        self.init_state()
+        self.json_stdout(self.start_task())
+        base = self.head()
+        bad_subject = self.commit_file("owned/one.txt", "implementation\n", "wrong subject")
+        self.report.write_text("DONE\n", encoding="utf-8")
+        before = self.state.read_bytes()
+        self.json_error(self.run_helper(
+            "record-implementation", "--state", self.state, "--task-id", "1",
+            "--base-head", base, "--new-head", bad_subject, "--report", self.report,
+        ), "COMMIT_SUBJECT_MISMATCH")
+        self.assertEqual(self.state.read_bytes(), before)
+
+        self.reset_to_initial_base()
+        self.init_state()
+        self.json_stdout(self.start_task())
+        base = self.head()
+        self.commit_file("owned/one.txt", "one\n", "feat(skill-forge): [Task 1] Task One")
+        two = self.commit_file("owned/shared.txt", "two\n", "feat(skill-forge): [Task 1] Task One")
+        self.report.write_text("DONE\n", encoding="utf-8")
+        self.json_error(self.run_helper(
+            "record-implementation", "--state", self.state, "--task-id", "1",
+            "--base-head", base, "--new-head", two, "--report", self.report,
+        ), "COMMIT_COUNT_MISMATCH")
+
+    def test_record_fix_uses_authorized_fix_subject_and_recovers_legacy_fixing_state(self):
+        finding = self.make_finding(
+            "TASK1-L3-RUN-POLICY-001",
+            rule_id="TASK1_STEP_1_2_L3_STRICT_POLICY",
+            failure_key="l3_run_accepts_l2_final_only_policy",
+        )
+        expected_subject = "fix(skill-forge): [Task 1 Fix 1] address authorized findings"
+        noncanonical_subject = "fix(skill-forge): [Task 1] enforce strict L3 run policy"
+
+        self.init_state()
+        self.implement_task()
+        self.json_stdout(self.import_observation(self.make_observation(findings=[finding])))
+        self.json_stdout(self.authorize_current(["TASK1-L3-RUN-POLICY-001"]))
+        self.assertEqual(self.read_state()["tasks"]["1"]["expected_fix_subject"], expected_subject)
+        self.record_fixed_commit(["TASK1-L3-RUN-POLICY-001"], subject=expected_subject)
+
+        self.reset_to_initial_base()
+        self.init_state()
+        self.implement_task()
+        self.json_stdout(self.import_observation(self.make_observation(findings=[finding])))
+        self.json_stdout(self.authorize_current(["TASK1-L3-RUN-POLICY-001"]))
+        base = self.head()
+        bad_head = self.commit_file("owned/one.txt", "bad fix\n", noncanonical_subject)
+        bad_report = self.repo / "bad-policy-fix.json"
+        bad_report.write_text(json.dumps({
+            "status": "FIXED",
+            "attempt": 1,
+            "base_head_sha": base,
+            "new_head_sha": bad_head,
+            "findings": [{
+                "id": "TASK1-L3-RUN-POLICY-001",
+                "action": "Applied bounded fix",
+                "changed_paths": ["owned/one.txt"],
+                "closure_test": {"command": "python3 check.py", "exit_code": 0, "output": "pass"},
+            }],
+        }), encoding="utf-8")
+        before = self.state.read_bytes()
+        self.json_error(self.run_helper(
+            "record-fix", "--state", self.state, "--task-id", "1",
+            "--base-head", base, "--new-head", bad_head, "--report", bad_report,
+        ), "COMMIT_SUBJECT_MISMATCH")
+        self.assertEqual(self.state.read_bytes(), before)
+
+        self.reset_to_initial_base()
+        self.init_state()
+        self.implement_task()
+        self.json_stdout(self.import_observation(self.make_observation(findings=[finding])))
+        self.json_stdout(self.authorize_current(["TASK1-L3-RUN-POLICY-001"]))
+        legacy_state = self.read_state()
+        legacy_state["tasks"]["1"].pop("expected_fix_subject")
+        self.state.write_text(json.dumps(legacy_state), encoding="utf-8")
+        self.record_fixed_commit(["TASK1-L3-RUN-POLICY-001"], subject=expected_subject)
 
     def test_hash_drift_rejects_every_mutating_command(self):
         command_builders = [
@@ -591,7 +948,7 @@ class ReviewStateHelperTests(unittest.TestCase):
 
         self.json_stdout(self.start_task(task_id=2))
         base = self.head()
-        head = self.commit_file("owned/two.txt", "task two\n", "task two")
+        head = self.commit_file("owned/two.txt", "task two\n", "feat(skill-forge): [Task 2] Task Two")
         self.report.write_text("DONE\n", encoding="utf-8")
         self.json_stdout(self.run_helper(
             "record-implementation", "--state", self.state, "--task-id", "2",
@@ -644,7 +1001,7 @@ class ReviewStateHelperTests(unittest.TestCase):
                 "--base-head", base, "--new-head", base, "--report", report,
             ), expected_code)
 
-        new_head = self.commit_file("owned/one.txt", "fix\n", "fix")
+        new_head = self.commit_file("owned/one.txt", "fix\n", "fix(skill-forge): [Task 1 Fix 1] address authorized findings")
         bad_reports = [
             ({"status": "FIXED", "attempt": 1, "base_head_sha": base, "new_head_sha": new_head, "findings": []}, "FINDING_SET_MISMATCH"),
             ({
@@ -1161,7 +1518,7 @@ class ReviewStateHelperTests(unittest.TestCase):
         self.pass_task_one()
         self.json_stdout(self.start_task(task_id=2))
         base = self.head()
-        task_two_head = self.commit_file("owned/two.txt", "two\n", "two")
+        task_two_head = self.commit_file("owned/two.txt", "two\n", "feat(skill-forge): [Task 2] Task Two")
         self.report.write_text("DONE\n", encoding="utf-8")
         self.json_stdout(self.run_helper(
             "record-implementation", "--state", self.state, "--task-id", "2",
@@ -1194,7 +1551,7 @@ class ReviewStateHelperTests(unittest.TestCase):
 
     def test_review_package_contains_full_multi_commit_range_and_refuses_overwrite(self):
         second = self.commit_file("owned/one.txt", "one\n", "one")
-        third = self.commit_file("owned/two.txt", "two\n", "two")
+        third = self.commit_file("owned/two.txt", "two\n", "feat(skill-forge): [Task 2] Task Two")
         output = self.repo / "review.diff"
         result = self.json_stdout(self.run_helper(
             "review-package", "--repo-root", self.repo, "--base", self.initial_base,
@@ -1215,18 +1572,22 @@ class ReviewStateHelperTests(unittest.TestCase):
             "--head", third, "--output", output,
         ), "OUTPUT_EXISTS")
 
-    def test_plan_task_query_supports_stable_markdown_and_json_output(self):
-        markdown_output = self.repo / "task.md"
-        json_output = self.repo / "task.json"
+    def test_plan_task_query_supports_only_stable_run_dir_markdown_and_json_output(self):
+        run_dir = self.repo / ".skill-forge" / "run-1"
+        run_dir.mkdir(parents=True)
+        run_plan = run_dir / "plan.yaml"
+        run_plan.write_bytes(self.plan.read_bytes())
+        markdown_output = run_dir / "task.md"
+        json_output = run_dir / "task.json"
         markdown = subprocess.run(
-            [sys.executable, str(PLAN_QUERY), str(self.plan), "1", "--output", str(markdown_output), "--format", "markdown"],
+            [sys.executable, str(PLAN_QUERY), str(run_plan), "1", "--output", str(markdown_output), "--format", "markdown"],
             text=True, capture_output=True, check=False,
         )
         self.assertEqual(markdown.returncode, 0, markdown.stderr)
         self.assertEqual(Path(markdown.stdout.strip()), markdown_output.resolve())
         self.assertIn("## Global Constraints", markdown_output.read_text(encoding="utf-8"))
         result = subprocess.run(
-            [sys.executable, str(PLAN_QUERY), str(self.plan), "1", "--output", str(json_output), "--format", "json"],
+            [sys.executable, str(PLAN_QUERY), str(run_plan), "1", "--output", str(json_output), "--format", "json"],
             text=True, capture_output=True, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1236,22 +1597,27 @@ class ReviewStateHelperTests(unittest.TestCase):
         )
         self.assertEqual(payload["schema_version"], 1)
         self.assertEqual(payload["task"]["id"], 1)
+        self.assertEqual(payload["task"]["meta"]["risk_level"], "L3")
+        self.assertEqual(payload["task"]["meta"]["review_policy"], "task-and-final")
         self.assertEqual(payload["global_constraints"], ["Do not exceed ownership", "Use one shared budget"])
         duplicate = subprocess.run(
-            [sys.executable, str(PLAN_QUERY), str(self.plan), "1", "--output", str(json_output), "--format", "json"],
+            [sys.executable, str(PLAN_QUERY), str(run_plan), "1", "--output", str(json_output), "--format", "json"],
             text=True, capture_output=True, check=False,
         )
         self.assertNotEqual(duplicate.returncode, 0)
         self.assertIn("output already exists", duplicate.stderr)
-        legacy = subprocess.run(
-            [sys.executable, str(PLAN_QUERY), str(self.plan), "2"],
+        missing_output = subprocess.run(
+            [sys.executable, str(PLAN_QUERY), str(run_plan), "2"],
             text=True, capture_output=True, check=False,
         )
-        self.assertEqual(legacy.returncode, 0, legacy.stderr)
-        legacy_path = Path(legacy.stdout.strip())
-        self.addCleanup(legacy_path.unlink, missing_ok=True)
-        self.assertTrue(legacy_path.is_file())
-        self.assertIn("## Task 2", legacy_path.read_text(encoding="utf-8"))
+        self.assertNotEqual(missing_output.returncode, 0)
+        self.assertIn("--output", missing_output.stderr)
+        outside = subprocess.run(
+            [sys.executable, str(PLAN_QUERY), str(run_plan), "2", "--output", str(self.repo / "outside.md")],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(outside.returncode, 0)
+        self.assertIn("output must be inside plan run directory", outside.stderr)
 
 
 if __name__ == "__main__":

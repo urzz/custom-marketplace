@@ -8,14 +8,15 @@ Reference framework for selecting the appropriate architecture pattern when desi
 
 ## Contents
 - [Decision Flowchart](#decision-flowchart)
-- [Pattern 1: Sequential Pipeline](#pattern-1-sequential-pipeline)
-- [Pattern 2: Coordinator/Dispatcher](#pattern-2-coordinatordispatcher)
-- [Pattern 3: Parallel Fan-Out/Gather](#pattern-3-parallel-fan-outgather)
-- [Pattern 4: Hierarchical Decomposition](#pattern-4-hierarchical-decomposition)
-- [Pattern 5: Generator-Critic](#pattern-5-generator-critic)
-- [Pattern 6: Iterative Refinement](#pattern-6-iterative-refinement)
-- [Pattern 7: Human-in-the-Loop](#pattern-7-human-in-the-loop)
-- [Pattern 8: Composite](#pattern-8-composite)
+- [Pattern 1: Sequential Pipeline（顺序管道）](#pattern-1-sequential-pipeline顺序管道)
+- [Pattern 2: Coordinator/Dispatcher（协调/分发 - 路由）](#pattern-2-coordinatordispatcher协调分发---路由)
+- [Pattern 3: Parallel Fan-Out/Gather（并行扇出/聚合）](#pattern-3-parallel-fan-outgather并行扇出聚合)
+- [Pattern 4: Hierarchical Decomposition（层级分解 - 编排器）](#pattern-4-hierarchical-decomposition层级分解---编排器)
+- [Pattern 5: Generator-Critic（生成-批评）](#pattern-5-generator-critic生成-批评)
+- [Pattern 6: Iterative Refinement（迭代精化）](#pattern-6-iterative-refinement迭代精化)
+- [Pattern 7: Human-in-the-Loop（人机协作）](#pattern-7-human-in-the-loop人机协作)
+- [Pattern 8: Composite（组合模式）](#pattern-8-composite组合模式)
+- [Risk-Adaptive Composite for Skill Forge](#risk-adaptive-composite-for-skill-forge)
 - [选型决策流程](#选型决策流程)
 - [与 Claude Code Skill 设计的映射](#与-claude-code-skill-设计的映射)
 
@@ -513,6 +514,30 @@ Reference the corresponding pattern template for structure guidance.]
 [Explain WHY this particular combination of patterns was chosen.
 What single pattern couldn't handle this alone? What tradeoffs does this composition introduce?]
 ````
+
+---
+
+## Risk-Adaptive Composite for Skill Forge
+
+Skill Forge itself uses a Risk-Adaptive Composite rather than a fixed “always spawn every reviewer” pipeline. The Controller combines patterns according to the classified L0-L3 risk level:
+
+| Component | Pattern | When active | Contract |
+|---|---|---|---|
+| Router | Coordinator/Dispatcher | Always, before any action | Select CREATE, MODIFY, CHANGE_AUDIT, or FULL_AUDIT; then classify risk using highest-match and ambiguity-upgrade rules |
+| Sequential Controller | Sequential Pipeline | Always | Preserve ordered discovery → spec → plan → implement → validate handoffs; first version keeps product writes sequential |
+| HITL | Human-in-the-Loop | Joint L2/L3 implementation approval, unresolved choices, irreversible/outward-facing actions, squash | L2/L3 formal Spec and YAML Plan share one implementation approval Gate; L0/L1 do not repeat already clear reversible authorization |
+| Generator-Critic | Generator-Critic | L1 whole-diff review, L2 risk tasks, all L3 tasks, mandatory final review | Critic is independent and semantic; deterministic checks must run first |
+| Validation Gate | Sequential + deterministic checks | All levels, scaled by risk | Scriptable schema/static/test checks precede LLM review; behavioral eval is conditional on user behavior, Routing, Gate, Pattern, or Architecture changes |
+| File-backed state | Orchestrator-style recovery | L2/L3 only | review-state-helper.py owns state transitions; next-action is the only runtime authority |
+
+Level-specific composition:
+
+- L0 Mechanical: Router + Sequential Controller + deterministic Validation Gate. Dispatch 0 agents.
+- L1 Routine: Router + Sequential Controller + deterministic Validation Gate, optionally one bounded implementation unit and one whole-diff review.
+- L2 Structural: Router + HITL + file-backed Sequential Controller + selective Generator-Critic + mandatory final review + conditional eval. Dispatch volume is T + R + 1 + E, where R ≤ T and E is 0 or 1.
+- L3 High Risk: Same components as L2, but every Task uses task-and-final review and final/structural/applicable behavioral validation are mandatory.
+
+Do not add parallel product writes in the first version. Parallel analysis may be considered only as a future design choice and must not change the current implementation contract.
 
 ---
 

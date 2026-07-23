@@ -1,7 +1,6 @@
 # Review State Protocol
 
-Phase 4/5 的单层权威协议。本文固定 Controller、bounded agents 与
-`review-state-helper.py` 之间的文件和状态合同；语义审查仍由 fresh reviewer 完成。
+L2/L3 file-backed workflow 的唯一详细权威协议。本文固定 Controller、bounded agents、`plan_contract.py`、`plan-task-query.py` 与 `review-state-helper.py` 之间的 artifacts、state schema、dispatch envelope、deterministic evidence、finding ledger、budget、HALT、recovery、next-action 和 completion 合同；语义审查仍由 fresh reviewer 完成。L0/L1 不初始化本文定义的 review-state。
 
 ## Contents
 
@@ -9,6 +8,7 @@ Phase 4/5 的单层权威协议。本文固定 Controller、bounded agents 与
 - [Authority](#authority)
 - [Artifacts](#artifacts)
 - [Immutable Identities](#immutable-identities)
+- [Plan Contract](#plan-contract)
 - [State Schema](#state-schema)
 - [Task Lifecycle](#task-lifecycle)
 - [Finding Schema](#finding-schema)
@@ -79,13 +79,9 @@ Agent 输出先原样落盘，再调用 helper；非法 JSON 也保留作审计�
 另建同目录、带 `-controller` 后缀的派生 import 文件，仅加入 Controller resolution
 或经重新审查得到的 finding，不伪装成原始 agent 输出。
 
-每个 task-bound dispatch envelope 必须显式包含：绝对 state、brief、report、
-review-package、observation 路径，以及 `scope`、`ticket`、`task_id`、`model`。
-不适用的路径仍作为该 attempt 的预定路径传递。`model` 必须逐字取该 Task 的
-`meta.model`；不得由 agent 推断。Whole-change final/eval dispatch 使用明确的
-`task_id: null`，并携带 Plan task acceptance index；final reviewer 的 model 取最后一个
-Task 的 `meta.model`，eval case 取其合同 owner Task 的 `meta.model`。它们不得伪装成
-某个 owner Task。
+每个 task-bound dispatch envelope 必须显式包含：绝对 state、brief、report、review-package、observation 路径，以及 `scope`、`ticket`、`task_id`、`task name`、`model`、ownership paths、base/head values 和 expected commit subject。Controller 用 `plan-task-query.py <plan_yaml_path> <task_id> --output <run/taskN-brief.md> [--format markdown|json]` 生成 stable brief；输出必须位于同一 run directory 且已存在时拒绝覆盖。Task implementer 的 report path 是唯一 ownership-external write。
+
+不适用的 review/report 路径仍作为该 attempt 的预定路径传递。`model` 必须逐字取该 Task 的 `meta.model`；不得由 agent 推断。Whole-change final/eval dispatch 使用明确的 `task_id: null`，并携带 Plan task acceptance index；final reviewer 的 model 取最后一个 Task 的 `meta.model`，eval case 取其合同 owner Task 的 `meta.model`。它们不得伪装成某个 owner Task。
 
 ## Immutable Identities
 
@@ -106,6 +102,21 @@ Task review 始终使用 `task_base..task_head`，final review 和 Phase 5 始�
 每个 mutating command 都重新验证 Spec、Plan、rubric snapshot hash。任一 hash drift
 返回 `ARTIFACT_HASH_DRIFT`，不得刷新 hash、替换 snapshot 或继续旧 run。Plan 经用户
 修订后必须返回 Phase 3、重新确认，并在新 run 中重新 init。
+
+## Plan Contract
+
+`plan_contract.py` is the shared deterministic validator for L2/L3 Plans. Current supported Task meta fields are:
+
+- required: `model`, `file_type`, `requires_execution_check`
+- normalized defaults for legacy Plans: `risk_level=L3`, `review_policy=task-and-final`
+- accepted `risk_level`: `L2`, `L3`
+- accepted `review_policy`: `final-only`, `task-and-final`
+
+L3 Tasks require `task-and-final`. If the run contains any L3 Task, every Task in that run must use `task-and-final`. L2 `final-only` is permitted only when Task text does not indicate routing, gate, authority, cross-task/interface/state/helper, or nondeterministic risk. Ownership paths must be exact repo-relative POSIX paths: no absolute path, no `.`/`..`, no globs, no whitespace, no duplicate path across create/modify/delete.
+
+The expected implementation subject is exactly `feat(<scope>): [Task <task_id>] <task name>`. The expected fixer subject is exactly `fix(<scope>): [Task <task_id> Fix <attempt>] address authorized findings`, frozen by helper after `authorize-fix` and passed by the Controller. Agents must receive these values from the Controller, not from git branch names or history.
+
+For `final-only` Tasks, `record-implementation` requires a deterministic evidence JSON via `--deterministic-evidence`. Each check includes `task_id`, `base_sha`, `head_sha`, `command`, `exit_code`, `result_summary`, and `artifact_identity`; any non-zero exit blocks deterministic pass. For `task-and-final`, `record-implementation` rejects deterministic evidence and advances to task review.
 
 ## State Schema
 
@@ -315,8 +326,8 @@ Agent 不得替 Controller 填 resolution。已有 resolution ID 不得重复。
 
 只有 `authorize-fix` 成功并返回 attempt 后才能 dispatch
 `dev-stack:skill-file-fixer`。Fixer 接收该 attempt、base head、完整 authorized IDs、
-ownership、closure tests 与绝对 artifact paths，只做最小有界修复，恰好一个
-`fix(<scope>): [Task N] <finding-summary>` commit。
+ownership、closure tests、绝对 artifact paths 与 Controller 传入的 expected fix subject，
+只做最小有界修复，恰好一个该 subject 的 commit。
 
 Controller 用 `record-fix` 校验 FIXED report 的 attempt、base/new head、完整 finding
 集合、changed paths 与每项实际 closure command/exit/output。BLOCKED、NO_PROGRESS、
@@ -391,8 +402,8 @@ review-package --repo-root <ABS_REPO> --base <FULL_SHA> --head <FULL_SHA> --outp
 
 ## Completion and Squash
 
-只有 final、structural、behavioral 三个 gate 都经 helper import PASS 后，`next-action`
-才会返回 `REQUEST_SQUASH_APPROVAL`。此时主 Session 才询问用户当前确认；agents、旧确认
+只有 final、structural、behavioral 三个 helper gate 都经 helper import PASS 后，`next-action`
+才会返回 `REQUEST_SQUASH_APPROVAL`。`BEHAVIORAL_VALIDATION` gate 始终记录；没有行为触发时，Controller 必须创建并 import 一个 helper-compatible PASS/SKIP observation，明确所有 behavioral flags false、`spawned=0` 与 SKIP evidence，且 without eval dispatch。此时主 Session 才询问用户当前确认；agents、旧确认
 或 Plan 文字不能批准 squash。
 
 询问前记录：`INITIAL_BASE`、当前 HEAD/tree、`INITIAL_BASE..HEAD` commits，以及拟用
@@ -474,7 +485,8 @@ loop:
     save schema-v1 observation; helper import-review
 
   elif action == RUN_BEHAVIORAL_VALIDATION:
-    for each eval case: dispatch with its owner Task task.meta.model and explicit flags
+    if all behavioral flags are false: create helper-compatible PASS/SKIP observation with spawned=0 and SKIP evidence; do not dispatch eval
+    else: for each triggered eval case, dispatch with its owner Task task.meta.model and explicit flags
     save schema-v1 observation; helper import-review
 
   elif action == REQUEST_SQUASH_APPROVAL:
