@@ -554,6 +554,80 @@ class ChangeHelperTests(unittest.TestCase):
         self.assertEqual(validation.returncode, 0, validation.stderr)
         self.assertEqual(stdout_json(validation)["next_action"], "REQUEST_REPAIR_DECISION")
 
+    def test_task_review_binding_and_completion_follow_task_level_review_requirements(self):
+        self.init_git()
+        change_dir = self.create_change()
+        tasks = [
+            {
+                "id": 1,
+                "name": "Implement first task",
+                "steps": ["Edit first source"],
+                "acceptance": ["First source is present"],
+                "validation": ["python -m pytest"],
+                "delegate": "main",
+                "review": "task-and-final",
+                "checkpoint_subject": "feat(alpha): implement task 1",
+            },
+            {
+                "id": 2,
+                "name": "Implement second task",
+                "steps": ["Edit second source"],
+                "acceptance": ["Second source is present"],
+                "validation": ["python -m pytest"],
+                "delegate": "main",
+                "review": "task-and-final",
+                "checkpoint_subject": "feat(alpha): implement task 2",
+            },
+        ]
+        self.write_plan(review="final", tasks=tasks)
+        git(self.root, "add", ".dev-docs/changes/alpha-change/change.md", ".dev-docs/changes/alpha-change/plan.yaml")
+        git(self.root, "commit", "-m", "docs: approve alpha plan")
+        self.assertEqual(run_change(self.root, "init-state", "--id", "alpha-change").returncode, 0)
+
+        self.assertEqual(run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1").returncode, 0)
+        (self.root / "src").mkdir()
+        (self.root / "src" / "alpha-1.txt").write_text("alpha 1\n", encoding="utf-8")
+        git(self.root, "add", "src/alpha-1.txt")
+        git(self.root, "commit", "-m", "feat(alpha): implement task 1")
+        record = run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "PASS", "--validation-summary", "task 1 ok")
+        self.assertEqual(record.returncode, 0, record.stderr)
+        self.assertEqual(stdout_json(record)["next_action"], "RUN_TASK_REVIEW")
+
+        wrong_task_review = run_change(
+            self.root,
+            "record-review",
+            "--id",
+            "alpha-change",
+            "--scope",
+            "task",
+            "--task-id",
+            "2",
+            "--status",
+            "PASS",
+            "--contract",
+            "wrong task",
+            "--evidence",
+            "wrong task should fail closed",
+        )
+        self.assertNotEqual(wrong_task_review.returncode, 0)
+        self.assertEqual(stderr_json(wrong_task_review)["code"], "INVALID_TRANSITION")
+
+        change_module = load_change_module()
+        state_path = change_dir / "state.yaml"
+        state = change_module.read_yaml_file(state_path)
+        state["tasks"][1].update({"status": "DONE", "task_base": git(self.root, "rev-parse", "HEAD").stdout.strip(), "task_head": git(self.root, "rev-parse", "HEAD").stdout.strip(), "checkpoint_commit": git(self.root, "rev-parse", "HEAD").stdout.strip(), "validation": {"status": "PASS", "summary": "task 2 ok"}})
+        state["review"]["task_reviews"]["2"] = {"status": "PASS", "contract": "ok", "evidence": "review ok"}
+        state["review"]["final"] = {"status": "PASS", "contract": "ok", "evidence": "final ok"}
+        state["validation"] = {"status": "PASS", "commands": ["python -m unittest"], "summary": "all ok"}
+        state.update({"phase": "COMPLETE", "next_action": "COMPLETE", "current_task_id": None, "blocker": None})
+        change_module.dump_yaml_atomic(state_path, state)
+
+        complete = run_change(self.root, "complete", "--id", "alpha-change")
+        self.assertNotEqual(complete.returncode, 0)
+        payload = stderr_json(complete)
+        self.assertEqual(payload["code"], "REVIEW_NOT_PASSED")
+        self.assertEqual(payload["details"]["tasks"], [1])
+
     def test_legacy_move_preserves_clear_v1_tree_verbatim(self):
         docs = self.root / ".dev-docs"
         v1_change = docs / "changes" / "old-change"

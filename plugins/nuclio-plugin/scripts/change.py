@@ -699,6 +699,17 @@ def task_review_required(plan: dict[str, Any], task: dict[str, Any]) -> bool:
     return plan["review_policy"] == "task-and-final" or task["review"] == "task-and-final"
 
 
+def pending_task_review_ids(state: dict[str, Any], plan: dict[str, Any]) -> list[int]:
+    task_reviews = state["review"].get("task_reviews", {})
+    return [
+        task["id"]
+        for task in plan["tasks"]
+        if task_review_required(plan, task)
+        and state_task(state, task["id"])["status"] == "DONE"
+        and task_reviews.get(str(task["id"]), {}).get("status") != "PASS"
+    ]
+
+
 def require_all_commit_paths_allowed(changed_paths: list[str], allowed_paths: list[str]) -> None:
     if not changed_paths:
         raise NuclioError("EMPTY_CHECKPOINT", "checkpoint commit changed no files")
@@ -965,7 +976,9 @@ def cmd_record_review(args: argparse.Namespace, paths: Paths) -> int:
     if args.scope == "task":
         if args.task_id is None:
             raise NuclioError("INVALID_INPUT", "task review requires --task-id")
-        plan_task(plan, args.task_id)
+        task = plan_task(plan, args.task_id)
+        if not task_review_required(plan, task):
+            raise NuclioError("REVIEW_NOT_REQUIRED", "task review is not required", task_id=args.task_id)
         expected_action = NEXT_RUN_TASK_REVIEW
     else:
         if args.task_id is not None:
@@ -973,6 +986,10 @@ def cmd_record_review(args: argparse.Namespace, paths: Paths) -> int:
         expected_action = NEXT_RUN_FINAL_REVIEW
     if state["next_action"] != expected_action:
         raise NuclioError("INVALID_TRANSITION", f"next_action is not {expected_action}", next_action=state["next_action"])
+    if args.scope == "task":
+        pending_reviews = pending_task_review_ids(state, plan)
+        if pending_reviews != [args.task_id]:
+            raise NuclioError("INVALID_TRANSITION", "task review does not match the pending task review", expected=pending_reviews[0] if pending_reviews else None, actual=args.task_id)
     if args.status == "FAIL":
         source_gate = expected_action
         state["blocker"] = {
@@ -1079,10 +1096,14 @@ def cmd_complete(args: argparse.Namespace, paths: Paths) -> int:
     not_done = [task["id"] for task in state["tasks"] if task["status"] != "DONE"]
     if not_done:
         raise NuclioError("INCOMPLETE_TASKS", "all tasks must be DONE", tasks=not_done)
-    if plan["review_policy"] == "task-and-final":
-        missing_reviews = [task["id"] for task in state["tasks"] if state["review"]["task_reviews"].get(str(task["id"]), {}).get("status") != "PASS"]
-        if missing_reviews:
-            raise NuclioError("REVIEW_NOT_PASSED", "all task reviews must pass", tasks=missing_reviews)
+    missing_reviews = [
+        task["id"]
+        for task in plan["tasks"]
+        if task_review_required(plan, task)
+        and state["review"]["task_reviews"].get(str(task["id"]), {}).get("status") != "PASS"
+    ]
+    if missing_reviews:
+        raise NuclioError("REVIEW_NOT_PASSED", "all task reviews must pass", tasks=missing_reviews)
     if plan["review_policy"] in {"final", "task-and-final"} and state["review"]["final"].get("status") != "PASS":
         raise NuclioError("REVIEW_NOT_PASSED", "final review must pass")
     if state["validation"].get("status") != "PASS":
