@@ -109,7 +109,8 @@ FORBIDDEN_RUNTIME_REBUILD_PATTERNS = {
 NEGATIVE_CONTEXT_RE = re.compile(
     r"(?i)(?:do not|don't|does not|not |never|forbid|forbidden|prohibit|without|no |non-goal|禁止|不得|不要|不应|不会|不能|不创建|不写入|非目标|不是|无须|无需|都不是|只在|仅在)"
 )
-LEGACY_CONTEXT_RE = re.compile(r"(?i)(?:legacy|v1|historical|old|旧|历史|禁止恢复|整体移动|只读)")
+HISTORICAL_CONTEXT_RE = re.compile(r"(?i)(?:historical|old|旧|历史|整体移动|只读)")
+CURRENT_RUNTIME_INSTRUCTION_RE = re.compile(r"(?i)(?:current|runtime|daily|entry|required|require|requires|must|use|uses|using|当前|运行时|日常|入口|必须|要求|使用)")
 NEGATIVE_OR_LEGACY_HEADING_RE = re.compile(r"(?i)(?:禁止|不得|非 Gate|非目标|v1|legacy|旧|历史)")
 STATE_LIGHTWEIGHT_FORBIDDEN_KEYS = {
     "history",
@@ -232,7 +233,11 @@ def contents_block(text: str) -> str:
 
 def line_is_allowed_historical_or_negative(line: str) -> bool:
     explicit_negative = any(token in line for token in ("不新增", "不恢复", "不使用", "不用于", "不创建", "不做", "不得新增", "不得使用"))
-    return bool(NEGATIVE_CONTEXT_RE.search(line) or LEGACY_CONTEXT_RE.search(line) or explicit_negative)
+    if NEGATIVE_CONTEXT_RE.search(line) or explicit_negative:
+        return True
+    if HISTORICAL_CONTEXT_RE.search(line) and not CURRENT_RUNTIME_INSTRUCTION_RE.search(line):
+        return True
+    return False
 
 
 def assert_no_positive_pattern(testcase: unittest.TestCase, text: str, patterns: dict[str, re.Pattern[str]], source: Path | str) -> None:
@@ -393,6 +398,12 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
                 "\nCurrent runtime must create .nuclio/ state directory.\n",
             )
 
+        def positive_legacy_helper_next_action_authority(plugin: Path) -> None:
+            append_text(
+                plugin / "references" / "workflow.md",
+                "\nCurrent runtime must use legacy helper next-action as authority for routing.\n",
+            )
+
         def second_runtime_helper(plugin: Path) -> None:
             (plugin / "scripts" / "workflow.py").write_text("# forbidden second helper\n", encoding="utf-8")
 
@@ -438,6 +449,7 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
             "skill Markdown link outside one-level references": bad_skill_markdown_link,
             "positive finish-plan current authority": positive_finish_plan_authority,
             "positive .nuclio state directory requirement": positive_nuclio_state_directory,
+            "positive legacy helper next-action authority": positive_legacy_helper_next_action_authority,
             "second runtime helper": second_runtime_helper,
             "State history storage": state_history_storage,
             "runtime per-Task owner schema": runtime_task_owner_schema,
@@ -452,6 +464,19 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
 # Markdown contract tests
 
 class MarkdownContractTests(unittest.TestCase):
+    def test_historical_negative_allowlist_does_not_exempt_current_runtime_legacy_authority(self):
+        allowed_lines = [
+            "Use `change.py status` and `change.py next-action` as the current lightweight state.yaml helper.",
+            "Do not restore legacy helper next-action routing authority.",
+            "Historical v1 helper next-action routing is read-only legacy context.",
+        ]
+        for line in allowed_lines:
+            with self.subTest(line=line):
+                self.assertTrue(line_is_allowed_historical_or_negative(line) or not any(pattern.search(line) for pattern in FORBIDDEN_RUNTIME_REBUILD_PATTERNS.values()))
+        self.assertFalse(
+            line_is_allowed_historical_or_negative("Current runtime must use legacy helper next-action as authority for routing.")
+        )
+
     def test_skill_frontmatter_description_body_and_links(self):
         for name, path in skill_paths().items():
             with self.subTest(skill=name):
