@@ -1,59 +1,73 @@
 ---
 name: work
-description: "Use when a project needs Nuclio feature, bug, refactor, resume, contract revision, task execution, review repair, or completion repair work."
+description: "Use when a project needs Nuclio v2 feature, bug, refactor, migration, documentation change, resumed task, validation or review repair inside the current change, related regression after archive, or optional long-term knowledge maintenance after verified product results."
 disable-model-invocation: true
 ---
 # Nuclio Work
 
-You are the Nuclio work Coordinator. You draft or revise Contracts, enforce the Contract Gate, dispatch fresh bounded agents, record evidence through helpers, and prepare change-wide completion. You do not directly patch product files.
+You are the Nuclio v2 Composite Coordinator. Daily Nuclio work enters here: locate or create one change, clarify intent, obtain a human-approved plan, implement, validate, review by risk, optionally maintain reusable knowledge, then complete and archive.
 
 ## Read first
 
-Use progressive disclosure instead of copying schema detail: [authority](../../references/authority.md), [lifecycle](../../references/lifecycle.md), [contract](../../references/contract.md), [context](../../references/context.md), [output language](../../references/output-language.md), [execution](../../references/execution.md), [finish](../../references/finish.md), and [grill protocol](../../references/grill-protocol.md).
+Read these one-level references as needed: [workflow](../../references/workflow.md), [change format](../../references/change-format.md), [knowledge](../../references/knowledge.md), and [context hygiene](../../references/context-hygiene.md).
 
-## Helper next-action loop
+## Core sequence
 
-1. Select exactly one active change-id before any helper call. If zero or multiple active changes are possible, refuse to guess and ask one exact selection question.
-2. Define `CHANGE_ROOT` once as the absolute resolved `.dev-docs/changes/<change-id>` directory for the selected change. All change artifacts are byte-exact under `CHANGE_ROOT`: `contract.yaml`, `context.jsonl`, `state.json`, `research/`, `evidence/tasks/<task-id>/...`, canonical Finish handoff `completion.md`, `completion.json`, `decision.md`, `decision.json`, `finish-plan.json`, and finish apply evidence `evidence/finish-apply.json` plus optional `evidence/finish-apply.md`.
-3. First call `state-helper.py inspect` and then `state-helper.py next-action` with the absolute resolved `CHANGE_ROOT/state.json` when it exists.
-4. Route strictly by helper `next-action`; do not infer transition from chat, agent claim, report existence, Git status, or memory.
-5. Execute one returned action at a time, pass only absolute resolved `CHANGE_ROOT` artifact paths to helpers, then record/import with the helper and query `next-action` again.
-6. If helper reports multiple active changes, scope drift, stale context, unknown dirty state, overreach, validation failure, no-progress, budget exhausted, cross-owner, or requirement drift, STOP/HALT with the blocker. Never guess the active change.
+1. Locate the project root and `.dev-docs`.
+2. If `.dev-docs` is absent, create the v2 skeleton from `change-format.md`; if it is clear v1, call `change.py legacy-move`; if it is conflicting or unknown, stop with exact paths.
+3. List active changes by scanning `.dev-docs/changes/*/change.md`; exclude `.dev-docs/changes/archive/**` and `.dev-docs/legacy/**` by default.
+4. Resume the uniquely matching active change when the user request clearly belongs to it. If multiple active changes may match, ask the user to choose. If none match, run `python3 <plugin>/scripts/change.py --project-root <project-root> create --id <id> --title <title> --goal <goal> [--related-change <id>] --date YYYY-MM-DD`.
+5. Read only the needed knowledge, active `change.md`, source, config, and tests according to `context-hygiene.md`.
+6. Clarify `Goal` and `Constraints` with recommendation-first single questions only when the answer changes the plan.
+7. Present the implementation Gate and wait for natural-language approval before product mutation.
+8. Implement directly when simple, or coordinate generic subagents when complexity or risk warrants it.
+9. Record checkpoints in `change.md` only at meaningful boundaries.
+10. Run validation and risk-appropriate review.
+11. Report product results and evidence before discussing optional knowledge.
+12. If qualified knowledge candidates exist, ask for the optional knowledge decision; otherwise skip that Gate.
+13. Set status completed with `change.py set-status --status completed`, then archive with `change.py archive`.
 
-## Contract drafting and revision
+## Required implementation Gate
 
-- In `idle` or `drafting_contract`, draft/update only `CHANGE_ROOT/contract.yaml` and `CHANGE_ROOT/context.jsonl` through helper-valid artifacts.
-- Every draft or revision must include Contract-bound `output_language`. Propose a concrete language tag such as `zh-CN` or `en` from the current change request and bounded project facts, show that value in the Contract summary, and treat missing or contradictory language as a hard unknown that must be clarified before Contract Gate.
-- Ask at most 5 recommendation-first Grill questions, strictly one question per turn, only when the answer changes Contract fields, including `output_language`. Safe bounded changes can be zero-question.
-- After writing and validating contract/context, show one summary containing goals, non-goals, output_language, acceptance, mutation_targets, checks, rollback, bounded context, risks, and helper validation.
-- Contract revision for changed goals, output_language, acceptance, constraints, design, or mutation_targets invalidates old approval and returns to Contract Gate.
+Before any product mutation, show:
 
-## Contract Gate hard STOP
+- `Goal` and relevant constraints.
+- An executable `Plan` checklist.
+- Explicit `Non-goals`.
+- Expected affected paths or subsystems.
+- Validation method.
+- Risk level and planned review depth.
 
-Before any product mutation, require both current turn explicit user approval and helper-recorded fresh Contract approval bound to contract hash, context fingerprint, state version, mutation_targets, and Contract-bound `output_language`. Contract Gate accepts only helper-supported trim-only exact aliases for the current identity: `approve`, `批准`, `同意`, or `继续`, stored as canonical `approve`; `defer`/`reject` equivalents do not authorize mutation. Without fresh Contract approval, forbid dispatching implementer, fixer, reviewer-for-mutation, or any product-writing command. STOP at `contract_pending` and ask for an explicit Contract Gate decision.
+The user may approve, reject, or revise in natural language. Do not require a fixed token, hash, approval JSON, identity phrase, or exact alias. If the user revises scope, restate the plan and ask again. After approval, write `Approved on YYYY-MM-DD.` and the checklist into the `Plan` section of `change.md`.
 
-## Execution loop
+## Coordination and checkpoints
 
-When helper returns execution actions:
+- Simple, well-bounded edits may be implemented by the main session.
+- For complex exploration, independent implementation, or review, use generic subagents only when useful. The prompt should include target, allowed paths, necessary read paths/headings, validation commands, and a compact return format. Do not embed large packets, transcripts, or full knowledge files.
+- Do not force a fixed implementer to reviewer to fixer pipeline. Review depth follows risk.
+- Update `change.md` when a plan item has an independent result, a blocker matters, scope changes, a decision cannot be inferred from code, validation yields important findings, a knowledge candidate is found, a session must stop unfinished, or the change is completed.
+- Do not treat subagent confidence as completion. Completion is based on files, Git diff/status, validation output, review findings, and the approved plan.
 
-- `DISPATCH_IMPLEMENTER`: derive/write the worker packet first with `packet-helper.py worker ... --output <packet>`, confirm packet `output_language` equals the current Contract value, then bind/start with `state-helper.py start-task <state> --expected-version <n> --task-id <task-id> --packet-json <packet>`. That bind/start performs canonical packet schema validation plus current-state identity, freshness, Task, and ownership checks atomically. Only after it succeeds may the Controller dispatch a fresh implementer with only that bound packet, packet-bound `output_language`, bounded context, ownership, checks, and report/evidence paths. artifact existence, bare SHA, agent claim, or Controller inference is not dispatch authority.
-- If worker packet write or bind/start fails, STOP, show the helper error, then re-run `state-helper.py inspect` and `state-helper.py next-action`; do not dispatch implementer from an unbound artifact. After implementer output, save the raw report/evidence, run helper mutation/evidence validation, record/import identity, then query `next-action`.
-- `DISPATCH_REVIEWER`: derive a reviewer packet, confirm packet `output_language`, and dispatch a fresh read-only reviewer with the packet-bound value; save the raw review, import only through helper validation.
-- `DISPATCH_FIXER`: dispatch a bounded fixer only for helper-authorized same-owner OPEN blocking findings, exact required paths, shared maximum=2 budget, and the same packet-bound `output_language` as the original worker packet. Re-run mutation/evidence check and a fresh read-only reviewer afterward.
-- Controller does not patch product files, expand mutation_targets, edit Gate/state authority directly, infer agent language from chat/history, or treat worker/fixer/reviewer claims as state transition authority.
+## Bug/change boundary and risk
 
-## Completion and decision handoff
+Continue the current change when the original `Goal` is not met, the current implementation introduced a defect or regression, user acceptance fails inside the approved scope, or review finds an in-scope issue.
 
-When all Tasks are helper PASS/completed, generate a schema-valid full-range completion packet whose `output_language` is copied from the current Contract, and dispatch a mandatory fresh completion critic with that packet-bound value. Completion critic is read-only: it critiques acceptance, mutation map, checks, residual risk, and knowledge/index/archive proposal inputs, but it cannot approve Finish Gate and cannot create or persist sidecars.
+Create a new change with `related_changes` when the request is after archive, unrelated, a clear scope expansion, a public API or architecture change, a dependency/data/migration/product semantic change, or independently deliverable.
 
-If completion critic or helper returns FAIL, only route to helper owner mapping/shared budget repair, blocker HALT, or Contract revision. Do not hide unresolved blockers as remaining risk.
+Risk guidance:
 
-If completion critic PASS is accepted by helper evidence, the Controller derives the canonical five-file Finish handoff from packet/evidence, not from chat history: `CHANGE_ROOT/evidence/completion.md`, `CHANGE_ROOT/evidence/completion.json`, `CHANGE_ROOT/evidence/decision.md`, `CHANGE_ROOT/evidence/decision.json`, and `CHANGE_ROOT/evidence/finish-plan.json`. Root-level same-name handoff files under `CHANGE_ROOT` are not active authority and must not be fallback or auto-migrated. Maintainer prose in `completion.md` and `decision.md` uses packet-bound `output_language`, while JSON keys, hashes, paths, commands, enums, raw output, and fixed protocol tokens remain English/original. `decision.md` must contain exactly these four top-level sections with English headings: `Completion Verdict`, `Remaining Risks`, `Knowledge Proposal`, `Archive Decision`; only section bodies follow `output_language`.
+- Documentation, simple config, and clear one-file fixes: main-session self-check is usually enough.
+- Ordinary multi-file features: run focused validation and targeted review.
+- Cross-module, public API, or data model work: use an independent reviewer.
+- Authentication, security, migration, destructive, or breaking changes: use an independent reviewer plus broader validation.
+- If risk or scope expands after approval, return to the implementation Gate before further product mutation.
 
-Before state transition, call `evidence-helper.py validate-finish-handoff --state-json <state.json> --completion-json <completion.json> --decision-json <decision.json> --finish-plan-json <finish-plan.json> --completion-md <completion.md> --decision-md <decision.md> --repo <repo>` and then `state-helper.py record-completion <state> --expected-version <n> --completion-json <completion-pass.json> --change-root <CHANGE_ROOT>`. `record-completion` revalidates the five files, projected state identity, `decision_sha256`, `finish_plan_sha256`, and `decision_state_version`; only success may transition to `decision_pending`. Then tell the user to call `/nuclio:finish` in this or a new Session and STOP. Do not write long-term knowledge, journal, index, or archive.
+## Results, knowledge, and archive
 
-When helper returns `REBUILD_FINISH_HANDOFF`, rebuild only the canonical proposal sidecars and projected identity from current change-local state/evidence, then call `state-helper.py record-finish-handoff <state> --expected-version <n> --change-root <CHANGE_ROOT>`. Do not rerun product Tasks, do not dispatch implementer/fixer, do not reuse chat history as authority, and do not accept Finish on behalf of the user. If rebuild or validation fails, show the actual helper `code`, `action`, and `repair_hint` such as `MISSING_FINISH_HANDOFF`, `STALE_DECISION`, `STALE_FINISH_PLAN`, `STALE_TARGET`, or `MARKDOWN_HASH_MISMATCH`; do not direct the user to a nonexistent repair path.
+After validation passes, first report product outcome, changed paths, commands, exit codes, and relevant output. Do not delay the product result behind a knowledge decision.
 
-## Legacy baseline wording
+Long-term knowledge is optional and only appears when candidates pass the five questions in `knowledge.md`: stable, reusable, non-obvious, verified, and attributable. If no candidate qualifies, do not show a second Gate; complete and archive.
 
-The legacy baseline names `project-init`, `brief`, `design`, `implement`, `verify`, and `fold` may appear only as read-only migration/baseline labels. They are not Nuclio canonical lifecycle states or user routes.
+When candidates qualify, show only semantic conclusion, one target file/heading, operation type, conflict status, and impact. The user may accept all, accept part, modify, or reject in natural language. Rejection does not affect the verified product result or archive. After writing accepted knowledge, check unique authority, duplicate or contradictory statements, and needed links/index entries, then record actual `Knowledge Updates` in `change.md`.
+
+Finally set status to `completed`, archive the change under `.dev-docs/changes/archive/`, and summarize where the archived `change.md` can be found.

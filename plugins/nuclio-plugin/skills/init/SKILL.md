@@ -1,36 +1,53 @@
 ---
 name: init
-description: "Use when a project needs first-time Nuclio bootstrap, .dev-docs repair, or explicit legacy migration preview/apply before any work change begins."
+description: "Use when a project needs first-time Nuclio v2 .dev-docs setup, minimal knowledge skeleton repair, obvious root navigation repair, or whole-directory movement of a clear v1 .dev-docs tree into .dev-docs/legacy/v1 before regular change work begins."
 disable-model-invocation: true
 ---
 # Nuclio Init
 
-You are the Nuclio init Coordinator. Route only project bootstrap, `.dev-docs/` repair, and explicit legacy migration. For execution after an approved Contract, tell the user to call `/nuclio:work`; for ready Finish decisions, tell the user to call `/nuclio:finish`.
+You are the Nuclio init Coordinator. This entry only prepares or repairs the project-level Nuclio v2 `.dev-docs` skeleton and moves a clear legacy tree as a whole when needed. It does not create a regular change, implement product work, run validation for product changes, maintain long-term knowledge, or archive a change.
 
 ## Read first
 
-Use progressive disclosure instead of copying protocol detail: [authority](../../references/authority.md), [lifecycle](../../references/lifecycle.md), [contract](../../references/contract.md), [context](../../references/context.md), [output language](../../references/output-language.md), [grill protocol](../../references/grill-protocol.md), and [migration](../../references/migration.md).
+Read these one-level references before acting: [workflow](../../references/workflow.md), [change format](../../references/change-format.md), and [context hygiene](../../references/context-hygiene.md).
 
-## Hard authority guards
+## Scope
 
-- `.dev-docs/` files plus deterministic helper identity are the only authority.
-- Artifact existence is not approval.
-- Product mutation before fresh Contract approval is forbidden.
-- Init does not create product code, does not create the first product change, does not start work automatically, and does not create change-local Contract language authority.
-- Pre-Contract maintainer-facing prose created by init uses the current user request's primary language. When repairing existing project knowledge, preserve the target's existing primary language and STOP if it cannot be determined safely. This init prose rule never replaces the later work Contract `output_language` authority.
-- Legacy migration is default read-only preview; apply requires explicit opt-in for the current preview identity.
-- Multiple active changes are not guessed; STOP and ask one exact selection question.
+`init` may only handle these project-level cases:
 
-## Workflow
+- `.dev-docs` is absent and the user wants to enable Nuclio v2.
+- `.dev-docs` is clear v2 but required skeleton paths are missing.
+- `.dev-docs/index.md` is obviously damaged as root navigation and can be repaired without overwriting knowledge prose.
+- `.dev-docs` is clear legacy v1 and must be moved wholesale to `.dev-docs/legacy/v1` by `change.py legacy-move`.
 
-1. Inspect the filesystem and any existing `.dev-docs/` proposal first. If repairing or migrating an existing change, require exactly one selected change-id, define `CHANGE_ROOT` once as the absolute resolved `.dev-docs/changes/<change-id>` directory, and run `state-helper.py inspect <state>` and `state-helper.py next-action <state>` with `<state>` equal to `CHANGE_ROOT/state.json` when it exists. Multiple active changes are not guessed.
-2. For first-time bootstrap or repair, this skill is the project fact-source bootstrap/repair path only. It may propose minimal project index and long-term knowledge skeleton files, not a product change Contract, change context, or change state.
-3. Present one proposal that lists the exact init writes. After current turn explicit approval, the Controller may Write only this project-level allowlist when needed: `.dev-docs/index.md`, `.dev-docs/knowledge/product.md`, `.dev-docs/knowledge/architecture.md`, `.dev-docs/knowledge/engineering.md`, and `.dev-docs/changes/index.md`.
-4. After each approved init Write, read back the file and compute/report its SHA-256. If any target already contains user bytes that the proposal did not cover, STOP for repair instead of overwriting.
-5. If the user wants to initialize a change, STOP after bootstrap and tell them to call `/nuclio:work`; contract-helper and context-helper validation are work drafting surfaces only, not init apply commands.
-6. For explicit legacy migration, use only change directory source/target paths with the real migration helper commands: `migration-helper.py detect --legacy-change-path <path> --target-change-path <path>`, then `migration-helper.py preview --legacy-change-path <path> --target-change-path <path>`, then after exact opt-in `migration-helper.py apply --legacy-change-path <path> --target-change-path <path> --apply --preview-identity <sha256> --approval-json <json>`. Both `<path>` values must be `.dev-docs/changes/<change-id>` directories, not project-root artifacts.
-7. End every successful bootstrap/repair/migration by showing next action and STOP. Do not enter work; tell the user to call `/nuclio:work`.
+For feature, bug, refactor, migration, documentation, validation, review repair, knowledge proposal, or archive work, stop and tell the user to use `work`.
 
-## Legacy baseline wording
+## Classification
 
-The legacy baseline names `project-init`, `brief`, `design`, `implement`, `verify`, and `fold` may appear only as read-only migration/baseline labels. They are not Nuclio canonical lifecycle states or user routes.
+Inspect the resolved project root and classify `.dev-docs` before any write:
+
+1. `absent`: no `.dev-docs` path exists.
+2. `clear v2`: `.dev-docs/index.md`, `.dev-docs/knowledge/`, `.dev-docs/changes/`, or `.dev-docs/legacy/` already matches the v2 shape from `change-format.md` and does not contain legacy-only process files as root authority.
+3. `clear v1`: the existing `.dev-docs` is a legacy process tree and lacks the v2 skeleton; it must be moved as a whole, not parsed or converted.
+4. `conflict/unknown`: files, symlinks, missing parents, mixed v1/v2 signals, existing `.dev-docs/legacy/v1`, or any unsafe target make the classification uncertain.
+
+If classification is `conflict/unknown`, stop and report the exact paths that prevent safe action.
+
+## Allowed actions
+
+- For `absent`, create the minimal v2 skeleton described in `change-format.md`: `.dev-docs/index.md`, `.dev-docs/knowledge/project.md`, `.dev-docs/knowledge/architecture.md`, `.dev-docs/knowledge/engineering.md`, `.dev-docs/changes/archive/`, and `.dev-docs/legacy/`. Write the exact Markdown templates from `change-format.md` into each new skeleton file; do not invent alternate placeholder text.
+- For `clear v2`, only create missing required skeleton paths or repair an obviously broken root index using the same `change-format.md` templates. Never overwrite existing knowledge body text, active change notes, archive entries, or legacy material.
+- For `clear v1`, call `python3 <plugin>/scripts/change.py --project-root <project-root> legacy-move`. Do not parse, transform, summarize, restore, or partially copy legacy state.
+- For all successful actions, report only what was created, repaired, or moved and the recommended next command for real change work.
+
+## Stop rules
+
+Stop without writing when:
+
+- The target path is outside the resolved project root or follows an unsafe symlink.
+- `.dev-docs/legacy/v1` already exists and would be overwritten.
+- `.dev-docs` contains mixed v1/v2 signals or unknown process artifacts.
+- A required repair would overwrite non-empty user prose.
+- The user asks to start product implementation, validation, review repair, knowledge write, or archive from `init`.
+
+Successful `init` ends after setup/repair/move. It never creates `.dev-docs/changes/<change-id>/change.md`, never edits product files, and never enters the work lifecycle.

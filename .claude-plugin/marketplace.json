@@ -18,7 +18,7 @@
     {
       "name": "nuclio",
       "source": "./plugins/nuclio-plugin",
-      "description": "Adds /nuclio:init, /nuclio:work, and /nuclio:finish for a file-backed Contract Workbench with explicit mutation and knowledge gates"
+      "description": "Adds /nuclio:init for v2 .dev-docs setup, repair, and legacy/v1 moves, plus /nuclio:work for change.md recovery, human-approved plans, validation, risk-based review, and optional knowledge distillation"
     }
   ]
 }

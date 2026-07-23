@@ -1,7 +1,7 @@
 {
   "name": "nuclio",
-  "description": "Use when a project needs an init/work/finish file-backed Contract Workbench with explicit Contract and Finish gates before product mutation or long-term knowledge updates",
-  "version": "1.0.3",
+  "description": "Use when a project needs /nuclio:work for a v2-only human-readable change.md workflow with approved plans, validation, risk-based review, and optional knowledge distillation, plus /nuclio:init for v2 .dev-docs setup, repair, and whole-directory legacy/v1 moves",
+  "version": "2.0.0",
   "author": {
     "name": "Jade Liu",
     "email": "[redacted-email]"
