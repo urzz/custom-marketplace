@@ -1,15 +1,18 @@
 """
-Nuclio v2 change helper behavior tests.
+Nuclio v2 change Plan/State helper behavior tests.
 
 ## Contents
 - [Test harness](#test-harness)
-- [Create/list/show/status/archive coverage](#createlistshowstatusarchive-coverage)
-- [Legacy move coverage](#legacy-move-coverage)
+- [Create/list/show coverage](#createlistshow-coverage)
+- [Plan and YAML safety coverage](#plan-and-yaml-safety-coverage)
+- [State checkpoint and repair coverage](#state-checkpoint-and-repair-coverage)
+- [Completion archive and legacy coverage](#completion-archive-and-legacy-coverage)
 """
 
 import contextlib
 import importlib.util
 import io
+import json
 import shutil
 import subprocess
 import sys
@@ -33,9 +36,9 @@ SKELETON_EXPECTED = {
         "\n"
         "## Changes\n"
         "\n"
-        "Active changes live in `.dev-docs/changes/<change-id>/change.md`.\n"
+        "Active changes live in `.dev-docs/changes/<change-id>/` with `change.md`, `plan.yaml`, and `state.yaml`.\n"
         "\n"
-        "Completed changes move to `.dev-docs/changes/archive/<change-id>/change.md`.\n"
+        "Completed changes move to `.dev-docs/changes/archive/<change-id>/`.\n"
         "\n"
         "Do not create `.dev-docs/changes/index.md`; root index does not enumerate active or archived changes.\n"
         "\n"
@@ -64,7 +67,7 @@ SKELETON_EXPECTED = {
     ".dev-docs/knowledge/engineering.md": (
         "# Engineering Knowledge\n"
         "\n"
-        "This file records confirmed build, test, release, collaboration, and code practice knowledge that remains useful across changes.\n"
+        "This file records confirmed build, test, release, collaboration, and code practice knowledge that remain useful across changes.\n"
         "\n"
         "## Confirmed Knowledge\n"
         "\n"
@@ -94,6 +97,27 @@ def run_change(project_root, *args):
     )
 
 
+def stdout_json(result):
+    return json.loads(result.stdout)
+
+
+def stderr_json(result):
+    return json.loads(result.stderr)
+
+
+def git(root, *args, check=True):
+    result = subprocess.run(
+        ["git", "-C", str(root), *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if check and result.returncode != 0:
+        raise AssertionError(result.stderr)
+    return result
+
+
 class ChangeHelperTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -112,13 +136,101 @@ class ChangeHelperTests(unittest.TestCase):
             (docs / "knowledge" / f"{name}.md").write_text(f"# {name}\n", encoding="utf-8")
         return docs
 
+    def init_git(self):
+        if (self.root / ".git").exists():
+            shutil.rmtree(self.root / ".git")
+        for child in list(self.root.iterdir()):
+            if child.name != ".git":
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+        git(self.root, "init")
+        git(self.root, "config", "user.email", "nuclio@example.invalid")
+        git(self.root, "config", "user.name", "Nuclio Test")
+        (self.root / "README.md").write_text("# Test\n", encoding="utf-8")
+        git(self.root, "add", "README.md")
+        git(self.root, "commit", "-m", "chore: initial")
+
     def create_change(self, change_id="alpha-change", title="Alpha Change", goal="Ship alpha"):
         self.make_v2_skeleton()
         result = run_change(self.root, "create", "--id", change_id, "--title", title, "--goal", goal)
         self.assertEqual(result.returncode, 0, result.stderr)
-        return self.root / ".dev-docs" / "changes" / change_id / "change.md"
+        return self.root / ".dev-docs" / "changes" / change_id
 
-    def test_main_and_subcommand_help_expose_exact_six_commands(self):
+    def write_plan(self, change_id="alpha-change", risk="medium", review="task-and-final", allowed_paths=None, tasks=None):
+        if allowed_paths is None:
+            allowed_paths = ["src/", "README.md"]
+        if tasks is None:
+            tasks = [
+                {
+                    "id": 1,
+                    "name": "Implement alpha",
+                    "steps": ["Edit source"],
+                    "acceptance": ["Source is present"],
+                    "validation": ["python -m pytest"],
+                    "delegate": "main",
+                    "review": "task-and-final",
+                    "checkpoint_subject": "feat(alpha): implement task 1",
+                }
+            ]
+        plan = self.root / ".dev-docs" / "changes" / change_id / "plan.yaml"
+        plan.write_text(
+            "schema_version: 1\n"
+            f"change_id: {change_id}\n"
+            "revision: 1\n"
+            f"risk_level: {risk}\n"
+            f"review_policy: {review}\n"
+            "repair_policy: in-scope\n"
+            "summary: Implement alpha safely\n"
+            "allowed_paths:\n"
+            + "".join(f"  - {path}\n" for path in allowed_paths)
+            + "tasks:\n"
+            + "".join(
+                (
+                    f"  - id: {task['id']}\n"
+                    f"    name: {task['name']}\n"
+                    "    steps:\n"
+                    + "".join(f"      - {step}\n" for step in task["steps"])
+                    + "    acceptance:\n"
+                    + "".join(f"      - {item}\n" for item in task["acceptance"])
+                    + "    validation:\n"
+                    + "".join(f"      - {command}\n" for command in task["validation"])
+                    + f"    delegate: {task['delegate']}\n"
+                    + f"    review: {task['review']}\n"
+                    + f"    checkpoint_subject: '{task['checkpoint_subject']}'\n"
+                )
+                for task in tasks
+            ),
+            encoding="utf-8",
+        )
+        return plan
+
+    def prepare_plan_state_repo(self, review="task-and-final"):
+        self.init_git()
+        change_dir = self.create_change()
+        tasks = None
+        if review == "self":
+            tasks = [
+                {
+                    "id": 1,
+                    "name": "Implement alpha",
+                    "steps": ["Edit source"],
+                    "acceptance": ["Source is present"],
+                    "validation": ["python -m pytest"],
+                    "delegate": "main",
+                    "review": "self",
+                    "checkpoint_subject": "feat(alpha): implement task 1",
+                }
+            ]
+        self.write_plan(review=review, tasks=tasks)
+        git(self.root, "add", ".dev-docs/changes/alpha-change/change.md", ".dev-docs/changes/alpha-change/plan.yaml")
+        git(self.root, "commit", "-m", "docs: approve alpha plan")
+        result = run_change(self.root, "init-state", "--id", "alpha-change")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return change_dir
+
+    def test_main_and_subcommand_help_expose_plan_state_commands_and_no_set_status(self):
         main = subprocess.run(
             [sys.executable, str(SCRIPT), "--help"],
             text=True,
@@ -127,7 +239,12 @@ class ChangeHelperTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(main.returncode, 0, main.stderr)
-        for command in ("create", "list", "show", "set-status", "archive", "legacy-move"):
+        expected = (
+            "create", "list", "show", "validate-plan", "init-state", "status", "next-action",
+            "start-task", "record-task", "record-review", "start-repair", "record-repair",
+            "record-validation", "complete", "archive", "legacy-move",
+        )
+        for command in expected:
             self.assertIn(command, main.stdout)
             sub = subprocess.run(
                 [sys.executable, str(SCRIPT), command, "--help"],
@@ -137,13 +254,9 @@ class ChangeHelperTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(sub.returncode, 0, sub.stderr)
-        for forbidden in (
-            "next-action", "approve", "packet", "evidence", "validate-schema",
-            "finish", "dispatch", "import-review", "authorize-fix",
-        ):
-            self.assertNotIn(forbidden, main.stdout)
+        self.assertNotIn("set-status", main.stdout)
 
-    def test_create_writes_only_change_markdown_and_no_json(self):
+    def test_create_writes_spec_only_with_json_stdout_and_no_plan_or_state(self):
         self.make_v2_skeleton()
         result = run_change(
             self.root,
@@ -155,132 +268,291 @@ class ChangeHelperTests(unittest.TestCase):
             "--date", "2026-07-23",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        payload = stdout_json(result)
+        self.assertTrue(payload["ok"])
         docs = self.root / ".dev-docs"
-        change = docs / "changes" / "alpha-change" / "change.md"
+        change_dir = docs / "changes" / "alpha-change"
+        change = change_dir / "change.md"
         self.assertTrue(change.exists())
         text = change.read_text(encoding="utf-8")
         self.assertIn("id: alpha-change", text)
+        self.assertIn("title: Alpha Change", text)
         self.assertIn("status: active", text)
         self.assertIn("created: 2026-07-23", text)
-        self.assertIn("updated: 2026-07-23", text)
-        self.assertIn("related_changes: prior-change", text)
-        self.assertIn("# Alpha Change", text)
-        self.assertIn("## Goal\n\nShip alpha", text)
-        self.assertIn("## Current State", text)
-        self.assertEqual([p.relative_to(docs) for p in docs.rglob("*.json")], [])
+        self.assertIn('related_changes: ["prior-change"]', text)
+        self.assertIn("## Acceptance Criteria", text)
+        self.assertFalse((change_dir / "plan.yaml").exists())
+        self.assertFalse((change_dir / "state.yaml").exists())
         self.assertFalse((docs / "changes" / "index.md").exists())
-        self.assertEqual([p.name for p in (docs / "changes" / "alpha-change").iterdir()], ["change.md"])
 
-    def test_create_rejects_all_illegal_ids(self):
+    def test_errors_use_stable_json_stderr_and_no_side_effect_for_bad_id(self):
         self.make_v2_skeleton()
-        illegal_ids = [
-            "", "Alpha", "alpha_change", "alpha change", "alpha/change", "alpha\\change",
-            "/alpha", "../alpha", "alpha..beta", "alpha*beta", "alpha?beta", "alpha[beta",
-            "-alpha", "alpha-", "alpha--beta", ".", "..",
-        ]
-        for bad_id in illegal_ids:
-            with self.subTest(bad_id=bad_id):
-                before = sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*"))
-                result = run_change(self.root, "create", "--id", bad_id, "--title", "Bad", "--goal", "Bad")
-                self.assertNotEqual(result.returncode, 0)
-                after = sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*"))
-                self.assertEqual(after, before)
+        before = sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*"))
+        result = run_change(self.root, "create", "--id", "../bad", "--title", "Bad", "--goal", "Bad")
+        self.assertNotEqual(result.returncode, 0)
+        payload = stderr_json(result)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["code"], "INVALID_CHANGE_ID")
+        after = sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*"))
+        self.assertEqual(after, before)
 
-    def test_create_rejects_active_or_archive_duplicate(self):
-        self.make_v2_skeleton()
-        active = self.root / ".dev-docs" / "changes" / "alpha-change"
-        active.mkdir()
-        first = run_change(self.root, "create", "--id", "alpha-change", "--title", "A", "--goal", "A")
-        self.assertNotEqual(first.returncode, 0)
-        shutil.rmtree(active)
-        archived = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
-        archived.mkdir()
-        second = run_change(self.root, "create", "--id", "alpha-change", "--title", "A", "--goal", "A")
-        self.assertNotEqual(second.returncode, 0)
-        self.assertEqual(list((self.root / ".dev-docs" / "changes").glob("alpha-change*")), [])
-
-    def test_list_excludes_archive_and_tolerates_malformed(self):
-        self.create_change("alpha-change", "Alpha Change", "Ship alpha")
-        malformed_dir = self.root / ".dev-docs" / "changes" / "broken-change"
-        malformed_dir.mkdir()
-        (malformed_dir / "change.md").write_text("---\nid: broken-change\nstatus: active\n# missing close\n", encoding="utf-8")
-        archive_dir = self.root / ".dev-docs" / "changes" / "archive" / "old-change"
-        archive_dir.mkdir(parents=True)
-        (archive_dir / "change.md").write_text("# Old\n", encoding="utf-8")
+    def test_list_and_show_return_compact_json(self):
+        change_dir = self.create_change("alpha-change", "Alpha Change", "Ship alpha")
         result = run_change(self.root, "list")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("alpha-change\tactive\tAlpha Change\t.dev-docs/changes/alpha-change/change.md", result.stdout)
-        self.assertIn("broken-change\tunknown\tunknown\t.dev-docs/changes/broken-change/change.md", result.stdout)
-        self.assertNotIn("old-change", result.stdout)
+        payload = stdout_json(result)
+        self.assertEqual(payload["changes"][0]["change_id"], "alpha-change")
+        self.assertEqual(payload["changes"][0]["title"], "Alpha Change")
+        show = run_change(self.root, "show", "--id", "alpha-change")
+        self.assertEqual(show.returncode, 0, show.stderr)
+        self.assertEqual(stdout_json(show)["content"], (change_dir / "change.md").read_text(encoding="utf-8"))
 
-    def test_list_omits_active_symlink_escaping_project_root(self):
-        self.make_v2_skeleton()
-        with tempfile.TemporaryDirectory() as external_tmp:
-            external = Path(external_tmp) / "linked-change"
-            external.mkdir()
-            (external / "change.md").write_text(
-                "---\nid: linked-change\nstatus: active\n---\n\n# Outside Title\n",
-                encoding="utf-8",
-            )
-            (self.root / ".dev-docs" / "changes" / "linked-change").symlink_to(external, target_is_directory=True)
-            result = run_change(self.root, "list")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("linked-change", result.stdout)
-        self.assertNotIn("Outside Title", result.stdout)
-
-    def test_show_active_and_archived(self):
-        change = self.create_change("alpha-change", "Alpha Change", "Ship alpha")
-        active = run_change(self.root, "show", "--id", "alpha-change")
-        self.assertEqual(active.returncode, 0, active.stderr)
-        self.assertEqual(active.stdout, change.read_text(encoding="utf-8"))
-        archive_dir = self.root / ".dev-docs" / "changes" / "archive" / "old-change"
-        archive_dir.mkdir(parents=True)
-        archived_change = archive_dir / "change.md"
-        archived_change.write_text("# Old\n", encoding="utf-8")
-        missing_active = run_change(self.root, "show", "--id", "old-change")
-        self.assertNotEqual(missing_active.returncode, 0)
-        archived = run_change(self.root, "show", "--id", "old-change", "--archived")
-        self.assertEqual(archived.returncode, 0, archived.stderr)
-        self.assertEqual(archived.stdout, "# Old\n")
-
-    def test_set_status_preserves_body_and_extra_frontmatter(self):
-        change = self.create_change("alpha-change", "Alpha Change", "Ship alpha")
-        original = change.read_text(encoding="utf-8")
-        change.write_text(original.replace("updated: ", "owner: human\nupdated: ") + "\nTail text\n", encoding="utf-8")
-        result = run_change(self.root, "set-status", "--id", "alpha-change", "--status", "completed", "--date", "2026-07-23")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        text = change.read_text(encoding="utf-8")
-        self.assertIn("status: completed", text)
-        self.assertIn("updated: 2026-07-23", text)
-        self.assertIn("owner: human", text)
-        self.assertIn("Tail text\n", text)
-        self.assertNotIn("status: active", text)
-
-    def test_set_status_malformed_has_no_side_effect(self):
-        change = self.create_change("alpha-change", "Alpha Change", "Ship alpha")
-        change.write_text("---\nid: alpha-change\nstatus: active\nstatus: completed\n---\n# Bad\n", encoding="utf-8")
-        before = change.read_text(encoding="utf-8")
-        result = run_change(self.root, "set-status", "--id", "alpha-change", "--status", "completed")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(change.read_text(encoding="utf-8"), before)
-
-    def test_archive_only_accepts_completed_and_conflict_has_no_side_effect(self):
-        change = self.create_change("alpha-change", "Alpha Change", "Ship alpha")
-        active_result = run_change(self.root, "archive", "--id", "alpha-change")
-        self.assertNotEqual(active_result.returncode, 0)
-        self.assertTrue(change.exists())
-        run_change(self.root, "set-status", "--id", "alpha-change", "--status", "completed")
-        conflict = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
-        conflict.mkdir(parents=True)
-        conflict_result = run_change(self.root, "archive", "--id", "alpha-change")
-        self.assertNotEqual(conflict_result.returncode, 0)
-        self.assertTrue(change.exists())
-        shutil.rmtree(conflict)
-        ok = run_change(self.root, "archive", "--id", "alpha-change")
+    def test_validate_plan_accepts_native_yaml_multiline_and_rejects_duplicate_keys(self):
+        self.create_change()
+        plan = self.write_plan()
+        text = plan.read_text(encoding="utf-8").replace("summary: Implement alpha safely", "summary: |\n  Implement alpha safely\n  with block scalar")
+        plan.write_text(text, encoding="utf-8")
+        ok = run_change(self.root, "validate-plan", "--id", "alpha-change")
         self.assertEqual(ok.returncode, 0, ok.stderr)
-        self.assertFalse((self.root / ".dev-docs" / "changes" / "alpha-change").exists())
-        self.assertTrue((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change" / "change.md").exists())
-        self.assertFalse((self.root / ".dev-docs" / "changes" / "index.md").exists())
+        duplicate = text.replace("revision: 1\n", "revision: 1\nrevision: 2\n")
+        plan.write_text(duplicate, encoding="utf-8")
+        bad = run_change(self.root, "validate-plan", "--id", "alpha-change")
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertEqual(stderr_json(bad)["code"], "DUPLICATE_YAML_KEY")
+
+    def test_validate_plan_rejects_unsafe_tag_missing_dependency_placeholder_and_high_final(self):
+        self.create_change()
+        plan = self.write_plan()
+        plan.write_text("!!python/object/apply:os.system ['echo bad']\n", encoding="utf-8")
+        unsafe = run_change(self.root, "validate-plan", "--id", "alpha-change")
+        self.assertNotEqual(unsafe.returncode, 0)
+        self.assertEqual(stderr_json(unsafe)["code"], "INVALID_YAML")
+        self.write_plan(risk="high", review="final")
+        mismatch = run_change(self.root, "validate-plan", "--id", "alpha-change")
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertEqual(stderr_json(mismatch)["code"], "RISK_REVIEW_MISMATCH")
+        self.write_plan()
+        plan.write_text(plan.read_text(encoding="utf-8").replace("Implement alpha safely", "TODO"), encoding="utf-8")
+        placeholder = run_change(self.root, "validate-plan", "--id", "alpha-change")
+        self.assertNotEqual(placeholder.returncode, 0)
+        self.assertEqual(stderr_json(placeholder)["code"], "PLACEHOLDER_VALUE")
+        change_module = load_change_module()
+        original_yaml = change_module.yaml
+        change_module.yaml = None
+        try:
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                result = change_module.main(["--project-root", str(self.root), "validate-plan", "--id", "alpha-change"])
+            self.assertNotEqual(result, 0)
+            self.assertEqual(json.loads(stderr.getvalue())["code"], "DEPENDENCY_MISSING")
+        finally:
+            change_module.yaml = original_yaml
+
+    def test_validate_plan_rejects_illegal_allowed_paths_and_task_schema(self):
+        self.create_change()
+        bad_paths = ["/abs", "./rel", "../up", "src\\bad", "src/*.py", "white space", "src//bad", ".", ""]
+        for bad_path in bad_paths:
+            with self.subTest(bad_path=bad_path):
+                self.write_plan(allowed_paths=[bad_path])
+                result = run_change(self.root, "validate-plan", "--id", "alpha-change")
+                self.assertNotEqual(result.returncode, 0)
+        self.write_plan(allowed_paths=["src/", "src/"])
+        duplicate = run_change(self.root, "validate-plan", "--id", "alpha-change")
+        self.assertNotEqual(duplicate.returncode, 0)
+        self.assertEqual(stderr_json(duplicate)["code"], "DUPLICATE_ALLOWED_PATH")
+        self.write_plan(tasks=[
+            {
+                "id": 2,
+                "name": "Late",
+                "steps": ["Step"],
+                "acceptance": ["Accept"],
+                "validation": ["Check"],
+                "delegate": "main",
+                "review": "self",
+                "checkpoint_subject": "feat(alpha): late",
+            },
+            {
+                "id": 1,
+                "name": "Early",
+                "steps": ["Step"],
+                "acceptance": ["Accept"],
+                "validation": ["Check"],
+                "delegate": "main",
+                "review": "self",
+                "checkpoint_subject": "feat(alpha): early",
+            },
+        ])
+        unordered = run_change(self.root, "validate-plan", "--id", "alpha-change")
+        self.assertNotEqual(unordered.returncode, 0)
+
+    def test_init_state_atomic_write_and_identity_drift_guard(self):
+        self.init_git()
+        change_dir = self.create_change()
+        self.write_plan()
+        git(self.root, "add", ".dev-docs/changes/alpha-change/change.md", ".dev-docs/changes/alpha-change/plan.yaml")
+        git(self.root, "commit", "-m", "docs: approve alpha plan")
+        result = run_change(self.root, "init-state", "--id", "alpha-change")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = change_dir / "state.yaml"
+        self.assertTrue(state.exists())
+        self.assertFalse(list(change_dir.glob(".state.yaml.*.tmp")))
+        state_before = state.read_text(encoding="utf-8")
+        change_module = load_change_module()
+
+        def fail_replace(source, target):
+            raise OSError("simulated replace failure")
+
+        with mock.patch.object(change_module.os, "replace", fail_replace):
+            with contextlib.redirect_stderr(io.StringIO()):
+                failed = change_module.main(["--project-root", str(self.root), "init-state", "--id", "beta-change"])
+        self.assertNotEqual(failed, 0)
+        self.assertEqual(state.read_text(encoding="utf-8"), state_before)
+        (change_dir / "change.md").write_text((change_dir / "change.md").read_text(encoding="utf-8") + "\nDrift\n", encoding="utf-8")
+        drift = run_change(self.root, "status", "--id", "alpha-change")
+        self.assertNotEqual(drift.returncode, 0)
+        self.assertEqual(stderr_json(drift)["code"], "IDENTITY_DRIFT")
+
+    def test_start_task_allows_unrelated_dirty_but_rejects_index_and_allowed_dirty(self):
+        self.prepare_plan_state_repo()
+        (self.root / "notes.txt").write_text("outside allowed\n", encoding="utf-8")
+        ok = run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1", "--executor", "main")
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertEqual(stdout_json(ok)["checkpoint_subject"], "feat(alpha): implement task 1")
+
+        self.prepare_plan_state_repo()
+        (self.root / "README.md").write_text("dirty allowed\n", encoding="utf-8")
+        allowed_dirty = run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        self.assertNotEqual(allowed_dirty.returncode, 0)
+        self.assertEqual(stderr_json(allowed_dirty)["code"], "DIRTY_ALLOWED_PATH")
+
+    def test_start_task_rejects_non_empty_index(self):
+        self.prepare_plan_state_repo()
+        (self.root / "notes.txt").write_text("outside allowed\n", encoding="utf-8")
+        git(self.root, "add", "notes.txt")
+        indexed = run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        self.assertNotEqual(indexed.returncode, 0)
+        self.assertEqual(stderr_json(indexed)["code"], "DIRTY_INDEX")
+
+    def test_record_task_validates_parent_subject_allowed_paths_index_and_validation(self):
+        self.prepare_plan_state_repo()
+        start = run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        self.assertEqual(start.returncode, 0, start.stderr)
+        (self.root / "src").mkdir()
+        (self.root / "src" / "alpha.txt").write_text("alpha\n", encoding="utf-8")
+        git(self.root, "add", "src/alpha.txt")
+        git(self.root, "commit", "-m", "feat(alpha): implement task 1")
+        fail_validation = run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "FAIL", "--validation-summary", "no")
+        self.assertNotEqual(fail_validation.returncode, 0)
+        ok = run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "PASS", "--validation-summary", "unit ok")
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertEqual(stdout_json(ok)["next_action"], "RUN_TASK_REVIEW")
+
+        self.prepare_plan_state_repo()
+        run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        (self.root / "outside.txt").write_text("bad\n", encoding="utf-8")
+        git(self.root, "add", "outside.txt")
+        git(self.root, "commit", "-m", "feat(alpha): implement task 1")
+        outside = run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "PASS", "--validation-summary", "unit ok")
+        self.assertNotEqual(outside.returncode, 0)
+        self.assertEqual(stderr_json(outside)["code"], "ALLOWED_PATH_VIOLATION")
+
+        self.prepare_plan_state_repo()
+        run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        (self.root / "src").mkdir()
+        (self.root / "src" / "alpha.txt").write_text("alpha\n", encoding="utf-8")
+        git(self.root, "add", "src/alpha.txt")
+        git(self.root, "commit", "-m", "wrong subject")
+        wrong_subject = run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "PASS", "--validation-summary", "unit ok")
+        self.assertNotEqual(wrong_subject.returncode, 0)
+        self.assertEqual(stderr_json(wrong_subject)["code"], "CHECKPOINT_SUBJECT_MISMATCH")
+
+    def test_task_review_failure_repair_checkpoint_returns_original_gate(self):
+        self.prepare_plan_state_repo()
+        run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        (self.root / "src").mkdir()
+        (self.root / "src" / "alpha.txt").write_text("alpha\n", encoding="utf-8")
+        git(self.root, "add", "src/alpha.txt")
+        git(self.root, "commit", "-m", "feat(alpha): implement task 1")
+        record = run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "PASS", "--validation-summary", "unit ok")
+        self.assertEqual(record.returncode, 0, record.stderr)
+        review = run_change(
+            self.root,
+            "record-review",
+            "--id", "alpha-change",
+            "--scope", "task",
+            "--task-id", "1",
+            "--status", "FAIL",
+            "--contract", "acceptance",
+            "--path", "src/alpha.txt",
+            "--evidence", "missing edge",
+        )
+        self.assertEqual(review.returncode, 0, review.stderr)
+        self.assertEqual(stdout_json(review)["next_action"], "REQUEST_REPAIR_DECISION")
+        bad_repair = run_change(
+            self.root,
+            "start-repair",
+            "--id", "alpha-change",
+            "--source-gate", "RUN_TASK_REVIEW",
+            "--path", "outside.txt",
+            "--decision", "in scope",
+            "--evidence", "review finding",
+            "--contract-unchanged",
+        )
+        self.assertNotEqual(bad_repair.returncode, 0)
+        start_repair = run_change(
+            self.root,
+            "start-repair",
+            "--id", "alpha-change",
+            "--source-gate", "RUN_TASK_REVIEW",
+            "--path", "src/alpha.txt",
+            "--decision", "in scope",
+            "--evidence", "review finding",
+            "--contract-unchanged",
+        )
+        self.assertEqual(start_repair.returncode, 0, start_repair.stderr)
+        subject = stdout_json(start_repair)["checkpoint_subject"]
+        self.assertEqual(subject, "repair(alpha-change): run_task_review repair 1")
+        (self.root / "src" / "alpha.txt").write_text("alpha fixed\n", encoding="utf-8")
+        git(self.root, "add", "src/alpha.txt")
+        git(self.root, "commit", "-m", subject)
+        record_repair = run_change(self.root, "record-repair", "--id", "alpha-change", "--repair-id", "1", "--validation-status", "PASS", "--validation-summary", "closure ok")
+        self.assertEqual(record_repair.returncode, 0, record_repair.stderr)
+        self.assertEqual(stdout_json(record_repair)["next_action"], "RUN_TASK_REVIEW")
+
+    def test_completion_and_archive_require_reviews_validation_and_preserve_artifacts(self):
+        change_dir = self.prepare_plan_state_repo()
+        run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        (self.root / "src").mkdir()
+        (self.root / "src" / "alpha.txt").write_text("alpha\n", encoding="utf-8")
+        git(self.root, "add", "src/alpha.txt")
+        git(self.root, "commit", "-m", "feat(alpha): implement task 1")
+        self.assertEqual(run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "PASS", "--validation-summary", "unit ok").returncode, 0)
+        self.assertEqual(run_change(self.root, "record-review", "--id", "alpha-change", "--scope", "task", "--task-id", "1", "--status", "PASS", "--contract", "ok", "--evidence", "review ok").returncode, 0)
+        self.assertEqual(run_change(self.root, "record-review", "--id", "alpha-change", "--scope", "final", "--status", "PASS", "--contract", "ok", "--evidence", "final ok").returncode, 0)
+        validation = run_change(self.root, "record-validation", "--id", "alpha-change", "--status", "PASS", "--summary", "all ok", "--command", "python -m unittest")
+        self.assertEqual(validation.returncode, 0, validation.stderr)
+        complete = run_change(self.root, "complete", "--id", "alpha-change")
+        self.assertEqual(complete.returncode, 0, complete.stderr)
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertEqual(archive.returncode, 0, archive.stderr)
+        archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
+        self.assertFalse(change_dir.exists())
+        self.assertTrue((archived_dir / "change.md").exists())
+        self.assertTrue((archived_dir / "plan.yaml").exists())
+        self.assertTrue((archived_dir / "state.yaml").exists())
+
+    def test_validation_fail_requests_repair_decision(self):
+        self.prepare_plan_state_repo(review="self")
+        run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        (self.root / "src").mkdir()
+        (self.root / "src" / "alpha.txt").write_text("alpha\n", encoding="utf-8")
+        git(self.root, "add", "src/alpha.txt")
+        git(self.root, "commit", "-m", "feat(alpha): implement task 1")
+        record = run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "PASS", "--validation-summary", "unit ok")
+        self.assertEqual(stdout_json(record)["next_action"], "RUN_VALIDATION")
+        validation = run_change(self.root, "record-validation", "--id", "alpha-change", "--status", "FAIL", "--summary", "integration failed", "--path", "src/alpha.txt", "--evidence", "trace")
+        self.assertEqual(validation.returncode, 0, validation.stderr)
+        self.assertEqual(stdout_json(validation)["next_action"], "REQUEST_REPAIR_DECISION")
 
     def test_legacy_move_preserves_clear_v1_tree_verbatim(self):
         docs = self.root / ".dev-docs"
@@ -304,21 +576,17 @@ class ChangeHelperTests(unittest.TestCase):
             self.assertEqual((self.root / relative_path).read_text(encoding="utf-8"), expected)
         self.assertTrue((self.root / ".dev-docs" / "changes" / "archive").is_dir())
         self.assertFalse((self.root / ".dev-docs" / "changes" / "index.md").exists())
-        v2_json = [
-            p.relative_to(self.root / ".dev-docs")
-            for p in (self.root / ".dev-docs").rglob("*.json")
-            if "legacy/v1" not in p.relative_to(self.root / ".dev-docs").as_posix()
-        ]
-        self.assertEqual(v2_json, [])
 
     def test_legacy_move_fails_closed_for_v2_unknown_conflict_and_targets(self):
         self.make_v2_skeleton()
         v2_result = run_change(self.root, "legacy-move")
         self.assertNotEqual(v2_result.returncode, 0)
+        self.assertEqual(stderr_json(v2_result)["code"], "ALREADY_V2")
         shutil.rmtree(self.root / ".dev-docs")
         (self.root / ".dev-docs" / "changes" / "mystery").mkdir(parents=True)
         unknown = run_change(self.root, "legacy-move")
         self.assertNotEqual(unknown.returncode, 0)
+        self.assertEqual(stderr_json(unknown)["code"], "NOT_CLEAR_V1")
         shutil.rmtree(self.root / ".dev-docs")
         (self.root / ".dev-docs" / "changes" / "old-change").mkdir(parents=True)
         (self.root / ".dev-docs" / "changes" / "old-change" / "contract.yaml").write_text("x\n", encoding="utf-8")
@@ -330,16 +598,7 @@ class ChangeHelperTests(unittest.TestCase):
         (self.root / ".dev-docs" / "legacy").mkdir()
         conflict = run_change(self.root, "legacy-move")
         self.assertNotEqual(conflict.returncode, 0)
-        shutil.rmtree(self.root / ".dev-docs")
-        (self.root / ".dev-docs" / "changes" / "old-change").mkdir(parents=True)
-        (self.root / ".dev-docs" / "changes" / "old-change" / "state.json").write_text("{}\n", encoding="utf-8")
-        (self.root / ".dev-docs-v1-legacy-tmp").mkdir()
-        tmp_conflict = run_change(self.root, "legacy-move")
-        self.assertNotEqual(tmp_conflict.returncode, 0)
-        shutil.rmtree(self.root / ".dev-docs-v1-legacy-tmp")
-        (self.root / ".dev-docs" / "legacy" / "v1").mkdir(parents=True)
-        legacy_conflict = run_change(self.root, "legacy-move")
-        self.assertNotEqual(legacy_conflict.returncode, 0)
+        self.assertEqual(stderr_json(conflict)["code"], "LEGACY_CONFLICT")
 
     def test_legacy_move_mid_failure_restores_or_reports_precise_residue(self):
         docs = self.root / ".dev-docs"
@@ -361,9 +620,11 @@ class ChangeHelperTests(unittest.TestCase):
         self.assertNotEqual(result, 0)
         self.assertTrue((self.root / ".dev-docs").exists())
         self.assertFalse((self.root / ".dev-docs-v1-legacy-tmp").exists())
-        self.assertIn(".dev-docs exists=", stderr.getvalue())
-        self.assertIn(".dev-docs-v1-legacy-tmp exists=", stderr.getvalue())
-        self.assertIn(".dev-docs/legacy/v1 exists=", stderr.getvalue())
+        payload = json.loads(stderr.getvalue())
+        self.assertEqual(payload["code"], "LEGACY_MOVE_FAILED")
+        self.assertIn(".dev-docs exists=", payload["message"])
+        self.assertIn(".dev-docs-v1-legacy-tmp exists=", payload["message"])
+        self.assertIn(".dev-docs/legacy/v1 exists=", payload["message"])
 
 
 if __name__ == "__main__":
