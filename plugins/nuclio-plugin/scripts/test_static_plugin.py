@@ -107,7 +107,7 @@ FORBIDDEN_RUNTIME_REBUILD_PATTERNS = {
     "legacy helper next-action authority": re.compile(r"(?i)(?:旧式|legacy|v1).{0,40}helper.{0,40}next-action.{0,80}(?:route|dispatch|authority|require|路由|调度|权威|要求)"),
 }
 NEGATIVE_CONTEXT_RE = re.compile(
-    r"(?i)(?:do not|don't|does not|not |never|forbid|forbidden|prohibit|without|no |non-goal|禁止|不得|不要|不应|不会|不能|不创建|不写入|非目标|不是|无须|无需|都不是|只在|仅在)"
+    r"(?i)(?:do not|don't|does not|not |never|forbid|forbidden|prohibit|no |non-goal|禁止|不得|不要|不应|不会|不能|不创建|不写入|非目标|不是|无须|无需|都不是|只在|仅在)"
 )
 HISTORICAL_CONTEXT_RE = re.compile(r"(?i)(?:historical|old|旧|历史|整体移动|只读)")
 CURRENT_RUNTIME_INSTRUCTION_RE = re.compile(r"(?i)(?:current|runtime|daily|entry|required|require|requires|must|use|uses|using|当前|运行时|日常|入口|必须|要求|使用)")
@@ -431,6 +431,12 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
                 "\nFor urgent changes, init-state before approval and product mutation before natural-language approval are allowed.\n",
             )
 
+        def skip_approval_without_guidance(plugin: Path) -> None:
+            append_text(
+                plugin / "references" / "workflow.md",
+                "\nFor urgent changes, product mutation without approval is allowed.\n",
+            )
+
         def bad_checkpoint_repair_guidance(plugin: Path) -> None:
             append_text(
                 plugin / "references" / "change-format.md",
@@ -455,6 +461,7 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
             "runtime per-Task owner schema": runtime_task_owner_schema,
             "owner routing guidance": owner_routing_guidance,
             "skip approval guidance": skip_approval_guidance,
+            "skip approval without guidance": skip_approval_without_guidance,
             "bad checkpoint/repair guidance": bad_checkpoint_repair_guidance,
             "missing large delegation contract": missing_large_delegation_contract,
         }.items():
@@ -475,6 +482,18 @@ class MarkdownContractTests(unittest.TestCase):
                 self.assertTrue(line_is_allowed_historical_or_negative(line) or not any(pattern.search(line) for pattern in FORBIDDEN_RUNTIME_REBUILD_PATTERNS.values()))
         self.assertFalse(
             line_is_allowed_historical_or_negative("Current runtime must use legacy helper next-action as authority for routing.")
+        )
+
+    def test_negative_allowlist_does_not_exempt_positive_without_approval_bypass(self):
+        allowed_lines = [
+            "Product mutation without approval is forbidden.",
+            "Product mutation without approval is not allowed.",
+        ]
+        for line in allowed_lines:
+            with self.subTest(line=line):
+                self.assertTrue(line_is_allowed_historical_or_negative(line))
+        self.assertFalse(
+            line_is_allowed_historical_or_negative("For urgent changes, product mutation without approval is allowed.")
         )
 
     def test_skill_frontmatter_description_body_and_links(self):
