@@ -43,7 +43,25 @@ EXPECTED_REFERENCES = {
     "eval-prompts.md",
 }
 EXPECTED_SCRIPTS = {"change.py", "test_change.py", "test_static_plugin.py"}
-EXPECTED_CHANGE_COMMANDS = {"create", "list", "show", "set-status", "archive", "legacy-move"}
+EXPECTED_CHANGE_COMMANDS = {
+    "create",
+    "list",
+    "show",
+    "validate-plan",
+    "init-state",
+    "status",
+    "next-action",
+    "start-task",
+    "record-task",
+    "record-review",
+    "start-repair",
+    "record-repair",
+    "record-validation",
+    "complete",
+    "archive",
+    "legacy-move",
+}
+ALLOWED_CHANGE_IMPORTS = {"yaml"}
 EVAL_REQUIRED_FIELDS = {
     "User Prompt",
     "Expected Route",
@@ -70,7 +88,7 @@ FORBIDDEN_CURRENT_AUTHORITY_PATTERNS = {
     "exact approval token": re.compile(r"(?i)(?:exact token|fixed token|approval token|固定 token|固定口令).{0,80}(?:required|must|必须|要求)"),
     "identity/hash/fingerprint gate": re.compile(r"(?i)(?:identity|hash|fingerprint|身份|哈希|指纹).{0,80}(?:approval|gate|authority|批准|授权|权威)"),
     "approval JSON": re.compile(r"(?i)approval json.{0,80}(?:required|must|authority|必须|权威)"),
-    "helper next-action routing": re.compile(r"(?i)(?:next-action).{0,80}(?:required|authority|route|dispatch|必须|权威|路由)"),
+    "legacy helper next-action routing": re.compile(r"(?i)(?:旧式|legacy|v1).{0,40}(?:next-action).{0,80}(?:authority|route|dispatch|权威|路由)"),
     "protocol agent pipeline": re.compile(r"(?i)(?:nuclio-(?:implementer|task-reviewer|fixer|completion-critic)|protocol agent).{0,80}(?:required|must|pipeline|authority|必须|流水线|权威)"),
 }
 FORBIDDEN_RUNTIME_REBUILD_PATTERNS = {
@@ -83,13 +101,45 @@ FORBIDDEN_RUNTIME_REBUILD_PATTERNS = {
     "changes index": re.compile(rf"(?i)\.dev-docs/changes/index\.md.{{0,80}}{CREATE_REQUIRE_WORDS}|{CREATE_REQUIRE_WORDS}.{{0,80}}\.dev-docs/changes/index\.md"),
     "packet evidence hash fingerprint": re.compile(r"(?i)(?:packet|evidence).{0,40}(?:hash|fingerprint|identity).{0,80}(?:authority|gate|approval|required|权威|批准|要求)"),
     "approval ledger": re.compile(rf"(?i)approval ledger.{{0,80}}{CREATE_REQUIRE_WORDS}|{CREATE_REQUIRE_WORDS}.{{0,80}}approval ledger"),
-    "helper next-action": re.compile(r"(?i)helper.{0,40}next-action.{0,80}(?:route|dispatch|authority|require|路由|调度|权威|要求)"),
+    "runtime owner routing": re.compile(r"(?i)(?:must|require|use|route|assign|create|必须|要求|使用|分配|调度).{0,80}(?:owner routing|finding owner routing|owner mapping|owner fixer)|(?:owner routing|finding owner routing|owner mapping|owner fixer).{0,80}(?:must|required|use|route|assign|create|必须|要求|使用|分配|调度)"),
+    "unapproved init-state or mutation": re.compile(r"(?i)(?:init-state|product mutation).{0,80}(?:before|without).{0,40}(?:approval|natural-language approval|批准).{0,80}(?:allow|allowed|permitted|可|允许)|(?:allow|allowed|permitted|可|允许).{0,80}(?:init-state|product mutation).{0,80}(?:before|without).{0,40}(?:approval|批准)"),
+    "bad checkpoint or repair acceptance": re.compile(r"(?i)(?:record-task|checkpoint|record-repair|repair).{0,80}(?:multiple checkpoint|wrong checkpoint_subject|outside allowed_paths|多个 checkpoint|错误 checkpoint|超出 allowed_paths).{0,80}(?:may accept|allowed|allow|可接受|允许)"),
+    "legacy helper next-action authority": re.compile(r"(?i)(?:旧式|legacy|v1).{0,40}helper.{0,40}next-action.{0,80}(?:route|dispatch|authority|require|路由|调度|权威|要求)"),
 }
 NEGATIVE_CONTEXT_RE = re.compile(
     r"(?i)(?:do not|don't|does not|not |never|forbid|forbidden|prohibit|without|no |non-goal|禁止|不得|不要|不应|不会|不能|不创建|不写入|非目标|不是|无须|无需|都不是|只在|仅在)"
 )
 LEGACY_CONTEXT_RE = re.compile(r"(?i)(?:legacy|v1|historical|old|旧|历史|禁止恢复|整体移动|只读)")
 NEGATIVE_OR_LEGACY_HEADING_RE = re.compile(r"(?i)(?:禁止|不得|非 Gate|非目标|v1|legacy|旧|历史)")
+STATE_LIGHTWEIGHT_FORBIDDEN_KEYS = {
+    "history",
+    "transition_history",
+    "events",
+    "event_log",
+    "diff",
+    "diffs",
+    "transcript",
+    "transcripts",
+    "messages",
+    "agent_messages",
+    "logs",
+    "test_logs",
+    "file_snapshot",
+    "content_snapshot",
+    "snapshots",
+}
+PLAN_OWNER_FORBIDDEN_KEYS = {
+    "files",
+    "owner",
+    "owners",
+    "owner_map",
+    "owner_mapping",
+    "owner_routing",
+    "finding_owner",
+    "finding_owners",
+    "finding_routes",
+    "behavioral_eval_owner",
+}
 
 
 # Helpers
@@ -181,7 +231,8 @@ def contents_block(text: str) -> str:
 
 
 def line_is_allowed_historical_or_negative(line: str) -> bool:
-    return bool(NEGATIVE_CONTEXT_RE.search(line) or LEGACY_CONTEXT_RE.search(line))
+    explicit_negative = any(token in line for token in ("不新增", "不恢复", "不使用", "不用于", "不创建", "不做", "不得新增", "不得使用"))
+    return bool(NEGATIVE_CONTEXT_RE.search(line) or LEGACY_CONTEXT_RE.search(line) or explicit_negative)
 
 
 def assert_no_positive_pattern(testcase: unittest.TestCase, text: str, patterns: dict[str, re.Pattern[str]], source: Path | str) -> None:
@@ -342,11 +393,58 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
                 "\nCurrent runtime must create .nuclio/ state directory.\n",
             )
 
+        def second_runtime_helper(plugin: Path) -> None:
+            (plugin / "scripts" / "workflow.py").write_text("# forbidden second helper\n", encoding="utf-8")
+
+        def state_history_storage(plugin: Path) -> None:
+            append_text(
+                plugin / "scripts" / "change.py",
+                "\nSTATE_HISTORY = {'transition_history': [], 'diffs': [], 'test_logs': []}\n",
+            )
+
+        def runtime_task_owner_schema(plugin: Path) -> None:
+            append_text(
+                plugin / "scripts" / "change.py",
+                "\nPLAN_TOP_KEYS.add('owner_mapping')\nTASK_KEYS.add('files')\n",
+            )
+
+        def owner_routing_guidance(plugin: Path) -> None:
+            append_text(
+                plugin / "references" / "workflow.md",
+                "\nRuntime must use owner routing and finding owner routing for repair dispatch.\n",
+            )
+
+        def skip_approval_guidance(plugin: Path) -> None:
+            append_text(
+                plugin / "references" / "workflow.md",
+                "\nFor urgent changes, init-state before approval and product mutation before natural-language approval are allowed.\n",
+            )
+
+        def bad_checkpoint_repair_guidance(plugin: Path) -> None:
+            append_text(
+                plugin / "references" / "change-format.md",
+                "\nrecord-task may accept multiple checkpoint commits, wrong checkpoint_subject, or repair paths outside allowed_paths.\n",
+            )
+
+        def missing_large_delegation_contract(plugin: Path) -> None:
+            work = plugin / "skills" / "work" / "SKILL.md"
+            text = work.read_text(encoding="utf-8")
+            text = text.replace("Larger changes default to at least one bounded generic subagent unit", "Larger changes may remain entirely in the main session")
+            text = text.replace("compact return: checkpoint SHA, changed paths, commands with exit codes, risks, and blockers", "compact return: short confidence summary")
+            work.write_text(text, encoding="utf-8")
+
         for name, mutator in {
             "nested agents/schemas runtime files": nested_agent_and_schema_files,
             "skill Markdown link outside one-level references": bad_skill_markdown_link,
             "positive finish-plan current authority": positive_finish_plan_authority,
             "positive .nuclio state directory requirement": positive_nuclio_state_directory,
+            "second runtime helper": second_runtime_helper,
+            "State history storage": state_history_storage,
+            "runtime per-Task owner schema": runtime_task_owner_schema,
+            "owner routing guidance": owner_routing_guidance,
+            "skip approval guidance": skip_approval_guidance,
+            "bad checkpoint/repair guidance": bad_checkpoint_repair_guidance,
+            "missing large delegation contract": missing_large_delegation_contract,
         }.items():
             self.assert_mutant_detected(name, mutator)
 
@@ -415,7 +513,7 @@ class MarkdownContractTests(unittest.TestCase):
             "项目级 `.claude/`",
             ".dev-docs/changes/index.md",
             "approval JSON",
-            "状态路由",
+            "旧式状态路由",
         ]:
             with self.subTest(required_forbidden=required_forbidden):
                 self.assertIn(required_forbidden, corpus)
@@ -434,6 +532,8 @@ class EvalContractTests(unittest.TestCase):
                 for field in EVAL_REQUIRED_FIELDS:
                     self.assertTrue(fields[field], f"{field} must be non-empty")
                 self.assertRegex(fields["Expected Route"], r"`(?:init|work)`")
+                self.assertNotIn("Owner Task", "\n".join(fields.values()))
+                self.assertNotIn("owner_skill", "\n".join(fields.values()))
 
     def test_eval_prompts_do_not_use_v1_routing_or_packet_assertions(self):
         text = read_text(REFERENCES / "eval-prompts.md")
@@ -455,23 +555,38 @@ class EvalContractTests(unittest.TestCase):
                 self.assertNotIn(token, text)
         cases = parse_eval_cases(text)
         self.assertEqual(len(cases), 18)
+        combined_case_text = "\n".join("\n".join(fields.values()) for fields in cases.values())
         combined_assertions = "\n".join(fields["Key Assertions"] for fields in cases.values())
         for needle in [
-            "产品 mutation 前必须展示",
+            "file-first Gate",
+            "每个实施 Task 恰好一个 checkpoint commit",
+            "Plan 不创建 runtime owner routing",
+            "大型变更默认委派有界单元",
+            "查看片段不等于批准",
+            "未批准不得初始化 State",
+            "Spec/Plan hash、revision、HEAD 或 checkpoint drift",
+            "Git index 非空",
+            "预存 allowed-path dirty",
+            "parent、subject、count、range、index 和 validation",
+            "超出边界必须重新批准",
+            "State 不复制历史",
+            "agent claim",
+            "REQUEST_REPAIR_DECISION",
+            "deterministic-first",
             "拒绝不影响已验证产品结果",
             "legacy 只能整体移动",
-            "不保留双栈",
             "多候选必须人类选择",
-            "100k 是上下文卫生警戒线",
         ]:
             with self.subTest(needle=needle):
-                self.assertIn(needle, combined_assertions)
+                self.assertIn(needle, combined_case_text)
+        self.assertIn("简单任务", combined_case_text)
+        self.assertIn("主会话直做", combined_case_text)
 
 
 # Runtime helper tests
 
 class RuntimeHelperTests(unittest.TestCase):
-    def test_change_help_exposes_exactly_six_subcommands(self):
+    def test_change_help_exposes_plan_state_commands_and_no_set_status(self):
         result = subprocess.run(
             [sys.executable, str(CHANGE), "--help"],
             text=True,
@@ -482,14 +597,22 @@ class RuntimeHelperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         change_module = load_change_module()
         self.assertEqual(set(change_module.COMMANDS), EXPECTED_CHANGE_COMMANDS)
-        help_commands = set(re.findall(r"\b(create|list|show|set-status|archive|legacy-move)\b", result.stdout))
-        self.assertEqual(help_commands, EXPECTED_CHANGE_COMMANDS)
+        for command in EXPECTED_CHANGE_COMMANDS:
+            with self.subTest(command=command):
+                self.assertRegex(result.stdout, rf"\b{re.escape(command)}\b")
+                sub = subprocess.run(
+                    [sys.executable, str(CHANGE), command, "--help"],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(sub.returncode, 0, sub.stderr)
         for forbidden in [
-            "next-action",
-            "packet",
-            "evidence",
-            "finish",
-            "approve",
+            "set-status",
+            "packet-helper",
+            "evidence-helper",
+            "finish-plan",
             "validate-schema",
             "state-helper",
             "contract-helper",
@@ -497,7 +620,7 @@ class RuntimeHelperTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, result.stdout)
 
-    def test_change_py_imports_only_python_standard_library(self):
+    def test_change_py_imports_only_python_standard_library_plus_pyyaml(self):
         tree = ast.parse(read_text(CHANGE), filename=str(CHANGE))
         imported: set[str] = set()
         for node in ast.walk(tree):
@@ -505,15 +628,16 @@ class RuntimeHelperTests(unittest.TestCase):
                 imported.update(alias.name.split(".", 1)[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported.add(node.module.split(".", 1)[0])
-        nonstdlib = sorted(imported - stdlib_names())
+        nonstdlib = sorted(imported - stdlib_names() - ALLOWED_CHANGE_IMPORTS)
         self.assertEqual(nonstdlib, [])
+        self.assertIn("yaml", imported)
 
-    def test_change_py_source_has_no_v1_protocol_router_or_hidden_state_mechanism(self):
+    def test_change_py_source_has_single_helper_plan_state_and_no_v1_hidden_runtime(self):
         text = read_text(CHANGE)
         forbidden_tokens = [
             "approval_json",
             "approval-ledger",
-            "next-action",
+            "set-status",
             "packet-helper",
             "evidence-helper",
             "state-helper",
@@ -522,14 +646,67 @@ class RuntimeHelperTests(unittest.TestCase):
             "runtime hook",
             "daemon",
             "MCP server",
-            ".dev-docs/changes/index.md",
             "context_fingerprint",
             "packet_id",
         ]
         for token in forbidden_tokens:
             with self.subTest(token=token):
                 self.assertNotIn(token, text)
-        self.assertEqual(text.count("def cmd_"), 6)
+        self.assertEqual(text.count("def cmd_"), len(EXPECTED_CHANGE_COMMANDS))
+        for command in ["validate-plan", "init-state", "status", "next-action", "start-task", "record-task", "start-repair", "record-repair", "complete"]:
+            with self.subTest(command=command):
+                self.assertIn(command, text)
+
+    def test_change_py_plan_schema_rejects_owner_routing_and_second_state_model(self):
+        change_module = load_change_module()
+        self.assertEqual(set(change_module.COMMANDS), EXPECTED_CHANGE_COMMANDS)
+        self.assertEqual(set(change_module.PLAN_TOP_KEYS), {
+            "schema_version",
+            "change_id",
+            "revision",
+            "risk_level",
+            "review_policy",
+            "repair_policy",
+            "summary",
+            "allowed_paths",
+            "tasks",
+        })
+        self.assertEqual(set(change_module.TASK_KEYS), {
+            "id",
+            "name",
+            "steps",
+            "acceptance",
+            "validation",
+            "delegate",
+            "review",
+            "checkpoint_subject",
+        })
+        self.assertTrue(PLAN_OWNER_FORBIDDEN_KEYS.isdisjoint(change_module.PLAN_TOP_KEYS))
+        self.assertTrue(PLAN_OWNER_FORBIDDEN_KEYS.isdisjoint(change_module.TASK_KEYS))
+        self.assertEqual(set(change_module.DELEGATES), {"main", "subagent", "auto"})
+        self.assertEqual(set(change_module.REVIEW_POLICIES), {"self", "final", "task-and-final"})
+        self.assertIn("in-scope", read_text(CHANGE))
+
+    def test_change_py_initial_state_is_lightweight_and_helper_only(self):
+        change_module = load_change_module()
+        plan = {
+            "tasks": [
+                {
+                    "id": 1,
+                    "checkpoint_subject": "feat(example): one",
+                }
+            ]
+        }
+        state_tasks = change_module.initial_task_states(plan)
+        self.assertEqual(set(state_tasks[0]), {"id", "status", "task_base", "task_head", "checkpoint_commit", "checkpoint_subject", "executor", "validation"})
+        self.assertTrue(STATE_LIGHTWEIGHT_FORBIDDEN_KEYS.isdisjoint(state_tasks[0]))
+        corpus = read_text(CHANGE)
+        for required in ["dump_yaml_atomic", "os.replace", "load_verified_state_and_plan", "plan_sha256", "spec_sha256", "current_head"]:
+            with self.subTest(required=required):
+                self.assertIn(required, corpus)
+        for forbidden in STATE_LIGHTWEIGHT_FORBIDDEN_KEYS:
+            with self.subTest(forbidden=forbidden):
+                self.assertNotRegex(corpus, rf"[\"']{re.escape(forbidden)}[\"']\s*:")
 
 
 # Composite semantics tests
@@ -539,20 +716,54 @@ class CompositeSemanticsTests(unittest.TestCase):
         paths = list(skill_paths().values()) + reference_paths_without_eval()
         corpus = "\n".join(read_text(path) for path in paths)
         semantic_groups = {
-            "Sequential lifecycle": ["standard sequence", "标准顺序", "生命周期", "Locate", "create", "archive"],
-            "plan approval": ["implementation Gate", "计划批准", "自然语言批准", "Approved on YYYY-MM-DD"],
+            "Sequential lifecycle": ["标准顺序", "生命周期", "Locate", "create", "complete", "archive"],
+            "file-first approval": ["file-first", "完整 Spec", "完整 Plan", "自然语言批准", "validate-plan", "init-state"],
+            "three-layer authority": ["change.md", "plan.yaml", "state.yaml", "Spec 权威", "批准合同权威", "动态恢复状态权威"],
+            "single helper": ["唯一 runtime helper", "change.py", "status", "next-action"],
+            "change-level allowed paths": ["change-level `allowed_paths`", "不分配给具体 Task", "finding owner routing"],
+            "checkpoint and repair": ["checkpoint commit", "record-task", "REQUEST_REPAIR_DECISION", "record-repair", "in-scope"],
+            "lightweight State": ["State 只保存当前恢复状态", "不保存完整 transition history", "完整 diff", "完整日志"],
+            "delegation sizing": ["小型", "主会话直接", "大型", "默认委派", "bounded generic subagent"],
+            "sequential writes": ["产品写入按 Task/repair 顺序执行", "不得新增 DAG scheduler", "并行产品写入"],
+            "compact terminal": ["compact", "1–3 行", "默认不回显完整"],
+            "deterministic-first": ["deterministic validation", "Review 不能替代失败的确定性校验", "exit code"],
             "knowledge candidate confirmation": ["知识候选", "五问", "用户确认", "拒绝不影响"],
-            "risk-based review": ["Risk guidance", "风险矩阵", "independent reviewer", "审查深度"],
-            "generic subagent": ["generic subagents", "通用 subagent", "不强制固定 agent 流水线"],
-            "change.md checkpoint": ["change.md", "checkpoint", "压缩恢复状态", "Plan"],
-            "legacy/v1": ["legacy/v1", "clear v1", "整体移动", "不保留 v1/v2 双栈"],
+            "legacy/v1": ["legacy/v1", "clear v1", "整体移动", "v1/v2 双栈"],
         }
         for group, alternatives in semantic_groups.items():
             with self.subTest(group=group):
-                self.assertTrue(any(needle in corpus for needle in alternatives), f"missing semantic anchors for {group}")
-        self.assertRegex(corpus, r"(?s)产品 mutation 前.*?(?:计划|Plan).*?(?:批准|approval)")
-        self.assertRegex(corpus, r"(?s)(?:风险|Risk).*?(?:reviewer|审查)")
+                missing = [needle for needle in alternatives if needle not in corpus]
+                self.assertFalse(missing, f"missing semantic anchors for {group}: {missing}")
+        self.assertRegex(corpus, r"(?s)产品 mutation 前.*?(?:Spec|Plan|计划).*?(?:批准|approval)")
+        self.assertRegex(corpus, r"(?s)(?:风险|Risk).*?(?:review|审查)")
         self.assertRegex(corpus, r"(?s)(?:知识|knowledge).*?(?:候选|candidate).*?(?:确认|confirm|用户)")
+
+    def test_runtime_guidance_forbids_owner_routing_and_unapproved_mutation(self):
+        paths = list(skill_paths().values()) + reference_paths_without_eval()
+        corpus = "\n".join(read_text(path) for path in paths)
+        work = read_text(SKILLS / "work" / "SKILL.md")
+        for required in [
+            "不做 owner mapping",
+            "finding owner routing",
+            "per-Task files ownership",
+            "产品 mutation 前",
+            "批准后才运行 `change.py init-state`",
+            "不以 subagent claim 推进",
+            "Helper 不自动 reset、rebase、squash、stash 或改写历史",
+            "每个实施 Task 和每个 repair 单元恰好一个 checkpoint commit",
+        ]:
+            with self.subTest(required=required):
+                self.assertIn(required, corpus)
+        for required in [
+            "Larger changes default to at least one bounded generic subagent unit",
+            "change-level `allowed_paths`",
+            "task base from `start-task`",
+            "expected checkpoint subject",
+            "compact return: checkpoint SHA, changed paths, commands with exit codes, risks, and blockers",
+        ]:
+            with self.subTest(work_required=required):
+                self.assertIn(required, work)
+        self.assertRegex(corpus, r"(?s)超出.*?allowed_paths.*?(?:重新批准|Plan revision)")
 
 
 if __name__ == "__main__":
