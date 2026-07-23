@@ -12,7 +12,7 @@
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator` 技能，用于帮助用户起草 OpenClaw skill。
 - `dev-stack`：提供 `/skill-forge` 与 `/commit` 技能；`/skill-forge` 用于创建、设计、修改、审查和验证 Claude Code skill，采用 L0-L3 风险自适应路径、deterministic-first 校验、单 Controller 顺序执行、L2/L3 file-backed 状态、conditional review/eval 和 L3 strict 高风险治理；`/commit` 用于自包含分析当前 Git 变更、生成单个 Conventional Commit，并在安全门禁下选择性暂存和提交。`/commit` 不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务；最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff。
-- `nuclio`：提供 Nuclio v2：`/nuclio:init` 负责 v2 `.dev-docs` setup、repair 和整个旧目录移动到 `legacy/v1`，`/nuclio:work` 是日常入口，围绕单一 `change.md` 执行可恢复的人类可读 change 工作流。
+- `nuclio`：提供 Nuclio v2：`/nuclio:init` 只负责 v2 `.dev-docs` skeleton setup、repair 和整个旧目录移动到 `legacy/v1`；`/nuclio:work` 是日常入口，使用 `change.md` Spec、`plan.yaml` 批准合同、`state.yaml` 当前恢复状态三层 artifact，结合 file-first approval、单一 PyYAML `change.py` helper、每 Task checkpoint commit、change-level `allowed_paths`、风险驱动委派/review、验证、可选知识和归档。
 
 ## 仓库结构
 
@@ -23,7 +23,7 @@
 - `plugins/<plugin-name>/skills/<skill-name>/agents/`：skill 级 agent 定义（如 dev-stack/skill-forge 的 `skill-creator-eval.md`，仅在明确 flag gate 下做 simulation-only eval）。
 - `plugins/<plugin-name>/skills/<skill-name>/scripts/`：skill 级确定性辅助脚本与测试（如 dev-stack/skill-forge 的 `review-state-helper.py`、`plan_contract.py`、`plan-task-query.py` 与 unittest；`/commit` 自包含执行，不使用 skill-forge agents、scripts 或 review-state helper，也不新增 runtime hook、daemon、MCP 或本地状态机制）。
 - `plugins/<plugin-name>/references/`：插件级共享参考资料。Nuclio v2 的当前运行时权威位于 `plugins/nuclio-plugin/references/`，包括 `workflow.md`、`change-format.md`、`knowledge.md`、`context-hygiene.md` 和 `eval-prompts.md`。
-- `plugins/<plugin-name>/scripts/`：插件级确定性辅助脚本与测试。Nuclio v2 使用 `plugins/nuclio-plugin/scripts/change.py`，并由 `test_change.py` 与 `test_static_plugin.py` 覆盖。
+- `plugins/<plugin-name>/scripts/`：插件级确定性辅助脚本与测试。Nuclio v2 只有一个 runtime helper：`plugins/nuclio-plugin/scripts/change.py`；`test_change.py` 和 `test_static_plugin.py` 覆盖三层 artifact、YAML safety、allowed_paths、checkpoint/repair、禁止机制和静态语义。
 - `plugins/nuclio-plugin/docs/research/contract-workbench-redesign/`：Nuclio 早期重构的历史研究与设计材料；用于追溯设计依据，不是 runtime authority。
 - `plugins/nuclio-plugin/docs/research/human-centered-workflow-redesign/`：Nuclio v2 人本工作流的历史研究与设计输入；其中 proposal 保留原始设计语境，不是 runtime authority，最终行为以 skills、references 和 scripts 为准。
 
@@ -66,13 +66,18 @@ Dev-stack 的 `/skill-forge` 是风险自适应 skill 创建与维护入口：
 
 Dev-stack 的 `/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时需同步这些文件、`plugins/dev-stack/.claude-plugin/plugin.json` 的版本、README / CLAUDE 说明与本地校验命令。`/commit` 必须维持自包含执行边界：不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，不绑定 skill-forge 的 agents、scripts 或 review-state helper，也不新增 runtime hook、daemon 或本地状态机制。最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未进入最终 staged diff 的内容不得影响最终消息。内部协议更新不应误写成 marketplace source、plugin name 或外部依赖变化。
 
-Nuclio v2 的当前运行时只暴露 `/nuclio:init` 与 `/nuclio:work`：
+Nuclio v2 的当前运行时只暴露 `/nuclio:init` 与 `/nuclio:work`，并且 3.0.0 起使用破坏性的三层工作流：
 
-- `/nuclio:init` 负责创建或修复最小 v2 `.dev-docs` 骨架，并且只能把旧 `.dev-docs` 整体移动到 `.dev-docs/legacy/v1/`；不得解析、转换或恢复旧状态。
-- `/nuclio:work` 是日常唯一入口，按顺序定位或创建 change、澄清目标、形成用户可理解计划、获得用户批准、实现、验证、按风险审查、处理可选长期知识候选并归档。
-- 普通 change 默认只有 `.dev-docs/changes/<change-id>/change.md` 一个持久过程文件；`change.md` 只保存恢复所需的压缩状态，Git working tree、代码、配置、测试和 CI 才是执行事实。
-- 计划 Human-in-the-Loop 是实施前固定保护；长期知识写入只在存在合格候选并经用户确认后执行，用户拒绝知识写入不影响已验证产品结果或归档。
-- 主会话按复杂度与风险协调执行路径，可直接处理或委派通用 subagent；只有风险矩阵或用户要求触发时才做额外 critic/review，不描述固定流水线。
+- `/nuclio:init` 只负责创建或修复最小 v2 `.dev-docs` 骨架，并且只能把旧 `.dev-docs` 整体移动到 `.dev-docs/legacy/v1/`；不得创建普通 change、写入 `plan.yaml`、初始化 `state.yaml`、批准 Plan、实施产品、执行 validation/review/repair、complete 或 archive。
+- `/nuclio:work` 是日常唯一入口。每个 active change 使用 `.dev-docs/changes/<change-id>/change.md`、`plan.yaml`、`state.yaml`：`change.md` 是人类可读 Spec 权威，`plan.yaml` 是用户自然语言批准后的执行合同权威，`state.yaml` 是唯一动态恢复状态权威。
+- `plugins/nuclio-plugin/scripts/change.py` 是唯一 runtime helper 和唯一 State writer，负责 `create`、`list`、`show`、`validate-plan`、`init-state`、`status`、`next-action`、`start-task`、`record-task`、`record-review`、`start-repair`、`record-repair`、`record-validation`、`complete`、`archive` 和 `legacy-move`。
+- Nuclio runtime 明确依赖 PyYAML。`plan.yaml` / `state.yaml` 使用原生 YAML；helper 使用拒绝重复 mapping keys 的受限 `SafeLoader`、安全 dump、输入大小限制、显式 schema/type checks，并在 PyYAML 缺失时返回稳定 dependency error。
+- 产品 mutation 前必须 file-first：完整 Spec 与 Plan 写入文件并通过 `validate-plan` 后，终端默认只展示路径、1–3 行摘要、风险/review policy、Task count、`allowed_paths` 摘要和关键 exit code；用户用自然语言批准、拒绝、修订或要求指定片段。
+- Plan 使用 change-level `allowed_paths` 作为写入边界；不引入 runtime per-Task files ownership、owner mapping、finding owner routing 或 behavioral eval owner。
+- 每个实施 Task 和每个批准的 in-scope repair 恰好一个 selective-stage 本地 checkpoint commit。helper 校验 parent、subject、changed paths、空 index、PASS validation 和 allowed-path 边界；不自动 squash、reset、rebase、stash 或改写历史。
+- `state.yaml` 只保存当前恢复状态：phase、当前 Task、review、validation、repair、blocker、`next_action`、checkpoint SHA 和必要 identity。它不保存完整 transition history、完整 diff、transcript、测试日志、agent 消息、文件内容 snapshot 或重复 Git 历史。
+- 小型单 Task 可由主 Session 直接实施；跨模块、多 Task、广泛探索、较多读写路径、长验证输出或明显上下文压力时默认使用有界 generic subagent 单元。产品写入保持顺序，只有无写入冲突的只读探索或审查可按需并发。
+- review/validation 的 in-scope repair 可在原批准范围内形成 repair checkpoint；超出 `allowed_paths`、改变 Spec/Plan 合同、提高风险、引入依赖/API/迁移或不可逆/外向动作时必须提高 revision 并重新 file-first 批准。
 
 维护 Nuclio v2 时需要保持以下内容同步：
 
@@ -90,7 +95,7 @@ Nuclio v2 的当前运行时只暴露 `/nuclio:init` 与 `/nuclio:work`：
 - `.claude-plugin/marketplace.json`
 - `README.md` 与 `CLAUDE.md`
 
-Nuclio v2 不新增 runtime hook、daemon、MCP、外部依赖、项目级 `.claude/` 安装或 `.nuclio/` state 目录；不声明外部 Superpowers 依赖；不提供 v1 compatibility converter；不保留 v1/v2 双栈；不创建 `changes/index.md`。面向用户的 prose 默认使用用户当前主要语言；代码、命令、路径、字段名和原始输出保持原文。
+Nuclio v2 不新增第二 helper、`workflow.py`、runtime hook、daemon、MCP、network service、项目级 `.claude/` 安装、`.nuclio/` state 目录、持久过程 JSON、changes index、DAG scheduler、并行产品写入引擎、内容 snapshot、完整 State history、自动 fixer、owner routing、owner budget、外部 Superpowers 依赖、v1 compatibility converter 或 v1/v2 双栈。面向用户的 prose 默认使用用户当前主要语言；代码、命令、路径、字段名和原始输出保持原文。
 
 ## 本地校验
 
@@ -109,6 +114,8 @@ Dev-stack / Nuclio helper 与插件严格校验：
 python3 -m unittest discover -s plugins/dev-stack/skills/skill-forge/scripts -p 'test_*.py'
 python3 plugins/dev-stack/skills/skill-forge/scripts/plan_contract.py --help >/dev/null
 claude plugin validate plugins/dev-stack --strict
+python3 -c 'import yaml; print(yaml.__version__)'
+python3 plugins/nuclio-plugin/scripts/change.py --help >/dev/null
 python3 -m unittest discover -s plugins/nuclio-plugin/scripts -p 'test_*.py'
 claude plugin validate plugins/nuclio-plugin --strict
 ```

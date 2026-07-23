@@ -1,7 +1,7 @@
 {
   "name": "nuclio",
-  "description": "Use when a project needs /nuclio:work for a v2-only human-readable change.md workflow with approved plans, validation, risk-based review, and optional knowledge distillation, plus /nuclio:init for v2 .dev-docs setup, repair, and whole-directory legacy/v1 moves",
-  "version": "2.0.0",
+  "description": "Use when a project needs Nuclio v2 with /nuclio:work for a breaking three-layer change.md Spec, plan.yaml approval contract, and state.yaml recovery workflow using file-first approval, the single PyYAML-based change.py helper, checkpoint commits, risk-based delegation/review, and /nuclio:init for v2 skeleton setup, repair, and whole-directory legacy/v1 moves",
+  "version": "3.0.0",
   "author": {
     "name": "Jade Liu",
     "email": "[redacted-email]"

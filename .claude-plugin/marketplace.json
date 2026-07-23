@@ -18,7 +18,7 @@
     {
       "name": "nuclio",
       "source": "./plugins/nuclio-plugin",
-      "description": "Adds /nuclio:init for v2 .dev-docs setup, repair, and legacy/v1 moves, plus /nuclio:work for change.md recovery, human-approved plans, validation, risk-based review, and optional knowledge distillation"
+      "description": "Adds /nuclio:init for v2 .dev-docs skeleton setup, repair, and legacy/v1 moves, plus /nuclio:work for the breaking three-layer change.md Spec, plan.yaml approval contract, state.yaml recovery workflow with file-first approval, single PyYAML change.py helper, checkpoint commits, risk-based delegation/review, validation, and optional knowledge distillation"
     }
   ]
 }
