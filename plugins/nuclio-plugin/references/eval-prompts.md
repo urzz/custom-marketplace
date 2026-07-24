@@ -22,9 +22,10 @@
 - 小型、边界清晰的单 Task 可由主会话直做；大型、多 Task、跨模块或上下文压力明显的 change 默认委派有界 generic subagent 单元。
 - 产品写入按 Task/repair 顺序执行；只读探索或审查才可按需并发。
 - 终端默认 compact：路径、1–3 行摘要、risk/review/repair policy、Task count、`allowed_paths` 摘要和关键 exit code；用户明确要求时才显示指定 artifact 或 section。
-- 验证、风险审查、in-scope repair、可选知识维护、complete 和 archive 都在 `work` 生命周期内完成。
-- 长期知识只在产品结果验证后、有合格候选且用户确认时写入；拒绝知识不影响产品完成或 archive。
-- Archive 和 legacy 默认不读；只有当前目标需要时才按路径读取。
+- 验证、风险审查、in-scope repair、mandatory knowledge-candidate analysis、confirmed knowledge maintenance、complete 和 archive 都在 `work` 生命周期内完成。
+- 长期知识只在产品结果验证后、有合格候选且用户确认时写入；无合格候选时记录 `NO_OP`；拒绝知识不影响产品完成或 archive，但精简历史记录必须说明拒绝结果。
+- File-first implementation Gate 必须披露 retention policy：成功 archive 只保留精简 `change.md`，active `plan.yaml`/`state.yaml` 不进入长期 archive。
+- Archive 和 legacy 默认不读；只有当前目标需要时才按路径读取。未来成功 archive 是 one-file archive，历史读取不依赖 archived Plan/State。
 
 ## 固定字段
 
@@ -43,10 +44,10 @@
 ### 1. 小型单 Task 主会话直做
 
 - `User Prompt`: “修复 README 中一个错误链接”，项目已有清晰 v2 `.dev-docs`，没有匹配 active change。
-- `Expected Route`: `work` 创建新 change，写入 `change.md` Spec 与低风险单 Task `plan.yaml`，运行 `validate-plan`，compact 展示文件路径和摘要，获自然语言批准后 `init-state`，主会话直接实施、验证、checkpoint、self review、complete/archive。
-- `Allowed Writes`: `.dev-docs/changes/<id>/change.md`、`.dev-docs/changes/<id>/plan.yaml`、批准后由 helper 写 `.dev-docs/changes/<id>/state.yaml`、批准范围内 README、完成后的 archive 目录。
-- `Forbidden Writes`: 未批准产品路径、知识文件、legacy、持久过程 JSON、第二 helper、`.dev-docs/changes/index.md`。
-- `Key Assertions`: 简单任务可由主会话直做；产品 mutation 前必须展示 file-first Gate 并获得自然语言批准；批准后每个实施 Task 恰好一个 checkpoint commit。
+- `Expected Route`: `work` 创建新 change，写入 `change.md` Spec 与低风险单 Task `plan.yaml`，运行 `validate-plan`，compact 展示文件路径、摘要和 archive retention disclosure，获自然语言批准后 `init-state`，主会话直接实施、验证、checkpoint、self review、报告产品结果、分析知识候选、complete/archive。
+- `Allowed Writes`: `.dev-docs/changes/<id>/change.md`、`.dev-docs/changes/<id>/plan.yaml`、批准后由 helper 写 `.dev-docs/changes/<id>/state.yaml`、批准范围内 README、确认后的知识文件、完成后的 one-file archive 目录。
+- `Forbidden Writes`: 未批准产品路径、知识确认前的知识文件、legacy、持久过程 JSON、第二 helper、`.dev-docs/changes/index.md`。
+- `Key Assertions`: 简单任务可由主会话直做；产品 mutation 前必须展示 file-first Gate、获得自然语言批准，并披露成功 archive 不保留 Plan/State；批准后每个实施 Task 恰好一个 checkpoint commit。
 
 ### 2. 普通多 Task 功能
 
@@ -163,18 +164,18 @@
 ### 16. 知识候选确认
 
 - `User Prompt`: “完成插件验证修复后，把可复用的验证约定记到项目知识里”，产品验证已通过且候选满足五问。
-- `Expected Route`: `work` 先报告产品结果与验证证据，再展示知识候选的语义结论、唯一目标 heading、操作类型、冲突和影响，等待用户确认。
-- `Allowed Writes`: active change Outcome/Knowledge Updates、用户确认的唯一 knowledge target、必要导航链接、archive 路径。
-- `Forbidden Writes`: 用户确认前写 knowledge、把命令长日志写入知识、把 knowledge 作为第四状态权威、因知识被拒绝而阻止 complete/archive。
-- `Key Assertions`: 知识确认只在产品验证后且候选合格时出现；拒绝不影响已验证产品结果、`complete` 或 `archive`。
+- `Expected Route`: `work` 先报告产品结果与验证证据，再执行 mandatory knowledge-candidate analysis，展示知识候选的语义结论、唯一目标 heading、操作类型、冲突、影响和支持证据，等待用户确认。
+- `Allowed Writes`: active change Outcome/Knowledge Updates、用户确认的唯一 knowledge target、必要导航链接、archive 路径中的精简 `change.md`。
+- `Forbidden Writes`: 用户确认前写 knowledge、把命令长日志写入知识、把 Plan/State/diff/transcript/agent 消息写入长期知识、把 knowledge 作为第四状态权威、因知识被拒绝而阻止 complete/archive。
+- `Key Assertions`: 知识分析在产品验证后始终发生；知识确认只在候选合格时出现；无合格候选必须记录 `NO_OP` 且不制造第二 Gate；拒绝不影响已验证产品结果、`complete` 或 `archive`，但 `Knowledge Updates` 必须记录候选被拒绝。
 
 ### 17. complete 与 archive
 
 - `User Prompt`: “验证和审查都通过了，完成并归档这个 change”。
-- `Expected Route`: `work` 先报告产品结果、changed paths、commands/exit codes 和关键输出摘要；必要的 Outcome/Validation 简写后调用 `complete`，再调用 `archive`。
-- `Allowed Writes`: active `change.md` 简短 Outcome/Validation/Knowledge Updates、helper 写终态 `state.yaml`、`.dev-docs/changes/archive/<id>/`。
-- `Forbidden Writes`: 未满足 Tasks/reviews/validation 就 complete、archive 前删除 Plan/State、复制完整日志、自动 squash/reset/rebase/stash。
-- `Key Assertions`: complete 要求 Tasks、必要 task/final review、whole-change validation、HEAD/State/Spec/Plan 一致性漂移 和 blocker 条件全部满足；archive 移动整个 change 目录并保留三层 artifact。
+- `Expected Route`: `work` 先报告产品结果、changed paths、commands/exit codes 和关键输出摘要；完成 mandatory knowledge-candidate analysis 并记录写入、拒绝或 `NO_OP`；调用 `complete` 后把 `change.md` 蒸馏为含 frontmatter、Goal、Outcome、Validation、Knowledge Updates 的精简历史记录，再调用 fail-closed `archive`。
+- `Allowed Writes`: active `change.md` 精简 Outcome/Validation/Knowledge Updates、helper 写终态 `state.yaml`、`.dev-docs/changes/archive/<id>/change.md`。
+- `Forbidden Writes`: 未满足 Tasks/reviews/validation 就 complete、archive 前未披露 retention policy、archive 前未蒸馏 `change.md`、复制完整日志、把 Plan/State 长期保留到 archive 或隐藏备份、自动 squash/reset/rebase/stash。
+- `Key Assertions`: complete 要求 Tasks、必要 task/final review、whole-change validation、HEAD/State/Spec/Plan identity 和 blocker 条件全部满足；archive 前验证 completed State、identity、精简历史形态和 exact artifact set；成功 archive 只保留精简 `change.md`，unexpected artifact 或 undistilled record fail closed。
 
 ### 18. 多个 active change 与 legacy 边界
 
@@ -204,6 +205,11 @@
 - 产品写入顺序执行；不得新增 DAG scheduler 或并行产品写入引擎。
 - 不凭 agent claim 宣告完成或推进 State。
 - deterministic validation 先于完成；review 不能替代失败的确定性校验。
-- 长期知识必须通过稳定、可复用、非显然、已验证、可归属五问。
-- 知识拒绝不影响产品完成、`complete` 或 archive。
+- 产品结果报告后必须始终分析长期知识候选；长期知识必须通过稳定、可复用、非显然、已验证、可归属五问。
+- 无合格知识候选时记录 `NO_OP` 且不显示第二 Gate。
+- 有合格知识候选时必须等待用户确认；知识拒绝不影响产品完成、`complete` 或 archive，但精简历史 `change.md` 记录拒绝结果。
+- File-first implementation Gate 必须披露 successful archive 只保留精简 `change.md`，active `plan.yaml`/`state.yaml` 不进入长期 archive。
+- `complete` 后、`archive` 前必须把 `change.md` 蒸馏为含 completed frontmatter、Goal、Outcome、Validation、Knowledge Updates 的精简历史记录。
+- Archive 成功后只保留 `.dev-docs/changes/archive/<id>/change.md`；不得长期保留 archived `plan.yaml`/`state.yaml`、隐藏备份或 archive manifest。
+- Archive 必须在 destructive pruning 前验证 completed State、Plan/Spec/HEAD identity、精简历史形态和 exact artifact set；失败 fail closed 或报告 precise remaining artifacts。
 - Archive 和 legacy 默认不读；legacy 只能整体移动，不保留双栈。

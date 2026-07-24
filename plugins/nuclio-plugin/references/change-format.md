@@ -39,7 +39,7 @@ Nuclio v2 使用 Markdown + YAML docs-as-code。普通 active change 由同一�
 
 `project.md` 保存产品目标、用户、术语和跨领域事实。`architecture.md` 保存架构约束、系统边界和重要设计关系。`engineering.md` 保存构建、测试、发布、协作和代码实践。三个文件使用下方非空最小模板，不得被普通 change 过程日志污染。
 
-`changes/archive/` 保存完成后的 change 整目录。`legacy/` 只保存整体移动的历史树或用户明确要求保留的旧资料。
+`changes/archive/` 保存完成后的轻量历史记录；未来成功 archive 的每个 `<change-id>/` 只保留精简 `change.md`。`legacy/` 只保存整体移动的历史树或用户明确要求保留的旧资料。
 
 当 `init` 创建缺失 skeleton 文件时，使用以下模板逐字写入新文件；修复缺失路径时也使用同一模板。不要覆盖已有非空正文。
 
@@ -60,7 +60,7 @@ Nuclio v2 文档库用于保存可恢复的 change 摘要和经确认的长期�
 
 Active changes live in `.dev-docs/changes/<change-id>/` with `change.md`, `plan.yaml`, and `state.yaml`.
 
-Completed changes move to `.dev-docs/changes/archive/<change-id>/`.
+Completed changes move to `.dev-docs/changes/archive/<change-id>/` as a concise one-file `change.md` record; active `plan.yaml` and `state.yaml` are not retained in long-term archive.
 
 Do not create `.dev-docs/changes/index.md`; root index does not enumerate active or archived changes.
 
@@ -349,24 +349,78 @@ Review 或 validation FAIL 时，只记录违反合同、具体路径、证据�
 - whole-change validation 为 PASS。
 - HEAD、State、Spec hash、Plan hash 和 revision 一致。
 - 没有 unresolved blocker。
+- 已报告产品结果并完成 mandatory knowledge-candidate analysis；无合格候选时记录 `NO_OP`，有候选时记录实际写入、部分接受、修改或拒绝结果。
 
-完成后可在 `change.md` 中补充简短 Outcome：产品结果、主要 changed paths、验证命令/退出码摘要、剩余风险和实际知识更新。不要复制完整日志。
+`complete` 后、`archive` 前，`change.md` 必须从 active Spec 蒸馏为精简历史记录。它的职责是轻量追溯，不是长期知识库；长期知识只来自用户确认后的 `.dev-docs/knowledge/**` 写入。
+
+精简历史 `change.md` 必备 frontmatter：
+
+```yaml
+---
+id: <change-id>
+title: <human readable title>
+status: completed
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+related_changes: []
+---
+```
+
+精简历史 `change.md` 必备非空 headings：
+
+```markdown
+# <title>
+
+## Goal
+
+<original concise goal>
+
+## Outcome
+
+<verified product result, key changed paths, residual risks or none, and checkpoint commit references when useful>
+
+## Validation
+
+<commands, exit codes, and short result summaries>
+
+## Knowledge Updates
+
+<actual confirmed writes, partial writes, modified writes, rejected candidates, or NO_OP>
+```
+
+不得把过程日志、Plan、State、完整 diff、transcript、agent 消息、完整测试输出或旧式授权内容复制进精简历史记录。未来 related change 可通过 change id、Outcome、Validation、Knowledge Updates 和 Git checkpoint commits 追溯。
 
 ## Archive 路径
 
-完成后使用：
+完成并蒸馏 `change.md` 后使用：
 
 ```bash
 python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> archive --id <change-id>
 ```
 
-helper 直接读取终态 State，并移动整个 change 目录到：
+helper 直接读取终态 State，并先验证 completed State、Plan/Spec/HEAD identity、精简历史记录形态和 exact artifact set。active 目录必须恰好只有：
+
+```text
+.dev-docs/changes/<change-id>/change.md
+.dev-docs/changes/<change-id>/plan.yaml
+.dev-docs/changes/<change-id>/state.yaml
+```
+
+验证通过后移动 change 目录到：
 
 ```text
 .dev-docs/changes/archive/<change-id>/
 ```
 
-Archive 后保留 `change.md`、`plan.yaml`、`state.yaml` 和 Git checkpoint 历史；不再把该 change 当 active。相关回归或扩展创建新 active change，并通过 `related_changes` 指向 archive 中的历史 change。
+然后 pruning active execution artifacts。Archive 成功后 archive 目录只保留：
+
+```text
+.dev-docs/changes/archive/<change-id>/change.md
+```
+
+`plan.yaml` 和 `state.yaml` 是 active 执行/恢复 artifact，不进入长期 archive，也不得复制到隐藏备份、manifest 或第二状态位置。Git checkpoint commits 保留实际实施历史；不自动 squash、reset、rebase、stash 或改写历史。
+
+Archive failure 必须 fail closed：undistilled record、unexpected artifact、identity drift 或 target conflict 在移动/pruning 前失败并保持源目录不变。若移动后 pruning 失败，返回稳定 error，包含 archive path 和 remaining artifacts；不得报告成功。现有 archive 不迁移，新 retention policy 只应用于未来成功的 archive 调用。相关回归或扩展创建新 active change，并通过 `related_changes` 指向 archive 中的历史 change。
 
 ## Legacy 整体移动
 

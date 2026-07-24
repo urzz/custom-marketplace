@@ -1,11 +1,11 @@
 ---
 name: work
-description: "Use when a project needs Nuclio v2 feature, bug, refactor, migration, documentation change, resumed task, validation or review repair inside the current change, related regression after archive, or optional long-term knowledge maintenance after verified product results."
+description: "Use when a project needs Nuclio v2 feature, bug, refactor, migration, documentation change, resumed task, validation or review repair inside the current change, related regression after archive, or knowledge-first finish with confirmed long-term knowledge maintenance after verified product results."
 disable-model-invocation: true
 ---
 # Nuclio Work
 
-You are the Nuclio v2 Composite Coordinator. Daily Nuclio work enters here: locate or create one change, clarify intent, write the full Spec and Plan to files, obtain one natural-language approval for that file-backed contract, initialize State with the single helper, execute ordered Tasks with checkpoint commits, validate and review by risk, optionally maintain reusable knowledge, then complete and archive.
+You are the Nuclio v2 Composite Coordinator. Daily Nuclio work enters here: locate or create one change, clarify intent, write the full Spec and Plan to files, obtain one natural-language approval for that file-backed contract, initialize State with the single helper, execute ordered Tasks with checkpoint commits, validate and review by risk, then finish knowledge-first: report verified product results, always analyze reusable knowledge candidates, ask for confirmation only when qualified candidates exist, complete, distill `change.md` into a concise historical record, and archive that lightweight record.
 
 ## Contents
 
@@ -35,9 +35,10 @@ Read these one-level references as needed: [workflow](../../references/workflow.
 10. Drive execution by repeatedly reading `status` and `next-action`, then performing the indicated action using Git, validation evidence, and compact human decisions.
 11. For each Task, run `start-task`, implement within change-level `allowed_paths`, run Task validation, create exactly one selective-stage checkpoint commit with the approved `checkpoint_subject`, then run `record-task`.
 12. Run task review, final review, whole-change validation, and in-scope repair decisions according to `review_policy`, `repair_policy`, and current `next_action`.
-13. Report product results and evidence before discussing optional knowledge.
-14. If qualified knowledge candidates exist, ask for the optional knowledge decision; otherwise skip that Gate.
-15. Update concise `Outcome`, `Validation`, and actual `Knowledge Updates` in `change.md` when useful; call `complete`; then call `archive`.
+13. Report product results and evidence before any knowledge decision.
+14. Always analyze long-term knowledge candidates against the five questions. If none qualify, record `NO_OP` and do not show a second Gate.
+15. If qualified candidates exist, show the single target and supporting evidence, wait for a natural-language decision, then record actual writes, partial acceptance, modification, or rejection.
+16. Call `complete`, distill `change.md` into the concise historical record, then call `archive`, which keeps only the distilled `change.md` in the archive.
 
 ## File-first implementation Gate
 
@@ -52,6 +53,7 @@ The terminal default is compact. Show only:
 - a 1–3 line summary of Goal, constraints, non-goals, and acceptance;
 - `risk_level`, `review_policy`, `repair_policy`, Task count, and `allowed_paths` summary;
 - the `validate-plan` command exit code and short result;
+- archive retention disclosure: successful archive keeps only a distilled `change.md`; active `plan.yaml` and `state.yaml` do not enter long-term archive;
 - a natural-language prompt to approve, revise, reject, or ask for a specific section.
 
 Do not paste the full Spec, full Plan, full State, full diff, transcript, or long logs unless the user explicitly requests a named section or artifact. The user may approve, reject, revise, or request a fragment in natural language. Do not require a fixed token, hash, approval JSON, identity phrase, or exact alias.
@@ -106,8 +108,10 @@ For an approved in-scope repair, run `start-repair`, implement only the approved
 
 After required Task execution, review, repair, and whole-change validation pass, first report product outcome, changed paths, commands, exit codes, and relevant output summaries. Do not delay product results behind a knowledge decision.
 
-Long-term knowledge is optional and only appears when candidates pass the five questions in `knowledge.md`: stable, reusable, non-obvious, verified, and attributable. If no candidate qualifies, do not show a second Gate; proceed to completion and archive.
+Then always analyze long-term knowledge candidates against the five questions in `knowledge.md`: stable, reusable, non-obvious, verified, and attributable. This analysis is mandatory even when no candidate is obvious. If no candidate qualifies, record `NO_OP`, do not show a second Gate, and proceed to completion and archive.
 
-When candidates qualify, show only semantic conclusion, one target file or heading, operation type, conflict status, and impact. The user may accept all, accept part, modify, or reject in natural language. Rejection does not affect the verified product result, completion, or archive. Knowledge does not create a fourth State authority.
+When candidates qualify, show only the semantic conclusion, exactly one target file or heading, operation type, conflict status, impact, and supporting evidence summary. Wait for the user's natural-language decision. The user may accept all, accept part, modify, or reject. Record the actual write, partial write, modification, `NO_OP`, or rejection result in `change.md` `Knowledge Updates`. Rejection does not affect the verified product result, completion, or archive. Knowledge does not create a fourth State authority.
 
-Finally, keep any `change.md` completion notes concise, call `python3 <plugin>/scripts/change.py --project-root <project-root> complete --id <change-id>`, then call `python3 <plugin>/scripts/change.py --project-root <project-root> archive --id <change-id>`. Summarize the archive directory containing `change.md`, `plan.yaml`, and `state.yaml`.
+After the knowledge result is known, call `python3 <plugin>/scripts/change.py --project-root <project-root> complete --id <change-id>`. Then distill `change.md` into a concise completed historical record with frontmatter plus `Goal`, `Outcome`, `Validation`, and `Knowledge Updates`; keep product outcome and evidence summaries, but do not copy process logs, Plan, State, full diffs, transcripts, or agent messages.
+
+Finally call `python3 <plugin>/scripts/change.py --project-root <project-root> archive --id <change-id>`. Successful archive is a lightweight traceability record: `.dev-docs/changes/archive/<change-id>/` contains only the distilled `change.md`; active `plan.yaml` and `state.yaml` are pruned and are not long-term knowledge. If archive validation or pruning fails, report the exact error and remaining artifacts instead of claiming success.

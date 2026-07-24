@@ -58,12 +58,13 @@ Nuclio v2 的日常入口是 `work`。标准顺序如下：
 5. 澄清 Goal、Constraints、Non-goals、Acceptance、`allowed_paths`、validation、risk 和 review policy。
 6. 写入或更新完整 `change.md` Spec 与 `plan.yaml` Plan。
 7. 运行 `change.py validate-plan`，修复合同问题直到通过。
-8. file-first 展示路径、短摘要、风险/review policy、关键 exit code 和批准提示；等待用户自然语言批准。
+8. file-first 展示路径、短摘要、风险/review policy、关键 exit code、archive retention disclosure 和批准提示；等待用户自然语言批准。
 9. 批准后才运行 `change.py init-state`。
 10. 通过 `change.py status` 与 `change.py next-action` 顺序执行 Task、checkpoint、task review、final review、validation、repair decision、complete。
 11. 先报告产品结果与证据。
-12. 如有合格知识候选，再请求可选知识确认。
-13. 调用 `complete` 后调用 `archive`。
+12. 始终分析长期知识候选；无合格候选时记录 `NO_OP` 且不显示第二 Gate。
+13. 有合格候选时展示唯一目标与证据，等待自然语言确认，并记录实际写入、部分接受、修改或拒绝结果。
+14. 调用 `complete`，将 `change.md` 蒸馏为精简历史记录，再调用 `archive`；成功 archive 只保留该精简 `change.md`。
 
 该顺序既是用户体验流程，也是恢复语义：动态推进以 helper 的当前 `next_action`、Git 和确定性证据为准，不依赖聊天 transcript。
 
@@ -95,6 +96,7 @@ python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> validate-p
 - 1–3 行 Goal/Constraints/Non-goals/Acceptance 摘要；
 - `risk_level`、`review_policy`、`repair_policy`、Task count 和 `allowed_paths` 摘要；
 - `validate-plan` exit code 与短结果；
+- retention disclosure：成功 archive 只保留精简 `change.md`，active `plan.yaml`/`state.yaml` 不进入长期 archive；
 - 请求用户批准、修订、拒绝或指定查看某 section 的提示。
 
 默认不回显完整 `change.md`、完整 `plan.yaml`、完整 `state.yaml`、完整 diff、transcript 或长日志。用户明确要求时，只显示指定 artifact 或 heading/section。
@@ -197,15 +199,17 @@ Review 不能替代失败的确定性校验。Validation 和 review 结果应以
 
 ## 知识候选
 
-产品验证通过后才处理长期知识。知识候选必须同时稳定、可复用、非显然、已验证、可归属。若没有合格候选，不显示第二个 Gate，直接完成和归档。
+产品验证通过并报告产品结果后，必须始终分析长期知识候选。知识候选必须同时稳定、可复用、非显然、已验证、可归属；不能因为“暂时没想到”而跳过分析。
 
-有候选时只展示语义结论、唯一目标文件/heading、操作类型、冲突与影响。用户可自然语言接受全部、部分、修改或拒绝。拒绝知识写入不影响已经验证的产品结果、`complete` 或 `archive`。
+无合格候选时记录 `NO_OP`，不显示第二个 Gate，直接继续 `complete` 与 `archive`。`NO_OP` 表示没有可长期化的新事实，不能伪造知识条目，也不能制造额外批准要求。
 
-知识文件不是动态状态权威。知识写入不创建第四 artifact，不替代 `state.yaml`、Git、代码或测试事实。
+有合格候选时只展示语义结论、唯一目标文件/heading、操作类型、冲突与影响，以及支持证据摘要。用户可自然语言接受全部、部分、修改或拒绝。拒绝知识写入不影响已经验证的产品结果、`complete` 或 `archive`，但精简历史 `change.md` 必须记录候选被拒绝。
+
+知识是 finish 的主要长期价值：只有经确认且可复用的事实进入 `.dev-docs/knowledge/**`。Archive 只是轻量追溯记录，不替代长期知识。知识文件不是动态状态权威；知识写入不创建第四 artifact，不替代 `state.yaml`、Git、代码或测试事实。
 
 ## 完成与 archive
 
-完成前先报告产品结果、变更路径、验证命令、退出码和关键输出摘要。随后可在 `change.md` 中补充简短 `Validation`、`Outcome` 和实际 `Knowledge Updates`，但不要复制完整日志。
+完成前先报告产品结果、变更路径、验证命令、退出码和关键输出摘要；随后完成 mandatory knowledge-candidate analysis，并在 `change.md` 中记录实际知识结果：写入、部分写入、修改、拒绝或 `NO_OP`。不要复制完整日志。
 
 当所有 Tasks、必要 task/final review、whole-change validation、HEAD/State/Spec/Plan identity 和 blocker 条件都满足时运行：
 
@@ -213,13 +217,26 @@ Review 不能替代失败的确定性校验。Validation 和 review 结果应以
 python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> complete --id <change-id>
 ```
 
+`complete` 后、`archive` 前，Coordinator 将 `change.md` 蒸馏为精简完成记录。必备形态为 completed frontmatter 加以下非空 headings：
+
+```markdown
+## Goal
+## Outcome
+## Validation
+## Knowledge Updates
+```
+
+精简历史记录只保留可追溯结论：目标、产品结果、关键 changed paths、验证命令/exit code 摘要、剩余风险、知识写入或 `NO_OP`/拒绝结果，以及必要 Git checkpoint SHA。不得复制 Plan、State、完整 diff、transcript、agent 消息或长日志。
+
 再运行：
 
 ```bash
 python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> archive --id <change-id>
 ```
 
-Archive 移动整个 change 目录到 `.dev-docs/changes/archive/<change-id>/`，保留 `change.md`、`plan.yaml`、`state.yaml` 和 Git checkpoint 历史。后续相关问题创建带关联的新 active change。
+Archive 成功后 `.dev-docs/changes/archive/<change-id>/` 只保留精简 `change.md`；active `plan.yaml` 和 `state.yaml` 会被 pruning，不进入长期 archive。Git checkpoint commits 保留实际实施历史，后续相关问题创建带关联的新 active change，并通过 archive 的 Outcome/Validation/Knowledge Updates 与 Git history 追溯。
+
+Archive 是 fail-closed 的不可逆 retention 操作：执行前必须验证 completed State、Plan/Spec/HEAD identity、精简历史记录形态和 exact artifact set（active 目录只能含 `change.md`、`plan.yaml`、`state.yaml`）。undistilled record、unexpected artifact 或 identity drift 必须在移动/pruning 前失败且保持 active 目录不变；若移动后 pruning 失败，必须报告 archive path 与 remaining artifacts，不得报告成功。现有 archive 不迁移；新 retention policy 只适用于未来成功的 archive 调用。
 
 ## 禁止恢复的 v1 与重型模式
 

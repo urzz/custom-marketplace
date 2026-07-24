@@ -1,6 +1,6 @@
 # Nuclio v2 Knowledge
 
-Nuclio v2 把长期知识作为可持续项目文档维护，而不是把每次 change 的过程材料永久化。知识写入只在产品结果完成验证后、存在合格候选、并获得用户确认时发生；它不创建第四状态权威，也不替代 `change.md`、`plan.yaml`、`state.yaml`、Git、代码或测试事实。
+Nuclio v2 把长期知识作为 finish 的主要长期价值和可持续项目文档维护，而不是把每次 change 的过程材料永久化。产品结果完成验证并先报告后，必须始终分析知识候选；知识写入只在存在合格候选并获得用户确认时发生。无合格候选时记录 `NO_OP`。知识不创建第四状态权威，也不替代 active `change.md`、`plan.yaml`、`state.yaml`、Git、代码或测试事实；archive 只是保留精简 `change.md` 的轻量追溯记录。
 
 ## Contents
 
@@ -14,6 +14,7 @@ Nuclio v2 把长期知识作为可持续项目文档维护，而不是把每次 
 - [长期化改写](#长期化改写)
 - [冲突处理](#冲突处理)
 - [用户确认](#用户确认)
+- [finish 记录](#finish-记录)
 - [写后核对](#写后核对)
 - [操作类型](#操作类型)
 - [不得提升的内容](#不得提升的内容)
@@ -37,7 +38,7 @@ Nuclio v2 把长期知识作为可持续项目文档维护，而不是把每次 
 
 ## 三层工作流中的位置
 
-知识确认位于产品结果之后：Task checkpoint、必要 task/final review、whole-change validation 和 in-scope repair 均完成后，先向用户报告产品结果与证据，再判断是否存在长期知识候选。
+知识分析位于产品结果之后：Task checkpoint、必要 task/final review、whole-change validation 和 in-scope repair 均完成后，先向用户报告产品结果与证据，再始终判断是否存在长期知识候选。无合格候选时明确记录 `NO_OP`；只有存在合格候选时才进入用户确认 Gate。
 
 知识文件不是第四层 change 状态：
 
@@ -45,9 +46,9 @@ Nuclio v2 把长期知识作为可持续项目文档维护，而不是把每次 
 - `plan.yaml` 仍是已批准执行合同权威。
 - `state.yaml` 仍是唯一动态恢复状态权威，并且只由 `change.py` 写入。
 - Git、代码、配置、测试和 CI 仍是产品事实。
-- knowledge 只保存经确认、可复用、面向未来的项目事实。
+- knowledge 只保存经确认、可复用、面向未来的项目事实，是 finish 的主要长期价值。
 
-拒绝、跳过或部分接受知识写入不影响已经验证的产品结果，不阻止 `complete`，也不阻止 `archive`。若知识候选本身暴露产品结果未验证或合同未满足，应回到 validation/review/repair，而不是用知识确认替代产品 Gate。
+拒绝、`NO_OP` 或部分接受知识写入不影响已经验证的产品结果，不阻止 `complete`，也不阻止 `archive`。拒绝合格候选时，精简历史 `change.md` 必须记录候选被拒绝；`NO_OP` 表示分析完成但没有合格候选，不制造第二 Gate。若知识候选本身暴露产品结果未验证或合同未满足，应回到 validation/review/repair，而不是用知识确认替代产品 Gate。
 
 ## 领域拆分策略
 
@@ -138,6 +139,17 @@ ADR 被新决策取代时使用 supersede，保留历史和链接，不删除旧
 - 支撑证据摘要，例如代码路径、命令 exit code 或用户确认来源。
 
 用户可自然语言接受全部、部分、修改或拒绝。拒绝不影响产品结果、验证结论、`complete` 或 `archive`。不要要求固定 token、hash、approval JSON 或身份短语。
+
+## finish 记录
+
+`change.md` 的 `Knowledge Updates` 在 finish 时只记录实际结果：
+
+- 已确认写入的目标文件/heading 和简短语义。
+- 用户部分接受或修改后的最终写入。
+- 用户拒绝合格候选的事实与候选摘要。
+- `NO_OP`：已完成候选分析，但没有满足五问的新增长期知识。
+
+不要把候选草案、Plan、State、diff、transcript、agent 消息或长验证日志写成长期知识。精简历史 `change.md` 可以链接已确认知识位置和 Git checkpoint SHA，但它只是轻量追溯，不是长期知识权威。
 
 ## 写后核对
 

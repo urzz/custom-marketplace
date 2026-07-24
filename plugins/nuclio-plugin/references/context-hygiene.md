@@ -26,7 +26,7 @@ Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可
 6. 当前 `plan.yaml` 的 revision、risk/review/repair policy、`allowed_paths`、当前 Task、validation 与 `checkpoint_subject`。
 7. 当前 `state.yaml` 只通过 `change.py status` 和 `change.py next-action` 读取；需要排障时才查看指定字段。
 8. 相关源码、配置、测试和 CI 文件。
-9. 仅在历史必要时读取 archive。
+9. 仅在历史必要时读取 archive 中的精简 `change.md`。
 10. 仅在用户明确要求时读取 legacy。
 
 顺序不是强制命令脚本；它用于避免先吞入大量历史资料。若 helper JSON 已能回答当前恢复问题，不要再全文读取 `state.yaml`。
@@ -66,7 +66,7 @@ Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可
 - Task dispatch/checkpoint：给 Task id/name、executor、task base、expected checkpoint subject、validation command 摘要和后续 helper command；不贴长 prompt。
 - Review/validation：给 command、exit code、PASS/FAIL、关键失败片段或路径；长日志按用户要求显示。
 - Repair decision：给 source gate、违反合同、路径、证据摘要、是否仍在 `allowed_paths` 和建议决策。
-- Completion/archive：给产品结果、changed paths、validation summary、knowledge decision 结果、archive path。
+- Completion/archive：给产品结果、changed paths、validation summary、mandatory knowledge analysis 结果（写入、拒绝或 `NO_OP`）、retention disclosure、archive path 和最终 artifact set。
 
 默认不回显完整 `change.md`、完整 `plan.yaml`、完整 `state.yaml`、完整 diff、transcript、agent 原文或长日志。用户明确要求时显示指定 section。
 
@@ -128,7 +128,7 @@ Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可
 
 不要重放 transcript、读取 agent claim 作为完成事实、把 `change.md` frontmatter `status` 当动态状态、或猜测最新聊天必然覆盖文件合同。
 
-Archive 默认不参与恢复。只有用户提到历史 change、回归、类似问题或 `related_changes` 时才读取相关 archive。Legacy 仅在用户明确要求历史材料或 init 需要整体移动时读取。
+Archive 默认不参与恢复。只有用户提到历史 change、回归、类似问题或 `related_changes` 时才读取相关 archive 的精简 `change.md`；不要期待 archived `plan.yaml` 或 `state.yaml` 存在。Legacy 仅在用户明确要求历史材料或 init 需要整体移动时读取。
 
 ## 非 Gate 声明
 
