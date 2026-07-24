@@ -38,7 +38,7 @@ SKELETON_EXPECTED = {
         "\n"
         "Active changes live in `.dev-docs/changes/<change-id>/` with `change.md`, `plan.yaml`, and `state.yaml`.\n"
         "\n"
-        "Completed changes move to `.dev-docs/changes/archive/<change-id>/`.\n"
+        "Completed changes move to `.dev-docs/changes/archive/<change-id>/` as a concise one-file `change.md` record; active `plan.yaml` and `state.yaml` are not retained in long-term archive.\n"
         "\n"
         "Do not create `.dev-docs/changes/index.md`; root index does not enumerate active or archived changes.\n"
         "\n"
@@ -229,6 +229,42 @@ class ChangeHelperTests(unittest.TestCase):
         result = run_change(self.root, "init-state", "--id", "alpha-change")
         self.assertEqual(result.returncode, 0, result.stderr)
         return change_dir
+
+    def complete_alpha_change(self):
+        change_dir = self.prepare_plan_state_repo()
+        run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        (self.root / "src").mkdir()
+        (self.root / "src" / "alpha.txt").write_text("alpha\n", encoding="utf-8")
+        git(self.root, "add", "src/alpha.txt")
+        git(self.root, "commit", "-m", "feat(alpha): implement task 1")
+        self.assertEqual(run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "PASS", "--validation-summary", "unit ok").returncode, 0)
+        self.assertEqual(run_change(self.root, "record-review", "--id", "alpha-change", "--scope", "task", "--task-id", "1", "--status", "PASS", "--contract", "ok", "--evidence", "review ok").returncode, 0)
+        self.assertEqual(run_change(self.root, "record-review", "--id", "alpha-change", "--scope", "final", "--status", "PASS", "--contract", "ok", "--evidence", "final ok").returncode, 0)
+        validation = run_change(self.root, "record-validation", "--id", "alpha-change", "--status", "PASS", "--summary", "all ok", "--command", "python -m unittest")
+        self.assertEqual(validation.returncode, 0, validation.stderr)
+        complete = run_change(self.root, "complete", "--id", "alpha-change")
+        self.assertEqual(complete.returncode, 0, complete.stderr)
+        return change_dir
+
+    def write_distilled_alpha_record(self, *, goal="Ship alpha", outcome="Alpha shipped.", validation="python -m unittest exited 0.", knowledge="NO_OP"):
+        change = self.root / ".dev-docs" / "changes" / "alpha-change" / "change.md"
+        change.write_text(
+            "---\n"
+            "id: alpha-change\n"
+            "title: Alpha Change\n"
+            "status: completed\n"
+            "created: 2026-07-23\n"
+            "updated: 2026-07-23\n"
+            "related_changes: []\n"
+            "---\n\n"
+            "# Alpha Change\n\n"
+            f"## Goal\n\n{goal}\n\n"
+            f"## Outcome\n\n{outcome}\n\n"
+            f"## Validation\n\n{validation}\n\n"
+            f"## Knowledge Updates\n\n{knowledge}\n",
+            encoding="utf-8",
+        )
+        return change
 
     def test_main_and_subcommand_help_expose_plan_state_commands_and_no_set_status(self):
         main = subprocess.run(
@@ -519,26 +555,121 @@ class ChangeHelperTests(unittest.TestCase):
         self.assertEqual(record_repair.returncode, 0, record_repair.stderr)
         self.assertEqual(stdout_json(record_repair)["next_action"], "RUN_TASK_REVIEW")
 
-    def test_completion_and_archive_require_reviews_validation_and_preserve_artifacts(self):
-        change_dir = self.prepare_plan_state_repo()
-        run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
-        (self.root / "src").mkdir()
-        (self.root / "src" / "alpha.txt").write_text("alpha\n", encoding="utf-8")
-        git(self.root, "add", "src/alpha.txt")
-        git(self.root, "commit", "-m", "feat(alpha): implement task 1")
-        self.assertEqual(run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "PASS", "--validation-summary", "unit ok").returncode, 0)
-        self.assertEqual(run_change(self.root, "record-review", "--id", "alpha-change", "--scope", "task", "--task-id", "1", "--status", "PASS", "--contract", "ok", "--evidence", "review ok").returncode, 0)
-        self.assertEqual(run_change(self.root, "record-review", "--id", "alpha-change", "--scope", "final", "--status", "PASS", "--contract", "ok", "--evidence", "final ok").returncode, 0)
-        validation = run_change(self.root, "record-validation", "--id", "alpha-change", "--status", "PASS", "--summary", "all ok", "--command", "python -m unittest")
-        self.assertEqual(validation.returncode, 0, validation.stderr)
-        complete = run_change(self.root, "complete", "--id", "alpha-change")
-        self.assertEqual(complete.returncode, 0, complete.stderr)
+    def test_completion_and_archive_require_reviews_validation_and_retain_only_distilled_change(self):
+        change_dir = self.complete_alpha_change()
+        original_change = self.write_distilled_alpha_record()
+        original_text = original_change.read_text(encoding="utf-8")
         archive = run_change(self.root, "archive", "--id", "alpha-change")
         self.assertEqual(archive.returncode, 0, archive.stderr)
+        payload = stdout_json(archive)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["retained_artifacts"], ["change.md"])
         archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
         self.assertFalse(change_dir.exists())
+        self.assertEqual((archived_dir / "change.md").read_text(encoding="utf-8"), original_text)
+        self.assertFalse((archived_dir / "plan.yaml").exists())
+        self.assertFalse((archived_dir / "state.yaml").exists())
+        self.assertEqual([path.name for path in archived_dir.iterdir()], ["change.md"])
+
+    def test_archive_rejects_undistilled_record_before_move(self):
+        change_dir = self.complete_alpha_change()
+        before = sorted(path.name for path in change_dir.iterdir())
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(archive.returncode, 0)
+        payload = stderr_json(archive)
+        self.assertEqual(payload["code"], "UNDISTILLED_RECORD")
+        self.assertTrue(change_dir.exists())
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+        self.assertEqual(sorted(path.name for path in change_dir.iterdir()), before)
+
+    def test_archive_rejects_empty_required_heading_before_move(self):
+        change_dir = self.complete_alpha_change()
+        self.write_distilled_alpha_record(validation="   ")
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(archive.returncode, 0)
+        payload = stderr_json(archive)
+        self.assertEqual(payload["code"], "UNDISTILLED_RECORD")
+        self.assertEqual(payload["details"]["empty_headings"], ["Validation"])
+        self.assertTrue(change_dir.exists())
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+
+    def test_archive_rejects_active_frontmatter_status_before_move(self):
+        change_dir = self.complete_alpha_change()
+        change = self.write_distilled_alpha_record()
+        change.write_text(change.read_text(encoding="utf-8").replace("status: completed", "status: active"), encoding="utf-8")
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(archive.returncode, 0)
+        payload = stderr_json(archive)
+        self.assertEqual(payload["code"], "UNDISTILLED_RECORD")
+        self.assertEqual(payload["details"]["frontmatter"].get("status"), "active")
+        self.assertTrue(change_dir.exists())
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+
+    def test_archive_rejects_unexpected_artifact_before_move(self):
+        change_dir = self.complete_alpha_change()
+        self.write_distilled_alpha_record()
+        (change_dir / "notes.md").write_text("extra\n", encoding="utf-8")
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(archive.returncode, 0)
+        payload = stderr_json(archive)
+        self.assertEqual(payload["code"], "UNEXPECTED_ARCHIVE_ARTIFACTS")
+        self.assertEqual(payload["details"]["unexpected"], ["notes.md"])
+        self.assertTrue((change_dir / "notes.md").exists())
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+
+    def test_archive_still_rejects_uncompleted_or_identity_drift_before_move(self):
+        active_change = self.prepare_plan_state_repo()
+        self.write_distilled_alpha_record()
+        active = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(active.returncode, 0)
+        self.assertEqual(stderr_json(active)["code"], "CHANGE_NOT_COMPLETE")
+        self.assertTrue(active_change.exists())
+
+        change_dir = self.complete_alpha_change()
+        self.write_distilled_alpha_record()
+        (change_dir / "plan.yaml").write_text((change_dir / "plan.yaml").read_text(encoding="utf-8").replace("revision: 1", "revision: 2"), encoding="utf-8")
+        drift = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(drift.returncode, 0)
+        self.assertEqual(stderr_json(drift)["code"], "IDENTITY_DRIFT")
+        self.assertTrue(change_dir.exists())
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+
+    def test_archive_rejects_target_conflict_before_move(self):
+        change_dir = self.complete_alpha_change()
+        self.write_distilled_alpha_record()
+        target = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
+        target.mkdir()
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(archive.returncode, 0)
+        self.assertEqual(stderr_json(archive)["code"], "ARCHIVE_EXISTS")
+        self.assertTrue(change_dir.exists())
+        self.assertEqual(list(target.iterdir()), [])
+
+    def test_archive_pruning_failure_reports_archive_path_and_remaining_artifacts(self):
+        change_dir = self.complete_alpha_change()
+        self.write_distilled_alpha_record()
+        change_module = load_change_module()
+        real_unlink = change_module.Path.unlink
+
+        def fail_state_unlink(path, *args, **kwargs):
+            if path == self.root / ".dev-docs" / "changes" / "archive" / "alpha-change" / "state.yaml":
+                raise OSError("simulated prune failure")
+            return real_unlink(path, *args, **kwargs)
+
+        stderr = io.StringIO()
+        with mock.patch.object(change_module.Path, "unlink", fail_state_unlink):
+            with contextlib.redirect_stderr(stderr):
+                result = change_module.main(["--project-root", str(self.root), "archive", "--id", "alpha-change"])
+
+        self.assertNotEqual(result, 0)
+        payload = json.loads(stderr.getvalue())
+        self.assertEqual(payload["code"], "ARCHIVE_PRUNE_FAILED")
+        self.assertEqual(payload["details"]["archive_path"], ".dev-docs/changes/archive/alpha-change")
+        self.assertEqual(payload["details"]["remaining_artifacts"], ["change.md", "state.yaml"])
+        self.assertFalse(change_dir.exists())
+        archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
         self.assertTrue((archived_dir / "change.md").exists())
-        self.assertTrue((archived_dir / "plan.yaml").exists())
+        self.assertFalse((archived_dir / "plan.yaml").exists())
         self.assertTrue((archived_dir / "state.yaml").exists())
 
     def test_validation_fail_requests_repair_decision(self):

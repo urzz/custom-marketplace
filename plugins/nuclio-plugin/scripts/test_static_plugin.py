@@ -450,6 +450,20 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
             text = text.replace("compact return: checkpoint SHA, changed paths, commands with exit codes, risks, and blockers", "compact return: short confidence summary")
             work.write_text(text, encoding="utf-8")
 
+        def whole_directory_archive_retention(plugin: Path) -> None:
+            change = plugin / "scripts" / "change.py"
+            text = change.read_text(encoding="utf-8")
+            text = text.replace("if remaining != [\"change.md\"]:", "if False:")
+            text = text.replace("for name in (\"plan.yaml\", \"state.yaml\"):", "for name in ():")
+            text = text.replace("\"retained_artifacts\": retained", "\"retained_artifacts\": archive_artifacts(target)")
+            change.write_text(text, encoding="utf-8")
+
+        def skip_archive_distilled_record_check(plugin: Path) -> None:
+            change = plugin / "scripts" / "change.py"
+            text = change.read_text(encoding="utf-8")
+            text = text.replace("require_distilled_change_record(paths, change_id)", "# skipped distilled record validation")
+            change.write_text(text, encoding="utf-8")
+
         for name, mutator in {
             "nested agents/schemas runtime files": nested_agent_and_schema_files,
             "skill Markdown link outside one-level references": bad_skill_markdown_link,
@@ -464,6 +478,8 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
             "skip approval without guidance": skip_approval_without_guidance,
             "bad checkpoint/repair guidance": bad_checkpoint_repair_guidance,
             "missing large delegation contract": missing_large_delegation_contract,
+            "whole-directory archive retention": whole_directory_archive_retention,
+            "skip archive distilled record check": skip_archive_distilled_record_check,
         }.items():
             self.assert_mutant_detected(name, mutator)
 
@@ -730,6 +746,31 @@ class RuntimeHelperTests(unittest.TestCase):
         self.assertEqual(set(change_module.DELEGATES), {"main", "subagent", "auto"})
         self.assertEqual(set(change_module.REVIEW_POLICIES), {"self", "final", "task-and-final"})
         self.assertIn("in-scope", read_text(CHANGE))
+
+    def test_change_py_archive_is_fail_closed_one_file_retention(self):
+        change_module = load_change_module()
+        self.assertEqual(tuple(change_module.ARCHIVE_ACTIVE_ARTIFACTS), ("change.md", "plan.yaml", "state.yaml"))
+        self.assertEqual(tuple(change_module.ARCHIVE_REQUIRED_HEADINGS), ("Goal", "Outcome", "Validation", "Knowledge Updates"))
+        text = read_text(CHANGE)
+        for required in [
+            "require_exact_archive_artifacts",
+            "require_distilled_change_record",
+            "load_archive_verified_state_and_plan",
+            "ARCHIVE_PRUNE_FAILED",
+            "UNEXPECTED_ARCHIVE_ARTIFACTS",
+            "UNDISTILLED_RECORD",
+            "retained_artifacts",
+            "remaining_artifacts",
+            "archive_path",
+        ]:
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+        self.assertIn("require_distilled_change_record(paths, change_id)", text)
+        self.assertIn("source.rename(target)", text)
+        self.assertIn("artifact.unlink()", text)
+        self.assertNotIn("copytree", text)
+        self.assertNotIn("manifest", text.lower())
+        self.assertNotRegex(text, r"retained_artifacts[\"']\s*:\s*archive_artifacts")
 
     def test_change_py_initial_state_is_lightweight_and_helper_only(self):
         change_module = load_change_module()

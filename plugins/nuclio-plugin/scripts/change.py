@@ -67,6 +67,8 @@ PLAN_TOP_KEYS = {
     "tasks",
 }
 TASK_KEYS = {"id", "name", "steps", "acceptance", "validation", "delegate", "review", "checkpoint_subject"}
+ARCHIVE_ACTIVE_ARTIFACTS = ("change.md", "plan.yaml", "state.yaml")
+ARCHIVE_REQUIRED_HEADINGS = ("Goal", "Outcome", "Validation", "Knowledge Updates")
 RISK_LEVELS = {"low", "medium", "high"}
 REVIEW_POLICIES = {"self", "final", "task-and-final"}
 DELEGATES = {"main", "subagent", "auto"}
@@ -95,7 +97,7 @@ SKELETON_TEMPLATES = {
         "\n"
         "Active changes live in `.dev-docs/changes/<change-id>/` with `change.md`, `plan.yaml`, and `state.yaml`.\n"
         "\n"
-        "Completed changes move to `.dev-docs/changes/archive/<change-id>/`.\n"
+        "Completed changes move to `.dev-docs/changes/archive/<change-id>/` as a concise one-file `change.md` record; active `plan.yaml` and `state.yaml` are not retained in long-term archive.\n"
         "\n"
         "Do not create `.dev-docs/changes/index.md`; root index does not enumerate active or archived changes.\n"
         "\n"
@@ -1113,17 +1115,140 @@ def cmd_complete(args: argparse.Namespace, paths: Paths) -> int:
     return emit_ok({"ok": True, "change_id": args.id, "status": "COMPLETED", "head": state["current_head"]})
 
 
-def cmd_archive(args: argparse.Namespace, paths: Paths) -> int:
-    state, _plan = load_verified_state_and_plan(paths, args.id)
+def archive_artifacts(directory: Path) -> list[str]:
+    try:
+        return sorted(path.name for path in directory.iterdir())
+    except FileNotFoundError as exc:
+        raise NuclioError("MISSING_CHANGE", f"active change missing: {directory}") from exc
+
+
+def require_exact_archive_artifacts(directory: Path) -> None:
+    artifacts = archive_artifacts(directory)
+    expected = sorted(ARCHIVE_ACTIVE_ARTIFACTS)
+    if artifacts != expected:
+        missing = [name for name in expected if name not in artifacts]
+        unexpected = [name for name in artifacts if name not in expected]
+        raise NuclioError("UNEXPECTED_ARCHIVE_ARTIFACTS", "active change directory must contain exactly change.md, plan.yaml, and state.yaml", missing=missing, unexpected=unexpected)
+
+
+def parse_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    if not text.startswith("---\n"):
+        raise NuclioError("UNDISTILLED_RECORD", "change.md must start with completed YAML frontmatter", frontmatter={})
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        raise NuclioError("UNDISTILLED_RECORD", "change.md frontmatter is not closed", frontmatter={})
+    yaml_module = require_yaml()
+    frontmatter_text = text[4:end]
+    try:
+        frontmatter = yaml_module.load(frontmatter_text, Loader=UniqueKeySafeLoader)
+    except NuclioError:
+        raise
+    except Exception as exc:
+        raise NuclioError("UNDISTILLED_RECORD", f"invalid change.md frontmatter: {exc}", frontmatter={}) from exc
+    if not isinstance(frontmatter, dict):
+        raise NuclioError("UNDISTILLED_RECORD", "change.md frontmatter must be a mapping", frontmatter={})
+    body = text[end + len("\n---\n"):]
+    return frontmatter, body
+
+
+def markdown_heading_sections(body: str) -> dict[str, str]:
+    headings = list(re.finditer(r"^##\s+(.+?)\s*$", body, flags=re.M))
+    sections: dict[str, str] = {}
+    for index, match in enumerate(headings):
+        name = match.group(1).strip()
+        start = match.end()
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
+        sections[name] = body[start:end].strip()
+    return sections
+
+
+def require_distilled_change_record(paths: Paths, change_id: str) -> None:
+    change = spec_path_for(paths, change_id)
+    try:
+        text = change.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise NuclioError("MISSING_ARTIFACT", f"missing artifact: {change}") from exc
+    except UnicodeDecodeError as exc:
+        raise NuclioError("INVALID_UTF8", f"change.md must be UTF-8: {change}") from exc
+    if not text.strip():
+        raise NuclioError("UNDISTILLED_RECORD", "change.md must be non-empty")
+    frontmatter, body = parse_markdown_frontmatter(text)
+    required_frontmatter = {"id", "title", "status", "created", "updated", "related_changes"}
+    missing_frontmatter = sorted(required_frontmatter - set(frontmatter))
+    if missing_frontmatter or frontmatter.get("id") != change_id or frontmatter.get("status") != "completed":
+        raise NuclioError(
+            "UNDISTILLED_RECORD",
+            "change.md must have completed historical-record frontmatter",
+            missing_frontmatter=missing_frontmatter,
+            frontmatter={"id": frontmatter.get("id"), "status": frontmatter.get("status")},
+        )
+    if not isinstance(frontmatter.get("title"), str) or not frontmatter["title"].strip():
+        raise NuclioError("UNDISTILLED_RECORD", "change.md completed frontmatter fields must be non-empty", empty_frontmatter=["title"])
+    for field in ("created", "updated"):
+        value = frontmatter.get(field)
+        if isinstance(value, str):
+            valid_date = bool(value.strip())
+        else:
+            valid_date = isinstance(value, _dt.date)
+        if not valid_date:
+            raise NuclioError("UNDISTILLED_RECORD", "change.md completed frontmatter fields must be non-empty", empty_frontmatter=[field])
+    if not isinstance(frontmatter.get("related_changes"), list):
+        raise NuclioError("UNDISTILLED_RECORD", "change.md related_changes frontmatter must be a list", frontmatter={"related_changes": frontmatter.get("related_changes")})
+    sections = markdown_heading_sections(body)
+    missing_headings = [heading for heading in ARCHIVE_REQUIRED_HEADINGS if heading not in sections]
+    empty_headings = [heading for heading in ARCHIVE_REQUIRED_HEADINGS if heading in sections and not sections[heading].strip()]
+    if missing_headings or empty_headings:
+        raise NuclioError("UNDISTILLED_RECORD", "change.md must contain non-empty completed historical-record headings", missing_headings=missing_headings, empty_headings=empty_headings)
+
+
+def load_archive_verified_state_and_plan(paths: Paths, change_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    state = load_state(paths, change_id)
+    plan_path = plan_path_for(paths, change_id)
+    plan = validate_plan_file(plan_path)
+    if state.get("schema_version") != 1 or state.get("change_id") != change_id:
+        raise NuclioError("INVALID_STATE", "state identity mismatch")
+    if state.get("plan_revision") != plan["revision"]:
+        raise NuclioError("IDENTITY_DRIFT", "plan revision drift", state_revision=state.get("plan_revision"), plan_revision=plan["revision"])
+    if state.get("plan_sha256") != sha256_file(plan_path):
+        raise NuclioError("IDENTITY_DRIFT", "plan hash drift")
     if state.get("status") != "COMPLETED" or state.get("phase") != "COMPLETED":
         raise NuclioError("CHANGE_NOT_COMPLETE", "change must be complete before archive")
-    source = active_change_dir(paths, args.id)
-    target = archive_change_dir(paths, args.id)
+    current = git_head(paths)
+    if state.get("current_head") != current:
+        raise NuclioError("IDENTITY_DRIFT", "state current_head differs from git HEAD", state_head=state.get("current_head"), git_head=current)
+    if not isinstance(state.get("spec_sha256"), str) or not state["spec_sha256"]:
+        raise NuclioError("IDENTITY_DRIFT", "state spec_sha256 is missing")
+    require_distilled_change_record(paths, change_id)
+    return state, plan
+
+
+def prune_archive_execution_artifacts(target: Path, paths: Paths) -> list[str]:
+    try:
+        for name in ("plan.yaml", "state.yaml"):
+            artifact = target / name
+            if artifact.exists():
+                artifact.unlink()
+    except OSError as exc:
+        remaining = archive_artifacts(target)
+        raise NuclioError("ARCHIVE_PRUNE_FAILED", "archive pruning failed", archive_path=rel(target, paths.root), remaining_artifacts=remaining) from exc
+    remaining = archive_artifacts(target)
+    if remaining != ["change.md"]:
+        raise NuclioError("ARCHIVE_PRUNE_FAILED", "archive pruning left unexpected artifacts", archive_path=rel(target, paths.root), remaining_artifacts=remaining)
+    return remaining
+
+
+def cmd_archive(args: argparse.Namespace, paths: Paths) -> int:
+    change_id = validate_id(args.id)
+    source = active_change_dir(paths, change_id)
+    target = archive_change_dir(paths, change_id)
     if target.exists():
         raise NuclioError("ARCHIVE_EXISTS", f"archive target already exists: {target}")
+    require_exact_archive_artifacts(source)
+    load_archive_verified_state_and_plan(paths, change_id)
     target.parent.mkdir(parents=True, exist_ok=True)
     source.rename(target)
-    return emit_ok({"ok": True, "change_id": args.id, "path": rel(target, paths.root)})
+    retained = prune_archive_execution_artifacts(target, paths)
+    return emit_ok({"ok": True, "change_id": change_id, "path": rel(target, paths.root), "retained_artifacts": retained})
 
 
 # Legacy move
