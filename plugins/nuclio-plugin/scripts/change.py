@@ -1125,10 +1125,19 @@ def archive_artifacts(directory: Path) -> list[str]:
 def require_exact_archive_artifacts(directory: Path) -> None:
     artifacts = archive_artifacts(directory)
     expected = sorted(ARCHIVE_ACTIVE_ARTIFACTS)
-    if artifacts != expected:
-        missing = [name for name in expected if name not in artifacts]
-        unexpected = [name for name in artifacts if name not in expected]
-        raise NuclioError("UNEXPECTED_ARCHIVE_ARTIFACTS", "active change directory must contain exactly change.md, plan.yaml, and state.yaml", missing=missing, unexpected=unexpected)
+    missing = [name for name in expected if name not in artifacts]
+    unexpected = [name for name in artifacts if name not in expected]
+    invalid_regular_files = [name for name in expected if name in artifacts and not (directory / name).is_file()]
+    symlink_artifacts = [name for name in expected if name in artifacts and (directory / name).is_symlink()]
+    if missing or unexpected or invalid_regular_files or symlink_artifacts:
+        raise NuclioError(
+            "UNEXPECTED_ARCHIVE_ARTIFACTS",
+            "active change directory must contain exactly regular non-symlink change.md, plan.yaml, and state.yaml",
+            missing=missing,
+            unexpected=unexpected,
+            invalid_regular_files=invalid_regular_files,
+            symlink_artifacts=symlink_artifacts,
+        )
 
 
 def parse_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str]:

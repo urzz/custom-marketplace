@@ -762,6 +762,8 @@ class RuntimeHelperTests(unittest.TestCase):
             "retained_artifacts",
             "remaining_artifacts",
             "archive_path",
+            "symlink_artifacts",
+            ".is_symlink()",
         ]:
             with self.subTest(required=required):
                 self.assertIn(required, text)

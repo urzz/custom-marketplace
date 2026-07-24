@@ -571,6 +571,37 @@ class ChangeHelperTests(unittest.TestCase):
         self.assertFalse((archived_dir / "state.yaml").exists())
         self.assertEqual([path.name for path in archived_dir.iterdir()], ["change.md"])
 
+    def test_archive_rejects_symlink_artifact_before_move(self):
+        change_dir = self.complete_alpha_change()
+        original_change = change_dir / "change.md"
+        external_record = self.root / "external-distilled-record.md"
+        external_record.write_text(original_change.read_text(encoding="utf-8"), encoding="utf-8")
+        original_change.unlink()
+        original_change.symlink_to(external_record)
+        before = sorted(path.name for path in change_dir.iterdir())
+        change_link_target = original_change.readlink()
+        change_module = load_change_module()
+
+        def fail_if_rename_called(path, target):
+            raise AssertionError(f"archive must reject symlink artifacts before rename: {path} -> {target}")
+
+        stderr = io.StringIO()
+        with mock.patch.object(change_module.Path, "rename", fail_if_rename_called):
+            with contextlib.redirect_stderr(stderr):
+                result = change_module.main(["--project-root", str(self.root), "archive", "--id", "alpha-change"])
+
+        self.assertNotEqual(result, 0)
+        payload = json.loads(stderr.getvalue())
+        self.assertEqual(payload["code"], "UNEXPECTED_ARCHIVE_ARTIFACTS")
+        self.assertEqual(payload["details"]["symlink_artifacts"], ["change.md"])
+        self.assertTrue(change_dir.exists())
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+        self.assertEqual(sorted(path.name for path in change_dir.iterdir()), before)
+        self.assertTrue(original_change.is_symlink())
+        self.assertEqual(original_change.readlink(), change_link_target)
+        self.assertTrue((change_dir / "plan.yaml").is_file())
+        self.assertTrue((change_dir / "state.yaml").is_file())
+
     def test_archive_rejects_undistilled_record_before_move(self):
         change_dir = self.complete_alpha_change()
         before = sorted(path.name for path in change_dir.iterdir())
