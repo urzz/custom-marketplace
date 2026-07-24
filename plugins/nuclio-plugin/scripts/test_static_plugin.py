@@ -231,6 +231,14 @@ def contents_block(text: str) -> str:
     return match.group("body") if match else ""
 
 
+def markdown_section(text: str, heading: str) -> str:
+    pattern = rf"(?ms)^## {re.escape(heading)}\s*$\n(?P<body>.*?)(?=^## \S|\Z)"
+    match = re.search(pattern, text)
+    if not match:
+        raise AssertionError(f"missing markdown section: {heading}")
+    return match.group("body")
+
+
 def line_is_allowed_historical_or_negative(line: str) -> bool:
     explicit_negative = any(token in line for token in ("不新增", "不恢复", "不使用", "不用于", "不创建", "不做", "不得新增", "不得使用"))
     if NEGATIVE_CONTEXT_RE.search(line) or explicit_negative:
@@ -746,6 +754,38 @@ class RuntimeHelperTests(unittest.TestCase):
         self.assertEqual(set(change_module.DELEGATES), {"main", "subagent", "auto"})
         self.assertEqual(set(change_module.REVIEW_POLICIES), {"self", "final", "task-and-final"})
         self.assertIn("in-scope", read_text(CHANGE))
+
+    def test_archive_hash_transition_contract_is_two_phase(self):
+        workflow_archive = markdown_section(read_text(REFERENCES / "workflow.md"), "完成与 archive")
+        format_archive = markdown_section(read_text(REFERENCES / "change-format.md"), "Archive 路径")
+        archive_docs = workflow_archive + "\n" + format_archive
+        change_text = read_text(CHANGE)
+        archive_helper = change_text[change_text.index("def load_archive_verified_state_and_plan") : change_text.index("def prune_archive_execution_artifacts")]
+
+        for required in [
+            "complete 前",
+            "current Spec hash equality",
+            "frozen pre-complete `spec_sha256`",
+            "distilled record",
+            "不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`",
+        ]:
+            with self.subTest(required=required):
+                self.assertIn(required, archive_docs)
+        for stale in [
+            "Plan/Spec/HEAD identity",
+            "State/Spec/Plan identity",
+            "HEAD/State/Spec/Plan identity",
+            "验证 completed State、Plan/Spec/HEAD identity",
+        ]:
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, archive_docs)
+        self.assertIn("load_archive_verified_state_and_plan", change_text)
+        self.assertIn("state.get(\"plan_sha256\") != sha256_file(plan_path)", archive_helper)
+        self.assertIn("state.get(\"current_head\") != current", archive_helper)
+        self.assertIn("not isinstance(state.get(\"spec_sha256\"), str)", archive_helper)
+        self.assertIn("require_distilled_change_record(paths, change_id)", archive_helper)
+        self.assertNotIn("spec_path_for", archive_helper)
+        self.assertNotIn("state.get(\"spec_sha256\") != sha256_file(spec_path)", archive_helper)
 
     def test_change_py_archive_is_fail_closed_one_file_retention(self):
         change_module = load_change_module()

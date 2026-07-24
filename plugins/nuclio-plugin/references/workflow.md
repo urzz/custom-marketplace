@@ -211,13 +211,15 @@ Review 不能替代失败的确定性校验。Validation 和 review 结果应以
 
 完成前先报告产品结果、变更路径、验证命令、退出码和关键输出摘要；随后完成 mandatory knowledge-candidate analysis，并在 `change.md` 中记录实际知识结果：写入、部分写入、修改、拒绝或 `NO_OP`。不要复制完整日志。
 
-当所有 Tasks、必要 task/final review、whole-change validation、HEAD/State/Spec/Plan identity 和 blocker 条件都满足时运行：
+complete 前（包括 `complete` 命令本身）的正常 transition 继续使用 current Spec hash equality：当前 active `change.md` 的 SHA-256 必须等于冻结在 `state.spec_sha256` 中的 pre-complete Spec identity，同时 State、Plan revision/hash 与 current HEAD 保持一致；任何漂移都必须 fail closed。
+
+当所有 Tasks、必要 task/final review、whole-change validation、current HEAD、State、current Spec hash、Plan hash、Plan revision 和 blocker 条件都满足时运行：
 
 ```bash
 python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> complete --id <change-id>
 ```
 
-`complete` 后、`archive` 前，Coordinator 将 `change.md` 蒸馏为精简完成记录。必备形态为 completed frontmatter 加以下非空 headings：
+`complete` 后、`archive` 前，Coordinator 将 `change.md` 蒸馏为精简完成记录。Distillation 会有意改变 `change.md` bytes，使它不再是 active pre-complete Spec。必备形态为 completed frontmatter 加以下非空 headings：
 
 ```markdown
 ## Goal
@@ -236,7 +238,7 @@ python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> archive --
 
 Archive 成功后 `.dev-docs/changes/archive/<change-id>/` 只保留精简 `change.md`；active `plan.yaml` 和 `state.yaml` 会被 pruning，不进入长期 archive。Git checkpoint commits 保留实际实施历史，后续相关问题创建带关联的新 active change，并通过 archive 的 Outcome/Validation/Knowledge Updates 与 Git history 追溯。
 
-Archive 是 fail-closed 的不可逆 retention 操作：执行前必须验证 completed State、Plan/Spec/HEAD identity、精简历史记录形态和 exact artifact set（active 目录只能含 `change.md`、`plan.yaml`、`state.yaml`）。undistilled record、unexpected artifact 或 identity drift 必须在移动/pruning 前失败且保持 active 目录不变；若移动后 pruning 失败，必须报告 archive path 与 remaining artifacts，不得报告成功。现有 archive 不迁移；新 retention policy 只适用于未来成功的 archive 调用。
+Archive 是 fail-closed 的不可逆 retention 操作：执行前必须验证 completed State identity、approved Plan revision/hash、current HEAD、frozen pre-complete `spec_sha256` presence、distilled record id/status/headings 和 exact artifact set（active 目录只能含 regular non-symlink `change.md`、`plan.yaml`、`state.yaml`）。Archive 不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`；这个字段只证明 active Spec identity 已在 complete 前被冻结且未丢失。undistilled record、unexpected artifact 或 identity drift 必须在移动/pruning 前失败且保持 active 目录不变；若移动后 pruning 失败，必须报告 archive path 与 remaining artifacts，不得报告成功。现有 archive 不迁移；新 retention policy 只适用于未来成功的 archive 调用。
 
 ## 禁止恢复的 v1 与重型模式
 

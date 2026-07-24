@@ -10,6 +10,7 @@ Nuclio v2 change Plan/State helper behavior tests.
 """
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -448,6 +449,17 @@ class ChangeHelperTests(unittest.TestCase):
         self.assertNotEqual(drift.returncode, 0)
         self.assertEqual(stderr_json(drift)["code"], "IDENTITY_DRIFT")
 
+    def test_pre_complete_status_rejects_current_spec_hash_drift(self):
+        change_dir = self.prepare_plan_state_repo()
+        change = change_dir / "change.md"
+        change.write_text(change.read_text(encoding="utf-8") + "\nPre-complete drift\n", encoding="utf-8")
+
+        drift = run_change(self.root, "status", "--id", "alpha-change")
+
+        self.assertNotEqual(drift.returncode, 0)
+        self.assertEqual(stderr_json(drift)["code"], "IDENTITY_DRIFT")
+        self.assertTrue(change_dir.exists())
+
     def test_start_task_allows_unrelated_dirty_but_rejects_index_and_allowed_dirty(self):
         self.prepare_plan_state_repo()
         (self.root / "notes.txt").write_text("outside allowed\n", encoding="utf-8")
@@ -612,6 +624,44 @@ class ChangeHelperTests(unittest.TestCase):
         self.assertTrue(change_dir.exists())
         self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
         self.assertEqual(sorted(path.name for path in change_dir.iterdir()), before)
+
+    def test_archive_allows_distilled_record_with_different_hash_from_frozen_spec(self):
+        change_dir = self.complete_alpha_change()
+        change_module = load_change_module()
+        state = change_module.read_yaml_file(change_dir / "state.yaml")
+        frozen_spec_hash = state["spec_sha256"]
+        distilled_change = self.write_distilled_alpha_record(
+            outcome="Alpha shipped with a concise archive record that intentionally differs from the active Spec.",
+            validation="python -m unittest exited 0 after complete.",
+        )
+        distilled_hash = hashlib.sha256(distilled_change.read_bytes()).hexdigest()
+
+        self.assertNotEqual(distilled_hash, frozen_spec_hash)
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+
+        self.assertEqual(archive.returncode, 0, archive.stderr)
+        payload = stdout_json(archive)
+        self.assertEqual(payload["retained_artifacts"], ["change.md"])
+        archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
+        self.assertFalse(change_dir.exists())
+        self.assertEqual([path.name for path in archived_dir.iterdir()], ["change.md"])
+
+    def test_archive_requires_frozen_pre_complete_spec_identity(self):
+        change_dir = self.complete_alpha_change()
+        self.write_distilled_alpha_record()
+        change_module = load_change_module()
+        state = change_module.read_yaml_file(change_dir / "state.yaml")
+        state.pop("spec_sha256")
+        change_module.dump_yaml_atomic(change_dir / "state.yaml", state)
+
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+
+        self.assertNotEqual(archive.returncode, 0)
+        payload = stderr_json(archive)
+        self.assertEqual(payload["code"], "IDENTITY_DRIFT")
+        self.assertIn("spec_sha256", payload["message"])
+        self.assertTrue(change_dir.exists())
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
 
     def test_archive_rejects_empty_required_heading_before_move(self):
         change_dir = self.complete_alpha_change()

@@ -347,11 +347,12 @@ Review 或 validation FAIL 时，只记录违反合同、具体路径、证据�
 - 所有 Tasks 状态为 `DONE`。
 - 必要的 task review 与 final review 全部 PASS。
 - whole-change validation 为 PASS。
-- HEAD、State、Spec hash、Plan hash 和 revision 一致。
+- complete 前 current Spec hash equality 成立：当前 active `change.md` SHA-256 等于冻结在 `state.spec_sha256` 中的 pre-complete Spec identity。
+- current HEAD、State identity、Plan hash 和 Plan revision 一致。
 - 没有 unresolved blocker。
 - 已报告产品结果并完成 mandatory knowledge-candidate analysis；无合格候选时记录 `NO_OP`，有候选时记录实际写入、部分接受、修改或拒绝结果。
 
-`complete` 后、`archive` 前，`change.md` 必须从 active Spec 蒸馏为精简历史记录。它的职责是轻量追溯，不是长期知识库；长期知识只来自用户确认后的 `.dev-docs/knowledge/**` 写入。
+`complete` 后、`archive` 前，`change.md` 必须从 active Spec 蒸馏为精简历史记录。Distillation 会有意改变 `change.md` bytes；archive 不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`。它的职责是轻量追溯，不是长期知识库；长期知识只来自用户确认后的 `.dev-docs/knowledge/**` 写入。
 
 精简历史 `change.md` 必备 frontmatter：
 
@@ -398,7 +399,7 @@ related_changes: []
 python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> archive --id <change-id>
 ```
 
-helper 直接读取终态 State，并先验证 completed State、Plan/Spec/HEAD identity、精简历史记录形态和 exact artifact set。active 目录必须恰好只有：
+helper 直接读取终态 State，并先验证 completed State identity、approved Plan revision/hash、current HEAD、frozen pre-complete `spec_sha256` presence、distilled record id/status/headings 和 exact artifact set；不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`。active 目录必须恰好只有：
 
 ```text
 .dev-docs/changes/<change-id>/change.md
@@ -420,7 +421,7 @@ helper 直接读取终态 State，并先验证 completed State、Plan/Spec/HEAD 
 
 `plan.yaml` 和 `state.yaml` 是 active 执行/恢复 artifact，不进入长期 archive，也不得复制到隐藏备份、manifest 或第二状态位置。Git checkpoint commits 保留实际实施历史；不自动 squash、reset、rebase、stash 或改写历史。
 
-Archive failure 必须 fail closed：undistilled record、unexpected artifact、identity drift 或 target conflict 在移动/pruning 前失败并保持源目录不变。若移动后 pruning 失败，返回稳定 error，包含 archive path 和 remaining artifacts；不得报告成功。现有 archive 不迁移，新 retention policy 只应用于未来成功的 archive 调用。相关回归或扩展创建新 active change，并通过 `related_changes` 指向 archive 中的历史 change。
+Archive failure 必须 fail closed：undistilled record、unexpected artifact、completed State/Plan/HEAD identity drift、缺少 frozen pre-complete `spec_sha256` 或 target conflict 在移动/pruning 前失败并保持源目录不变；但当前 distilled record 与 pre-complete Spec hash 不相等不是 archive failure。若移动后 pruning 失败，返回稳定 error，包含 archive path 和 remaining artifacts；不得报告成功。现有 archive 不迁移，新 retention policy 只应用于未来成功的 archive 调用。相关回归或扩展创建新 active change，并通过 `related_changes` 指向 archive 中的历史 change。
 
 ## Legacy 整体移动
 
