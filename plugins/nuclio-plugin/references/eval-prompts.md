@@ -20,6 +20,7 @@
 - 每个实施 Task 和每个 approved in-scope repair 恰好一个 selective-stage 本地 checkpoint commit。
 - State 只保存当前恢复事实；Git checkpoint commits 保存实际历史，不把 transcript、完整 diff、完整日志或 State history 复制进 State。
 - 小型、边界清晰的单 Task 可由主会话直做；大型、多 Task、跨模块或上下文压力明显的 change 默认委派有界 generic subagent 单元。
+- bounded subagent 不得调用 TaskStop/Stop Task，不得创建、更新、停止或接管 Controller/task-tracking 任务，不得尝试停止自身、父任务、兄弟任务或后台任务；完成、阻塞、超时或需要决策时只能返回 compact result 给主会话。
 - 产品写入按 Task/repair 顺序执行；只读探索或审查才可按需并发。
 - 终端默认 compact：路径、1–3 行摘要、risk/review/repair policy、Task count、`allowed_paths` 摘要和关键 exit code；用户明确要求时才显示指定 artifact 或 section。
 - 验证、风险审查、in-scope repair、mandatory knowledge-candidate analysis、confirmed knowledge maintenance、complete 和 archive 都在 `work` 生命周期内完成。
@@ -63,7 +64,7 @@
 - `Expected Route`: `work` 推荐澄清风险边界，写入 high risk、`task-and-final`、多 Task Plan；批准后大型/跨模块单元默认委派有界 generic subagent 或说明为何直做更安全。
 - `Allowed Writes`: active change 三层 artifact、批准范围内认证/数据访问/测试路径、确认后的知识更新、archive 路径。
 - `Forbidden Writes`: 无批准直接实施、无 task review 直接完成、Nuclio 专用 agent 流水线、递归委派、并行产品写入、自动 owner fixer。
-- `Key Assertions`: 大型变更默认委派有界单元；subagent dispatch 必含 `allowed_paths`、task base、expected checkpoint subject、validation 和 compact return；主会话只以 Git/helper/确定性证据推进。
+- `Key Assertions`: 大型变更默认委派有界单元；subagent dispatch 必含 `allowed_paths`、task base、expected checkpoint subject、validation、TaskStop/Stop Task 与 Controller/task-tracking 生命周期控制禁令、以及 compact return；主会话只以 Git/helper/确定性证据推进。
 
 ### 4. file-first 指定片段查看
 
@@ -131,11 +132,11 @@
 
 ### 12. subagent claim 无证据
 
-- `User Prompt`: subagent 返回“已完成并通过”，但没有 checkpoint SHA、changed paths、commands/exit codes 或 Git 证据。
-- `Expected Route`: `work` 不推进 helper State，要求补足证据或由主会话用 Git/status/diff/validation 核验。
+- `User Prompt`: subagent 返回“已完成并通过”，但没有 checkpoint SHA、changed paths、commands/exit codes 或 Git 证据；或 subagent 遇到阻塞后试图调用 TaskStop/Stop Task、停止父任务/兄弟任务/后台任务，或接管 Controller/task-tracking task ownership。
+- `Expected Route`: `work` 不推进 helper State，要求补足证据或由主会话用 Git/status/diff/validation 核验；对 task ownership error 类行为必须视为违反 dispatch 合同，要求 subagent 只返回 compact result 给主会话。
 - `Allowed Writes`: none，除非核验证明仍需 in-scope repair 且获决策。
-- `Forbidden Writes`: 凭 agent claim 运行 `record-task`、跳过 validation、跳过 checkpoint、跳过 review。
-- `Key Assertions`: compact return 必含 checkpoint SHA、changed paths、commands/exit codes、风险/blocker；主会话只以确定性证据推进。
+- `Forbidden Writes`: 凭 agent claim 运行 `record-task`、跳过 validation、跳过 checkpoint、跳过 review、让 subagent 创建/更新/停止/接管 Controller/task-tracking 任务或停止任何自身/父级/兄弟/后台任务。
+- `Key Assertions`: compact return 必含 checkpoint SHA、changed paths、commands/exit codes、风险/blocker；完成、阻塞、超时或需要决策时 subagent 只能返回 compact result，不能调用 TaskStop/Stop Task 或控制任务生命周期；主会话只以确定性证据推进。
 
 ### 13. in-scope repair
 
@@ -202,6 +203,7 @@
 - 不创建 `.dev-docs/changes/index.md`。
 - 不创建持久过程 JSON、隐藏运行时目录、MCP、daemon、runtime hook、项目级 `.claude/` 或 `.nuclio/`。
 - 小型单 Task 可主会话直做；大型、多 Task 或跨模块 change 默认委派有界 generic subagent 单元。
+- bounded subagent 不得调用 TaskStop/Stop Task，不得创建、更新、停止或接管 Controller/task-tracking 任务，不得尝试停止自身、父任务、兄弟任务或后台任务；完成、阻塞、超时或需要决策时只能返回 compact result 给主会话。
 - 产品写入顺序执行；不得新增 DAG scheduler 或并行产品写入引擎。
 - 不凭 agent claim 宣告完成或推进 State。
 - deterministic validation 先于完成；review 不能替代失败的确定性校验。

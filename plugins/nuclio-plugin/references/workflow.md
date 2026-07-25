@@ -166,9 +166,10 @@ State 只保存当前恢复状态。它不保存完整 transition history、完�
 - `task_base` 与 expected `checkpoint_subject`；
 - selective staging/commit 合同；
 - 禁止编辑 `change.md`、`plan.yaml`、`state.yaml`，禁止递归委派、扩范围、reset/rebase/squash/stash/history rewrite；
+- 明确工具与任务生命周期边界：bounded subagent 不得调用 TaskStop/Stop Task，不得创建、更新、停止或接管 Controller/task-tracking 任务，不得尝试停止自身、父任务、兄弟任务或后台任务；
 - compact return：checkpoint SHA、changed paths、commands/exit codes、风险和 blocker。
 
-主会话以实际 commit range、Git diff/status、validation、review findings 和 helper State 为准，不以 subagent claim 推进。
+bounded subagent 完成、阻塞、超时或需要决策时，只向主会话返回 compact result；不得尝试停止任何任务，也不得调用 TaskStop/Stop Task 转移控制。主会话以实际 commit range、Git diff/status、validation、review findings 和 helper State 为准，不以 subagent claim 推进。
 
 ## Bug、repair 与新 change 边界
 

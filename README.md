@@ -12,7 +12,7 @@
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator` 技能，用于帮助用户起草 OpenClaw skill。
 - `dev-stack`：提供 `/skill-forge` 与 `/commit` 技能；`/skill-forge` 用于创建、设计、修改、审查和验证 Claude Code skill，采用 L0-L3 风险自适应路径、deterministic-first 校验、单 Controller 顺序执行、L2/L3 file-backed 状态、conditional review/eval 和 L3 strict 高风险治理；`/commit` 用于自包含分析当前 Git 变更、生成单个 Conventional Commit，并在安全门禁下选择性暂存和提交。`/commit` 不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务；最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff。
-- `nuclio`：提供 Nuclio v2：`/nuclio:init` 只负责 v2 `.dev-docs` skeleton setup、repair 和整个旧目录移动到 `legacy/v1`；`/nuclio:work` 是日常入口，active change 使用 `change.md` Spec、`plan.yaml` 批准合同、`state.yaml` 当前恢复状态三层 artifact，结合 file-first approval、单一 PyYAML `change.py` helper、每 Task checkpoint commit、change-level `allowed_paths`、风险驱动委派/review、验证、知识优先 finish，以及只保留精简 `change.md` 的轻量 archive。
+- `nuclio`：提供 Nuclio v2 4.0.1：`/nuclio:init` 只负责 v2 `.dev-docs` skeleton setup、repair 和整个旧目录移动到 `legacy/v1`；`/nuclio:work` 是日常入口，active change 使用 `change.md` Spec、`plan.yaml` 批准合同、`state.yaml` 当前恢复状态三层 artifact，结合 file-first approval、单一 PyYAML `change.py` helper、每 Task checkpoint commit、change-level `allowed_paths`、风险驱动委派/review、bounded subagent 不得调用 TaskStop/Stop Task 或停止/接管 Controller/task-tracking 任务且阻塞时只返回 Coordinator、验证、知识优先 finish，以及只保留精简 `change.md` 的轻量 archive。
 
 ## 仓库结构
 
@@ -66,7 +66,7 @@ Dev-stack 的 `/skill-forge` 是风险自适应 skill 创建与维护入口：
 
 Dev-stack 的 `/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时需同步这些文件、`plugins/dev-stack/.claude-plugin/plugin.json` 的版本、README / CLAUDE 说明与本地校验命令。`/commit` 必须维持自包含执行边界：不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，不绑定 skill-forge 的 agents、scripts 或 review-state helper，也不新增 runtime hook、daemon 或本地状态机制。最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未进入最终 staged diff 的内容不得影响最终消息。内部协议更新不应误写成 marketplace source、plugin name 或外部依赖变化。
 
-Nuclio v2 的当前运行时只暴露 `/nuclio:init` 与 `/nuclio:work`，并且 4.0.0 起保留 active 三层工作流，同时采用知识优先 finish 和破坏性的单文件 archive retention：
+Nuclio v2 的当前运行时只暴露 `/nuclio:init` 与 `/nuclio:work`，并且 4.0.1 起保留 active 三层工作流、知识优先 finish、破坏性的单文件 archive retention，以及 bounded subagent 不得停止/接管任务且阻塞时返回 Coordinator 的生命周期边界：
 
 - `/nuclio:init` 只负责创建或修复最小 v2 `.dev-docs` 骨架，并且只能把旧 `.dev-docs` 整体移动到 `.dev-docs/legacy/v1/`；不得创建普通 change、写入 `plan.yaml`、初始化 `state.yaml`、批准 Plan、实施产品、执行 validation/review/repair、complete 或 archive。
 - `/nuclio:work` 是日常唯一入口。每个 active change 使用 `.dev-docs/changes/<change-id>/change.md`、`plan.yaml`、`state.yaml`：`change.md` 是人类可读 Spec 权威，`plan.yaml` 是用户自然语言批准后的执行合同权威，`state.yaml` 是唯一动态恢复状态权威。
@@ -78,7 +78,7 @@ Nuclio v2 的当前运行时只暴露 `/nuclio:init` 与 `/nuclio:work`，并且
 - `state.yaml` 只保存当前恢复状态：phase、当前 Task、review、validation、repair、blocker、`next_action`、checkpoint SHA 和必要 identity。它不保存完整 transition history、完整 diff、transcript、测试日志、agent 消息、文件内容 snapshot 或重复 Git 历史。
 - finish 在产品结果与验证证据报告之后始终执行长期知识候选分析；无合格候选记录 `NO_OP`，有候选时只在用户确认后写入知识。`complete` 后将 `change.md` 蒸馏为精简历史记录，再 archive。
 - 新的成功 archive 只在 `.dev-docs/changes/archive/<change-id>/` 保留精简 `change.md`；active `plan.yaml` 与 `state.yaml` 会被 pruning，不进入长期 archive。现有 archives 不迁移，后续追溯依赖精简 Outcome/Validation/Knowledge Updates 与 Git checkpoint history。
-- 小型单 Task 可由主 Session 直接实施；跨模块、多 Task、广泛探索、较多读写路径、长验证输出或明显上下文压力时默认使用有界 generic subagent 单元。产品写入保持顺序，只有无写入冲突的只读探索或审查可按需并发。
+- 小型单 Task 可由主 Session 直接实施；跨模块、多 Task、广泛探索、较多读写路径、长验证输出或明显上下文压力时默认使用有界 generic subagent 单元。bounded subagent 不得调用 TaskStop/Stop Task，不得创建、更新、停止或接管 Controller/task-tracking 任务，也不得尝试停止自身、父任务、兄弟任务或后台任务；完成、阻塞、超时或需要决策时只向 Coordinator 返回 compact result。产品写入保持顺序，只有无写入冲突的只读探索或审查可按需并发。
 - review/validation 的 in-scope repair 可在原批准范围内形成 repair checkpoint；超出 `allowed_paths`、改变 Spec/Plan 合同、提高风险、引入依赖/API/迁移或不可逆/外向动作时必须提高 revision 并重新 file-first 批准。
 
 维护 Nuclio v2 时需要保持以下内容同步：

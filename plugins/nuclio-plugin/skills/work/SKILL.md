@@ -86,6 +86,8 @@ A subagent dispatch must be bounded and compact. Include only:
 - task base from `start-task` and the expected checkpoint subject;
 - selective staging and one-checkpoint commit contract;
 - prohibitions on editing `change.md`, `plan.yaml`, or `state.yaml`, recursive delegation, scope expansion, and history rewriting;
+- explicit tool/lifecycle boundary: bounded subagents must not call TaskStop/Stop Task, must not create, update, stop, or take over Controller/task-tracking tasks, and must not try to stop themselves, parent tasks, sibling tasks, or background tasks（不得尝试停止自身、父任务、兄弟任务或后台任务）;
+- when complete, blocked, timed out, or needing a decision（完成、阻塞、超时或需要决策）, return only a compact result to the main session; do not stop any task;
 - compact return: checkpoint SHA, changed paths, commands with exit codes, risks, and blockers.
 
 Product writes are sequential across Tasks and repairs. Only read-only exploration or review without write conflicts may run concurrently when useful. Every implementation Task and every approved repair has exactly one local checkpoint commit. The Coordinator advances only from commit ranges, Git status/diff, validation output, review findings, and helper State, not from claims.

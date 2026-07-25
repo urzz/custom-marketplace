@@ -451,6 +451,21 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
                 "\nrecord-task may accept multiple checkpoint commits, wrong checkpoint_subject, or repair paths outside allowed_paths.\n",
             )
 
+        def remove_taskstop_lifecycle_guard(plugin: Path) -> None:
+            for rel in [
+                "skills/work/SKILL.md",
+                "references/workflow.md",
+                "references/context-hygiene.md",
+                "references/eval-prompts.md",
+            ]:
+                path = plugin / rel
+                text = path.read_text(encoding="utf-8")
+                text = text.replace("TaskStop/Stop Task", "task lifecycle helper")
+                text = text.replace("Controller/task-tracking", "Controller coordination")
+                text = re.sub(r"(?is)when complete, blocked, timed out, or needing a decision.*?do not stop any task;", "when finished, provide a brief note;", text)
+                text = re.sub(r"完成、阻塞、超时或需要决策时.*?(?:不得尝试停止任何任务|停止任何自身、父级、兄弟、后台、Controller/task-tracking 任务。)", "完成时可以自行结束。", text)
+                path.write_text(text, encoding="utf-8")
+
         def missing_large_delegation_contract(plugin: Path) -> None:
             work = plugin / "skills" / "work" / "SKILL.md"
             text = work.read_text(encoding="utf-8")
@@ -485,6 +500,7 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
             "skip approval guidance": skip_approval_guidance,
             "skip approval without guidance": skip_approval_without_guidance,
             "bad checkpoint/repair guidance": bad_checkpoint_repair_guidance,
+            "remove TaskStop lifecycle guard": remove_taskstop_lifecycle_guard,
             "missing large delegation contract": missing_large_delegation_contract,
             "whole-directory archive retention": whole_directory_archive_retention,
             "skip archive distilled record check": skip_archive_distilled_record_check,
@@ -869,6 +885,15 @@ class CompositeSemanticsTests(unittest.TestCase):
         paths = list(skill_paths().values()) + reference_paths_without_eval()
         corpus = "\n".join(read_text(path) for path in paths)
         work = read_text(SKILLS / "work" / "SKILL.md")
+        lifecycle_guard_corpus = "\n".join(
+            read_text(path)
+            for path in [
+                SKILLS / "work" / "SKILL.md",
+                REFERENCES / "workflow.md",
+                REFERENCES / "context-hygiene.md",
+                REFERENCES / "eval-prompts.md",
+            ]
+        )
         for required in [
             "不做 owner mapping",
             "finding owner routing",
@@ -890,6 +915,21 @@ class CompositeSemanticsTests(unittest.TestCase):
         ]:
             with self.subTest(work_required=required):
                 self.assertIn(required, work)
+        for required in [
+            "TaskStop/Stop Task",
+            "不得调用 TaskStop/Stop Task",
+            "Controller/task-tracking",
+            "不得创建、更新、停止或接管 Controller/task-tracking",
+            "不得尝试停止自身、父任务、兄弟任务或后台任务",
+            "完成、阻塞、超时或需要决策时",
+            "只能返回 compact result 给主会话",
+        ]:
+            with self.subTest(lifecycle_guard_required=required):
+                self.assertIn(required, lifecycle_guard_corpus)
+        self.assertRegex(
+            lifecycle_guard_corpus,
+            r"(?s)(?:blocked|阻塞).*?(?:return only a compact result to the main session|只能返回 compact result 给主会话)",
+        )
         self.assertRegex(corpus, r"(?s)超出.*?allowed_paths.*?(?:重新批准|Plan revision)")
 
 

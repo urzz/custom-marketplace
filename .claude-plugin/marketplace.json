@@ -18,7 +18,7 @@
     {
       "name": "nuclio",
       "source": "./plugins/nuclio-plugin",
-      "description": "Adds /nuclio:init for v2 .dev-docs skeleton setup, repair, and legacy/v1 moves, plus /nuclio:work for an active three-layer change.md Spec, plan.yaml approval contract, state.yaml recovery workflow with file-first approval, single PyYAML change.py helper, checkpoint commits, risk-based delegation/review, validation, knowledge-first finish, and concise one-file change.md archive without migrating existing archives"
+      "description": "Adds /nuclio:init for v2 .dev-docs skeleton setup, repair, and legacy/v1 moves, plus /nuclio:work for an active three-layer change.md Spec, plan.yaml approval contract, state.yaml recovery workflow with file-first approval, single PyYAML change.py helper, checkpoint commits, risk-based delegation/review whose bounded subagents cannot call TaskStop/Stop Task or control Controller/task-tracking tasks and must return blockers to the Coordinator, validation, knowledge-first finish, and concise one-file change.md archive without migrating existing archives"
     }
   ]
 }

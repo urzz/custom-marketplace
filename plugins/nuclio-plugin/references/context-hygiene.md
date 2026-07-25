@@ -81,6 +81,7 @@ Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可
 - `task_base` 与 expected `checkpoint_subject`。
 - selective staging/commit 合同。
 - 禁止编辑 `change.md`、`plan.yaml`、`state.yaml`，禁止递归委派、扩范围、自动 fixer routing、reset/rebase/squash/stash/history rewrite。
+- 禁止调用 TaskStop/Stop Task；禁止创建、更新、停止或接管 Controller/task-tracking 任务；禁止尝试停止自身、父任务、兄弟任务或后台任务。
 - compact return 格式。
 
 不要传大型 packet、完整知识全文、完整 Spec/Plan/State、完整 transcript、全量 archive、legacy、长 diff 或长日志。
@@ -94,6 +95,7 @@ Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可
 - changed paths。
 - commands、exit codes 和短输出摘要。
 - 风险、blocker、超出 `allowed_paths` 或合同变化迹象。
+- 完成、阻塞、超时或需要决策时，只返回 compact result 给主会话；不得调用 TaskStop/Stop Task 或停止任何自身、父级、兄弟、后台、Controller/task-tracking 任务。
 - report/notes 路径仅当主会话明确要求且该路径在授权范围内。
 
 不要要求 subagent 返回完整 diff、完整日志、过程 transcript 或自我 Gate 通过声明。主会话必须用 Git、helper State 和确定性证据核验。
