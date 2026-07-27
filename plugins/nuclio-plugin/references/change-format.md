@@ -1,6 +1,6 @@
 # Nuclio v2 Change Format
 
-Nuclio v2 使用 Markdown + YAML docs-as-code。普通 active change 由同一目录下的三层 artifact 表达：`.dev-docs/changes/<change-id>/change.md`、`plan.yaml`、`state.yaml`。代码、配置、测试、CI、Git working tree 和 checkpoint commits 仍是产品执行事实。
+Nuclio v2 使用 Markdown + YAML docs-as-code。普通 active change 由同一目录下仅有的三层 runtime artifact 表达：`.dev-docs/changes/<change-id>/change.md`、`plan.yaml`、`state.yaml`。`change.md` 承担人类可读 Spec 角色；Spec 不是独立于 `change.md` 的第四个文件。代码、配置、测试、CI、Git working tree 和 checkpoint commits 仍是产品执行事实。
 
 ## Contents
 
@@ -14,6 +14,7 @@ Nuclio v2 使用 Markdown + YAML docs-as-code。普通 active change 由同一�
 - [plan.yaml 批准合同](#planyaml-批准合同)
 - [allowed_paths 写入边界](#allowed_paths-写入边界)
 - [state.yaml 当前状态](#stateyaml-当前状态)
+- [superseded change 收口](#superseded-change-收口)
 - [checkpoint commit](#checkpoint-commit)
 - [review、validation 与 repair](#reviewvalidation-与-repair)
 - [完成格式](#完成格式)
@@ -118,7 +119,7 @@ No confirmed engineering knowledge has been recorded yet.
 
 三层职责固定：
 
-- `change.md` 是人类可读 Spec 权威，表达 Goal、Context、Constraints、Non-goals、Acceptance Criteria、重要 Decisions 和最终 Outcome。
+- `change.md` 是人类可读 Spec 角色与权威，表达 Goal、Context、Constraints、Non-goals、Acceptance Criteria、重要 Decisions 和最终 Outcome；Spec 不是独立 artifact。
 - `plan.yaml` 是用户自然语言批准后的执行合同权威，表达 revision、risk、review policy、repair policy、change-level `allowed_paths`、有序 Tasks、验证命令和 checkpoint subject。
 - `state.yaml` 是唯一动态状态权威，只由 `plugins/nuclio-plugin/scripts/change.py` 写入，保存当前恢复状态。
 - Git commits、working tree、代码、配置、测试和 CI 是产品事实；每个实施或 repair checkpoint commit 保存实际增量历史。
@@ -305,9 +306,31 @@ RUN_VALIDATION
 REQUEST_REPAIR_DECISION
 COMPLETE
 HALT
+ARCHIVE_SUPERSEDED
 ```
 
+`SUPERSEDED` 是 explicit successor takeover 终态，不是普通完成。对应 State 形态：`status: SUPERSEDED`、`phase: SUPERSEDED`、`next_action: ARCHIVE_SUPERSEDED`，并包含轻量 `superseded_by` mapping：`successor_id`、`successor_location`、`successor_path`、`decision`，以及仅在 helper 验证到唯一未记录 checkpoint 例外时出现的 `unrecorded_checkpoint`。`state.superseded_by` 是 active predecessor→successor relation 的唯一动态表达；它不复制 successor `change.md`/`plan.yaml`、完整历史、日志或文件内容。进入该状态后恢复动作是蒸馏 predecessor 历史记录并 archive。
+
 恢复时先运行 `status` 和 `next-action`，再结合 Git HEAD、diff/status、checkpoint commits 和验证证据判断下一步。不要依据 transcript 或 agent claim 推进。
+
+## superseded change 收口
+
+创建 successor 不会自动让 predecessor 消失。successor 创建或修订时必须让 successor `change.md` frontmatter `related_changes` 包含 predecessor id；不要 pre-link frozen predecessor `change.md`、不要新增 `link-related`、不要用通用 hash refresh/rebaseline 或手改 `state.yaml` 刷新冻结 identity。只有当 successor 是有效 active change（至少完整 `change.md`/`plan.yaml` 且 Plan identity 匹配）或有效 archived one-file record，并且 successor `change.md` backlink 指向 predecessor 时，才能运行：
+
+```bash
+python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> supersede --id <predecessor> --successor-id <successor>
+```
+
+禁止按目录名、`-v2` 后缀、创建时间、聊天 transcript、predecessor 单向 related link 或空目录推断 successor。禁止无 successor 强制归档。`supersede` fail closed：helper 验证 predecessor 有合法 State/Plan identity、未终态、无 in-progress repair、Git index 为空、原 `allowed_paths` 内无脏修改、HEAD 等于 State `current_head`，或仅接受 Task 已 `start-task` 后恰好一个未 `record-task` checkpoint 的严格例外（直接父、subject、changed paths、allowed_paths 全部匹配），并验证 successor `change.md.related_changes` 引用 predecessor。失败不得改写 State 或移动目录。
+
+Superseded distilled record 为 archive 兼容，frontmatter 仍使用 `status: completed`，但语义必须清楚区分：
+
+- `related_changes` 保留 `state.superseded_by.successor_id`，让 archive `change.md` relation 与 State takeover 事实一致。
+- `Outcome` 明确“被 `<successor-id>` 接管 / superseded by successor”，列出真实 checkpoint commit（如有）并说明未完成范围。
+- `Validation` 明确这不是 predecessor 旧 acceptance 的全部成功验证，不得把 PENDING/IN_PROGRESS Task、失败 review 或未完成 validation 伪装为 DONE/PASS。
+- `Knowledge Updates` 记录实际知识结果或 `NO_OP`。
+
+Archive 后 predecessor active 目录必须消失且 archive 中仅保留 `change.md`。若 distillation、archive 或 pruning 失败，报告 precise error、remaining artifacts 和残留 active predecessor 路径，不得宣称完全收口。
 
 ## checkpoint commit
 
@@ -354,6 +377,8 @@ Review 或 validation FAIL 时，只记录违反合同、具体路径、证据�
 
 `complete` 后、`archive` 前，`change.md` 必须从 active Spec 蒸馏为精简历史记录。Distillation 会有意改变 `change.md` bytes；archive 不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`。它的职责是轻量追溯，不是长期知识库；长期知识只来自用户确认后的 `.dev-docs/knowledge/**` 写入。
 
+`SUPERSEDED` predecessor 也要在 archive 前蒸馏为同一 frontmatter/headings 形态以保持 one-file archive 读取兼容，但其 `related_changes` 必须来自 `state.superseded_by.successor_id`，其 `Outcome`/`Validation` 语义不同：Outcome 是 successor takeover 和真实 checkpoint/未完成范围摘要，Validation 是“未把旧 acceptance 判定为成功”的收口说明，而不是正常 `complete` 的产品 PASS 结论。
+
 精简历史 `change.md` 必备 frontmatter：
 
 ```yaml
@@ -399,7 +424,7 @@ related_changes: []
 python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> archive --id <change-id>
 ```
 
-helper 直接读取终态 State，并先验证 completed State identity、approved Plan revision/hash、current HEAD、frozen pre-complete `spec_sha256` presence、distilled record id/status/headings 和 exact artifact set；不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`。active 目录必须恰好只有：
+helper 直接读取终态 State，并先验证 completed 或 superseded State identity、approved Plan revision/hash、normal completed path 的 current HEAD、frozen pre-complete `spec_sha256` presence、distilled record id/status/headings、superseded path 的 successor takeover Outcome、archive `related_changes` 与 `state.superseded_by.successor_id` 一致、以及 exact artifact set；不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`。active 目录必须恰好只有：
 
 ```text
 .dev-docs/changes/<change-id>/change.md
@@ -421,7 +446,7 @@ helper 直接读取终态 State，并先验证 completed State identity、approv
 
 `plan.yaml` 和 `state.yaml` 是 active 执行/恢复 artifact，不进入长期 archive，也不得复制到隐藏备份、manifest 或第二状态位置。Git checkpoint commits 保留实际实施历史；不自动 squash、reset、rebase、stash 或改写历史。
 
-Archive failure 必须 fail closed：undistilled record、unexpected artifact、completed State/Plan/HEAD identity drift、缺少 frozen pre-complete `spec_sha256` 或 target conflict 在移动/pruning 前失败并保持源目录不变；但当前 distilled record 与 pre-complete Spec hash 不相等不是 archive failure。若移动后 pruning 失败，返回稳定 error，包含 archive path 和 remaining artifacts；不得报告成功。现有 archive 不迁移，新 retention policy 只应用于未来成功的 archive 调用。相关回归或扩展创建新 active change，并通过 `related_changes` 指向 archive 中的历史 change。
+Archive failure 必须 fail closed：undistilled record、unexpected artifact、completed State/Plan/HEAD identity drift、superseded State/Plan/successor takeover identity drift、缺少 frozen pre-complete `spec_sha256` 或 target conflict 在移动/pruning 前失败并保持源目录不变；但当前 distilled record 与 pre-complete Spec hash 不相等不是 archive failure。若移动后 pruning 失败，返回稳定 error，包含 archive path 和 remaining artifacts；不得报告成功。现有 archive 不迁移，新 retention policy 只应用于未来成功的 archive 调用。相关回归或扩展创建新 active change，并通过 `related_changes` 指向 archive 中的历史 change。
 
 ## Legacy 整体移动
 

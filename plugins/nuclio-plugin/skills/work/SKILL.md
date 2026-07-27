@@ -5,7 +5,7 @@ disable-model-invocation: true
 ---
 # Nuclio Work
 
-You are the Nuclio v2 Composite Coordinator. Daily Nuclio work enters here: locate or create one change, clarify intent, write the full Spec and Plan to files, obtain one natural-language approval for that file-backed contract, initialize State with the single helper, execute ordered Tasks with checkpoint commits, validate and review by risk, then finish knowledge-first: report verified product results, always analyze reusable knowledge candidates, ask for confirmation only when qualified candidates exist, complete, distill `change.md` into a concise historical record, and archive that lightweight record.
+You are the Nuclio v2 Composite Coordinator. Daily Nuclio work enters here: locate or create one change, clarify intent, write the full `change.md` human-readable Spec role and `plan.yaml` execution contract to files, obtain one natural-language approval for that file-backed contract, initialize State with the single helper, execute ordered Tasks with checkpoint commits, validate and review by risk, then finish knowledge-first: report verified product results, always analyze reusable knowledge candidates, ask for confirmation only when qualified candidates exist, complete, distill `change.md` into a concise historical record, and archive that lightweight record. Nuclio has only three runtime artifacts: `change.md`, `plan.yaml`, and `state.yaml`; Spec is the role of `change.md`, not a separate file. When an approved scope expansion needs a successor change because the predecessor can no longer safely continue under its frozen State/Plan, make successor change.md `related_changes` name the predecessor without pre-linking the frozen predecessor or refreshing State hashes manually; after the successor successfully archives, sequentially `supersede` each predecessor so active predecessor relation is recorded in `state.superseded_by`, distill predecessor `change.md` with archive `related_changes` matching that State relation, archive it, and report any residual active predecessor paths instead of claiming full closure.
 
 ## Contents
 
@@ -26,10 +26,10 @@ Read these one-level references as needed: [workflow](../../references/workflow.
 1. Locate the project root and `.dev-docs`.
 2. If `.dev-docs` is absent, create the v2 skeleton from `change-format.md`; if it is clear v1, call `change.py legacy-move`; if it is conflicting or unknown, stop with exact paths.
 3. List active changes with `change.py list` or by scanning `.dev-docs/changes/*/change.md`; exclude `.dev-docs/changes/archive/**` and `.dev-docs/legacy/**` by default.
-4. Resume the uniquely matching active change. If multiple active changes may match, ask the user to choose. If none match, run `python3 <plugin>/scripts/change.py --project-root <project-root> create --id <id> --title <title> --goal <goal> [--related-change <id>] --date YYYY-MM-DD`.
+4. Resume the uniquely matching active change. If multiple active changes may match, ask the user to choose. If none match, run `python3 <plugin>/scripts/change.py --project-root <project-root> create --id <id> --title <title> --goal <goal> [--related-change <id>] --date YYYY-MM-DD`. Do not infer takeover from names such as `-v2`, recency, or transcript; a successor/predecessor takeover requires successor change.md `related_changes` to name the predecessor. The active predecessor relation is later recorded by helper as `state.superseded_by`, not by pre-linking frozen predecessor `change.md`.
 5. Read only the needed knowledge, active `change.md`, source, config, tests, and optional Plan/State snippets according to `context-hygiene.md`.
 6. Clarify `Goal`, `Constraints`, `Non-goals`, acceptance, likely `allowed_paths`, validation, risk, and review policy with recommendation-first single questions only when the answer changes the contract.
-7. Write or revise the full `change.md` Spec and `plan.yaml` contract, then run `python3 <plugin>/scripts/change.py --project-root <project-root> validate-plan --id <change-id>`.
+7. Write or revise the full `change.md` human-readable Spec role and `plan.yaml` contract, then run `python3 <plugin>/scripts/change.py --project-root <project-root> validate-plan --id <change-id>`.
 8. Present the file-first implementation Gate and wait for natural-language approval before product mutation or State initialization.
 9. After approval only, run `python3 <plugin>/scripts/change.py --project-root <project-root> init-state --id <change-id>`.
 10. Drive execution by repeatedly reading `status` and `next-action`, then performing the indicated action using Git, validation evidence, and compact human decisions.
@@ -38,11 +38,11 @@ Read these one-level references as needed: [workflow](../../references/workflow.
 13. Report product results and evidence before any knowledge decision.
 14. Always analyze long-term knowledge candidates against the five questions. If none qualify, record `NO_OP` and do not show a second Gate.
 15. If qualified candidates exist, show the single target and supporting evidence, wait for a natural-language decision, then record actual writes, partial acceptance, modification, or rejection.
-16. Call `complete`, distill `change.md` into the concise historical record, then call `archive`, which keeps only the distilled `change.md` in the archive.
+16. Call `complete`, distill `change.md` into the concise historical record, then call `archive`, which keeps only the distilled `change.md` in the archive. If this successful archive is a successor for earlier active predecessors, process those predecessors one by one: run `supersede --id <predecessor> --successor-id <successor>`, distill each predecessor as a superseded historical record, and run `archive`; if any supersede, distillation, archive, or pruning step fails, report the exact error plus remaining active predecessor paths and do not claim complete closure.
 
 ## File-first implementation Gate
 
-Before any product mutation or `init-state`, ensure the complete human-readable Spec and complete executable Plan are in files:
+Before any product mutation or `init-state`, ensure the complete `change.md` human-readable Spec role and complete executable `plan.yaml` Plan are in files:
 
 - `.dev-docs/changes/<change-id>/change.md`
 - `.dev-docs/changes/<change-id>/plan.yaml`
@@ -69,7 +69,7 @@ Use the three-layer authority model:
 - `state.yaml` is the only dynamic recovery-state artifact and is written only by `plugins/nuclio-plugin/scripts/change.py`.
 - Git commits, working tree, code, configuration, tests, and CI are product facts.
 
-Recovery starts with `change.py status` and `change.py next-action`, then checks Git HEAD/status/diff, checkpoint commits, and deterministic evidence. Do not replay chat transcript or rely on subagent confidence to advance State. If Spec/Plan hash, revision, HEAD, checkpoint parent, checkpoint subject, commit range, or `allowed_paths` drift is detected, fail closed and ask for human judgment.
+Recovery starts with `change.py status` and `change.py next-action`, then checks Git HEAD/status/diff, checkpoint commits, and deterministic evidence. Do not replay chat transcript or rely on subagent confidence to advance State. If Spec/Plan hash, revision, HEAD, checkpoint parent, checkpoint subject, commit range, or `allowed_paths` drift is detected, fail closed and ask for human judgment. `SUPERSEDED` with `next_action=ARCHIVE_SUPERSEDED` means the predecessor still needs a superseded distillation plus archive; it is not a successful completion of the predecessor's old acceptance.
 
 `state.yaml` is intentionally light. It must not be used as a transcript store, diff store, test-log archive, file-body snapshot store, linear event ledger, or duplicate Git history.
 
@@ -117,3 +117,5 @@ When candidates qualify, show only the semantic conclusion, exactly one target f
 After the knowledge result is known, call `python3 <plugin>/scripts/change.py --project-root <project-root> complete --id <change-id>`. Then distill `change.md` into a concise completed historical record with frontmatter plus `Goal`, `Outcome`, `Validation`, and `Knowledge Updates`; keep product outcome and evidence summaries, but do not copy process logs, Plan, State, full diffs, transcripts, or agent messages.
 
 Finally call `python3 <plugin>/scripts/change.py --project-root <project-root> archive --id <change-id>`. Successful archive is a lightweight traceability record: `.dev-docs/changes/archive/<change-id>/` contains only the distilled `change.md`; active `plan.yaml` and `state.yaml` are pruned and are not long-term knowledge. If archive validation or pruning fails, report the exact error and remaining artifacts instead of claiming success.
+
+For successor closure, only after the successor archive succeeds may the Coordinator close active predecessors that it explicitly takes over. For each predecessor, verify successor change.md `related_changes` names the predecessor, then run `python3 <plugin>/scripts/change.py --project-root <project-root> supersede --id <predecessor> --successor-id <successor>`; helper writes `state.superseded_by` as the active predecessor relation. Then distill the predecessor `change.md` with `status: completed` frontmatter for archive compatibility, `related_changes` containing the successor id from `state.superseded_by`, and an `Outcome` that states it was superseded/taken over by the successor, identifies any real checkpoint commits, and names unfinished scope. `Validation` must state that this is not old acceptance success. Then run `archive`. Do not force archive without a successor, do not infer from `-v2` names, do not pre-link frozen predecessor `change.md`, do not run link-related or hash refresh flows, and do not report full closure if any predecessor remains active; include remaining active predecessor paths.

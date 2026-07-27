@@ -27,6 +27,7 @@
 - 长期知识只在产品结果验证后、有合格候选且用户确认时写入；无合格候选时记录 `NO_OP`；拒绝知识不影响产品完成或 archive，但精简历史记录必须说明拒绝结果。
 - File-first implementation Gate 必须披露 retention policy：成功 archive 只保留精简 `change.md`，active `plan.yaml`/`state.yaml` 不进入长期 archive。
 - Archive 和 legacy 默认不读；只有当前目标需要时才按路径读取。未来成功 archive 是 one-file archive，历史读取不依赖 archived Plan/State。
+- 当范围扩大需要 successor 接管 predecessor 时，successor `change.md.related_changes` 必须引用 predecessor；active predecessor→successor relation 在 successor 成功归档后由 `supersede` 写入 `state.superseded_by`，再蒸馏 predecessor `change.md` 写入与 State 一致的 archive `related_changes`、superseded Outcome/Validation，并 archive。不得 pre-link frozen predecessor、不得新增 link-related、不得手改 State 或 hash refresh/rebaseline，不得按 `-v2` 名称猜测 successor，不得把 predecessor 旧 acceptance 伪装为成功，失败必须报告残留 active predecessor 路径。
 
 ## 固定字段
 
@@ -146,13 +147,13 @@
 - `Forbidden Writes`: 自动 repair 循环、owner budget、fixer routing、Plan 未变却强制重新审批、超出 `allowed_paths` 的 repair。
 - `Key Assertions`: in-scope repair 不改变 Goal/Constraints/Acceptance/risk/Plan 合同；每次 repair 前必须有 `REQUEST_REPAIR_DECISION` 和人工判断。
 
-### 14. 范围扩大重计划
+### 14. 范围扩大 successor 收口
 
-- `User Prompt`: 批准单文件修复后，用户又要求“顺便改公共 API 并迁移调用方”。
-- `Expected Route`: `work` 停止当前产品 mutation，更新 Goal/Non-goals、risk、`allowed_paths` 和 Tasks，提升 revision，重新 `validate-plan` 并等待新批准。
-- `Allowed Writes`: 准备阶段 `change.md` 与 `plan.yaml` revision 更新；重新批准后才写新增路径。
-- `Forbidden Writes`: 在旧批准下修改 public API、迁移调用方、提高风险但仍用 self review、用 repair 绕过重计划。
-- `Key Assertions`: public API、架构、依赖、迁移或产品语义变化必须重新计划和重新批准。
+- `User Prompt`: 批准单文件修复并冻结 State 后，用户要求“顺便改公共 API 并迁移调用方”；Coordinator 判断原 predecessor 无法在旧合同中安全继续，创建 successor。successor 已完成并成功 archive，但 predecessor 仍在 active 目录；演练分支分别覆盖真实 frozen predecessor、successor change.md 缺少 predecessor backlink、active Spec drift、以及 predecessor archive `related_changes` 与 `state.superseded_by` 不一致。
+- `Expected Route`: `work` 先在 successor 创建/修订阶段让 successor `change.md.related_changes` 引用 predecessor 并重新 file-first approval；不要修改 frozen predecessor 来预建关系。successor 成功归档后必须继续收口 predecessor：运行 `supersede --id <predecessor> --successor-id <successor>`，由 helper 写入 predecessor `state.superseded_by`，蒸馏 predecessor 的 `change.md` 使 archive `related_changes` 与 State successor 一致并写入 superseded Outcome/Validation，再调用 `archive`。若 successor backlink、successor identity、predecessor State/Plan、HEAD、active Spec drift、archive relation mismatch 或 artifact pruning 任一失败，则 fail closed，保留 predecessor active，并报告残留 active predecessor 路径。
+- `Allowed Writes`: 准备阶段 successor `change.md` backlink 修订、successor 的 `plan.yaml` revision、重新批准后的新增路径、helper 写 predecessor `SUPERSEDED`/`ARCHIVE_SUPERSEDED` State 与 `state.superseded_by`、predecessor superseded `change.md` distillation（含 archive `related_changes`）、成功后的 one-file archive。
+- `Forbidden Writes`: 在旧批准下修改 public API、迁移调用方、按 `-v2` 名称或聊天记录猜测 successor、缺少 successor backlink 时 supersede、pre-link frozen predecessor、link-related 命令、通用 hash refresh/rebaseline、手写 `state.yaml`、无 successor 强制归档、把 predecessor 旧 acceptance 伪装为成功、失败后宣称完全收口。
+- `Key Assertions`: public API、架构、依赖、迁移或产品语义变化必须重新计划和重新批准；successor 成功归档后必须收口 predecessor；successor `change.md` backlink 是 fail-closed 前置条件；active predecessor relation 只由 `state.superseded_by` 表达；archive predecessor `related_changes` 必须与 State successor 一致；不得按名称猜测 successor；不得 pre-link frozen predecessor、link-related、hash refresh 或手写 State；不得把旧 acceptance 伪装为成功；失败必须报告残留 active predecessor 路径。
 
 ### 15. whole-change validation FAIL
 
@@ -213,5 +214,8 @@
 - File-first implementation Gate 必须披露 successful archive 只保留精简 `change.md`，active `plan.yaml`/`state.yaml` 不进入长期 archive。
 - `complete` 后、`archive` 前必须把 `change.md` 蒸馏为含 completed frontmatter、Goal、Outcome、Validation、Knowledge Updates 的精简历史记录。
 - Archive 成功后只保留 `.dev-docs/changes/archive/<id>/change.md`；不得长期保留 archived `plan.yaml`/`state.yaml`、隐藏备份或 archive manifest。
-- Archive 必须在 destructive pruning 前验证 completed State、Plan/Spec/HEAD identity、精简历史形态和 exact artifact set；失败 fail closed 或报告 precise remaining artifacts。
+- Archive 必须在 destructive pruning 前验证 completed 或 superseded State、Plan/HEAD identity、精简历史形态、superseded successor takeover 语义、archive `related_changes` 与 `state.superseded_by` 一致和 exact artifact set；失败 fail closed 或报告 precise remaining artifacts。
+- successor 成功归档后必须收口 predecessor：successor `change.md` backlink、`supersede` 写入 `state.superseded_by`、`ARCHIVE_SUPERSEDED`、与 State 一致的 predecessor archive `related_changes`、superseded Outcome/Validation 和 one-file archive 都必须成立。
+- 不得按 `-v2` 名称、recency、聊天 transcript 或 predecessor 单向关联猜测 successor，不得 pre-link frozen predecessor、link-related、hash refresh/rebaseline 或手写 State，不得无 successor 强制归档，不得把 predecessor 旧 acceptance 伪装为成功。
+- predecessor 收口失败必须报告残留 active predecessor 路径，不得宣称完全收口。
 - Archive 和 legacy 默认不读；legacy 只能整体移动，不保留双栈。

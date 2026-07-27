@@ -58,6 +58,7 @@ EXPECTED_CHANGE_COMMANDS = {
     "record-repair",
     "record-validation",
     "complete",
+    "supersede",
     "archive",
     "legacy-move",
 }
@@ -105,6 +106,7 @@ FORBIDDEN_RUNTIME_REBUILD_PATTERNS = {
     "unapproved init-state or mutation": re.compile(r"(?i)(?:init-state|product mutation).{0,80}(?:before|without).{0,40}(?:approval|natural-language approval|批准).{0,80}(?:allow|allowed|permitted|可|允许)|(?:allow|allowed|permitted|可|允许).{0,80}(?:init-state|product mutation).{0,80}(?:before|without).{0,40}(?:approval|批准)"),
     "bad checkpoint or repair acceptance": re.compile(r"(?i)(?:record-task|checkpoint|record-repair|repair).{0,80}(?:multiple checkpoint|wrong checkpoint_subject|outside allowed_paths|多个 checkpoint|错误 checkpoint|超出 allowed_paths).{0,80}(?:may accept|allowed|allow|可接受|允许)"),
     "legacy helper next-action authority": re.compile(r"(?i)(?:旧式|legacy|v1).{0,40}helper.{0,40}next-action.{0,80}(?:route|dispatch|authority|require|路由|调度|权威|要求)"),
+    "link-related/hash refresh rebaseline": re.compile(rf"(?i)(?:link-related|hash refresh|rebaseline).{{0,80}}{CREATE_REQUIRE_WORDS}|{CREATE_REQUIRE_WORDS}.{{0,80}}(?:link-related|hash refresh|rebaseline)"),
 }
 NEGATIVE_CONTEXT_RE = re.compile(
     r"(?i)(?:do not|don't|does not|not |never|forbid|forbidden|prohibit|no |non-goal|禁止|不得|不要|不应|不会|不能|不创建|不写入|非目标|不是|无须|无需|都不是|只在|仅在)"
@@ -487,6 +489,60 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
             text = text.replace("require_distilled_change_record(paths, change_id)", "# skipped distilled record validation")
             change.write_text(text, encoding="utf-8")
 
+        def remove_successor_predecessor_closure_guidance(plugin: Path) -> None:
+            for rel in [
+                "skills/work/SKILL.md",
+                "references/workflow.md",
+                "references/eval-prompts.md",
+            ]:
+                path = plugin / rel
+                text = path.read_text(encoding="utf-8")
+                text = text.replace("successor", "follow-up")
+                text = text.replace("predecessor", "previous change")
+                text = text.replace("后继", "后续")
+                text = text.replace("前驱", "旧 change")
+                text = text.replace("收口", "记录")
+                text = text.replace("残留 active", "待处理")
+                path.write_text(text, encoding="utf-8")
+
+        def remove_successor_backlink_guidance(plugin: Path) -> None:
+            for rel in [
+                "skills/work/SKILL.md",
+                "references/workflow.md",
+                "references/change-format.md",
+                "references/eval-prompts.md",
+            ]:
+                path = plugin / rel
+                text = path.read_text(encoding="utf-8")
+                text = text.replace("successor change.md", "successor notes")
+                text = text.replace("successor `change.md", "successor note")
+                text = text.replace("successor 的 `change.md`", "successor note")
+                text = text.replace("backlink", "note")
+                text = text.replace("引用 predecessor", "提到 predecessor")
+                path.write_text(text, encoding="utf-8")
+
+        def restore_hash_refresh_guidance(plugin: Path) -> None:
+            append_text(
+                plugin / "references" / "workflow.md",
+                "\nCurrent runtime may use link-related and hash refresh to rebaseline frozen predecessor State after editing predecessor related_changes.\n",
+            )
+
+        def remove_archived_residual_active_reporting(plugin: Path) -> None:
+            for rel in [
+                "skills/work/SKILL.md",
+                "references/workflow.md",
+                "references/change-format.md",
+            ]:
+                path = plugin / rel
+                text = path.read_text(encoding="utf-8")
+                text = text.replace("remaining active predecessor paths", "")
+                text = text.replace("residual active", "")
+                text = text.replace("残留 active", "")
+                text = text.replace("剩余 active", "")
+                text = text.replace("不得宣称完全收口", "")
+                text = text.replace("cannot claim full closure", "")
+                path.write_text(text, encoding="utf-8")
+
         for name, mutator in {
             "nested agents/schemas runtime files": nested_agent_and_schema_files,
             "skill Markdown link outside one-level references": bad_skill_markdown_link,
@@ -504,6 +560,10 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
             "missing large delegation contract": missing_large_delegation_contract,
             "whole-directory archive retention": whole_directory_archive_retention,
             "skip archive distilled record check": skip_archive_distilled_record_check,
+            "remove successor/predecessor closure guidance": remove_successor_predecessor_closure_guidance,
+            "remove successor backlink guidance": remove_successor_backlink_guidance,
+            "restore link-related/hash refresh guidance": restore_hash_refresh_guidance,
+            "remove residual active reporting": remove_archived_residual_active_reporting,
         }.items():
             self.assert_mutant_detected(name, mutator)
 
@@ -660,6 +720,18 @@ class EvalContractTests(unittest.TestCase):
             "拒绝不影响已验证产品结果",
             "legacy 只能整体移动",
             "多候选必须人类选择",
+            "successor 成功归档后必须收口 predecessor",
+            "successor `change.md` backlink",
+            "state.superseded_by",
+            "archive predecessor `related_changes` 必须与 State successor 一致",
+            "active Spec drift",
+            "archive relation mismatch",
+            "不得按名称猜测 successor",
+            "不得 pre-link frozen predecessor",
+            "hash refresh",
+            "手写 State",
+            "不得把旧 acceptance 伪装为成功",
+            "残留 active predecessor 路径",
         ]:
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined_case_text)
@@ -737,7 +809,7 @@ class RuntimeHelperTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertNotIn(token, text)
         self.assertEqual(text.count("def cmd_"), len(EXPECTED_CHANGE_COMMANDS))
-        for command in ["validate-plan", "init-state", "status", "next-action", "start-task", "record-task", "start-repair", "record-repair", "complete"]:
+        for command in ["validate-plan", "init-state", "status", "next-action", "start-task", "record-task", "start-repair", "record-repair", "complete", "supersede"]:
             with self.subTest(command=command):
                 self.assertIn(command, text)
 
@@ -784,6 +856,11 @@ class RuntimeHelperTests(unittest.TestCase):
             "frozen pre-complete `spec_sha256`",
             "distilled record",
             "不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`",
+            "SUPERSEDED",
+            "ARCHIVE_SUPERSEDED",
+            "superseded_by",
+            "archive `related_changes` 与 `state.superseded_by.successor_id` 一致",
+            "旧 acceptance",
         ]:
             with self.subTest(required=required):
                 self.assertIn(required, archive_docs)
@@ -861,7 +938,7 @@ class CompositeSemanticsTests(unittest.TestCase):
         semantic_groups = {
             "Sequential lifecycle": ["标准顺序", "生命周期", "Locate", "create", "complete", "archive"],
             "file-first approval": ["file-first", "完整 Spec", "完整 Plan", "自然语言批准", "validate-plan", "init-state"],
-            "three-layer authority": ["change.md", "plan.yaml", "state.yaml", "Spec 权威", "批准合同权威", "动态恢复状态权威"],
+            "three-layer authority": ["change.md", "plan.yaml", "state.yaml", "Spec 角色", "批准合同权威", "动态恢复状态权威"],
             "single helper": ["唯一 runtime helper", "change.py", "status", "next-action"],
             "change-level allowed paths": ["change-level `allowed_paths`", "不分配给具体 Task", "finding owner routing"],
             "checkpoint and repair": ["checkpoint commit", "record-task", "REQUEST_REPAIR_DECISION", "record-repair", "in-scope"],
@@ -872,6 +949,7 @@ class CompositeSemanticsTests(unittest.TestCase):
             "deterministic-first": ["deterministic validation", "Review 不能替代失败的确定性校验", "exit code"],
             "knowledge candidate confirmation": ["知识候选", "五问", "用户确认", "拒绝不影响"],
             "legacy/v1": ["legacy/v1", "clear v1", "整体移动", "v1/v2 双栈"],
+            "superseded successor closure": ["successor", "predecessor", "supersede", "SUPERSEDED", "ARCHIVE_SUPERSEDED", "state.superseded_by", "successor change.md", "残留 active", "旧 acceptance"],
         }
         for group, alternatives in semantic_groups.items():
             with self.subTest(group=group):

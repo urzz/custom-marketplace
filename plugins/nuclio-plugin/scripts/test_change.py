@@ -247,7 +247,53 @@ class ChangeHelperTests(unittest.TestCase):
         self.assertEqual(complete.returncode, 0, complete.stderr)
         return change_dir
 
-    def write_distilled_alpha_record(self, *, goal="Ship alpha", outcome="Alpha shipped.", validation="python -m unittest exited 0.", knowledge="NO_OP"):
+    def create_successor_change(self, successor_id="beta-change", predecessor_id="alpha-change", *, archived=False, bidirectional=True):
+        successor_dir = self.root / ".dev-docs" / "changes" / successor_id
+        successor_dir.mkdir(parents=True)
+        related = [predecessor_id] if bidirectional else []
+        successor_dir.joinpath("change.md").write_text(
+            "---\n"
+            f"id: {successor_id}\n"
+            "title: Beta Change\n"
+            f"status: {'completed' if archived else 'active'}\n"
+            "created: 2026-07-23\n"
+            "updated: 2026-07-23\n"
+            f"related_changes: {json.dumps(related)}\n"
+            "---\n\n"
+            "# Beta Change\n\n"
+            "## Goal\n\nTake over alpha.\n\n"
+            "## Outcome\n\nBeta shipped.\n\n"
+            "## Validation\n\nvalidated.\n\n"
+            "## Knowledge Updates\n\nNO_OP\n",
+            encoding="utf-8",
+        )
+        if archived:
+            archive_dir = self.root / ".dev-docs" / "changes" / "archive" / successor_id
+            archive_dir.parent.mkdir(parents=True, exist_ok=True)
+            successor_dir.rename(archive_dir)
+            return archive_dir
+        self.write_plan(change_id=successor_id, allowed_paths=["src/"], tasks=[
+            {
+                "id": 1,
+                "name": "Implement beta",
+                "steps": ["Edit beta"],
+                "acceptance": ["Beta exists"],
+                "validation": ["python -m pytest"],
+                "delegate": "main",
+                "review": "self",
+                "checkpoint_subject": "feat(beta): implement task 1",
+            }
+        ])
+        return successor_dir
+
+    def prepare_supersede_fixture(self, *, successor_archived=False, successor_bidirectional=True):
+        change_dir = self.prepare_plan_state_repo()
+        self.create_successor_change(archived=successor_archived, bidirectional=successor_bidirectional)
+        return change_dir
+
+    def write_distilled_alpha_record(self, *, goal="Ship alpha", outcome="Alpha shipped.", validation="python -m unittest exited 0.", knowledge="NO_OP", related_changes=None):
+        if related_changes is None:
+            related_changes = []
         change = self.root / ".dev-docs" / "changes" / "alpha-change" / "change.md"
         change.write_text(
             "---\n"
@@ -256,7 +302,7 @@ class ChangeHelperTests(unittest.TestCase):
             "status: completed\n"
             "created: 2026-07-23\n"
             "updated: 2026-07-23\n"
-            "related_changes: []\n"
+            f"related_changes: {json.dumps(related_changes)}\n"
             "---\n\n"
             "# Alpha Change\n\n"
             f"## Goal\n\n{goal}\n\n"
@@ -279,7 +325,7 @@ class ChangeHelperTests(unittest.TestCase):
         expected = (
             "create", "list", "show", "validate-plan", "init-state", "status", "next-action",
             "start-task", "record-task", "record-review", "start-repair", "record-repair",
-            "record-validation", "complete", "archive", "legacy-move",
+            "record-validation", "complete", "supersede", "archive", "legacy-move",
         )
         for command in expected:
             self.assertIn(command, main.stdout)
@@ -566,6 +612,231 @@ class ChangeHelperTests(unittest.TestCase):
         record_repair = run_change(self.root, "record-repair", "--id", "alpha-change", "--repair-id", "1", "--validation-status", "PASS", "--validation-summary", "closure ok")
         self.assertEqual(record_repair.returncode, 0, record_repair.stderr)
         self.assertEqual(stdout_json(record_repair)["next_action"], "RUN_TASK_REVIEW")
+
+    def test_supersede_success_active_successor_status_next_action_and_archive(self):
+        change_dir = self.prepare_supersede_fixture()
+        change = change_dir / "change.md"
+        frozen_change_text = change.read_text(encoding="utf-8")
+        frozen_change_hash = hashlib.sha256(change.read_bytes()).hexdigest()
+        before_tasks = (change_dir / "state.yaml").read_text(encoding="utf-8")
+        result = run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change", "--decision", "approved successor takeover")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = stdout_json(result)
+        self.assertEqual(payload["next_action"], "ARCHIVE_SUPERSEDED")
+        self.assertEqual(payload["superseded_by"]["successor_location"], "active")
+        state = load_change_module().read_yaml_file(change_dir / "state.yaml")
+        self.assertEqual(state["status"], "SUPERSEDED")
+        self.assertEqual(state["phase"], "SUPERSEDED")
+        self.assertEqual(state["next_action"], "ARCHIVE_SUPERSEDED")
+        self.assertEqual(state["spec_sha256"], frozen_change_hash)
+        self.assertEqual(change.read_text(encoding="utf-8"), frozen_change_text)
+        self.assertEqual(hashlib.sha256(change.read_bytes()).hexdigest(), frozen_change_hash)
+        self.assertEqual(state["tasks"][0]["status"], "PENDING")
+        self.assertIn("status: PENDING", before_tasks)
+        status = run_change(self.root, "status", "--id", "alpha-change")
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(stdout_json(status)["state"]["next_action"], "ARCHIVE_SUPERSEDED")
+        next_action = run_change(self.root, "next-action", "--id", "alpha-change")
+        self.assertEqual(next_action.returncode, 0, next_action.stderr)
+        self.assertEqual(stdout_json(next_action)["next_action"], "ARCHIVE_SUPERSEDED")
+        self.write_distilled_alpha_record(
+            outcome="Alpha was superseded and 接管 by beta-change; unfinished scope remains with successor.",
+            validation="Not a full alpha acceptance PASS; only supersession facts were verified.",
+            related_changes=["beta-change"],
+        )
+        status = run_change(self.root, "status", "--id", "alpha-change")
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(stdout_json(status)["state"]["next_action"], "ARCHIVE_SUPERSEDED")
+        next_action = run_change(self.root, "next-action", "--id", "alpha-change")
+        self.assertEqual(next_action.returncode, 0, next_action.stderr)
+        self.assertEqual(stdout_json(next_action)["next_action"], "ARCHIVE_SUPERSEDED")
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertEqual(archive.returncode, 0, archive.stderr)
+        archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
+        self.assertFalse(change_dir.exists())
+        self.assertEqual([path.name for path in archived_dir.iterdir()], ["change.md"])
+
+    def test_supersede_accepts_archived_successor(self):
+        self.prepare_supersede_fixture(successor_archived=True)
+        result = run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(stdout_json(result)["superseded_by"]["successor_location"], "archive")
+
+    def test_superseded_predecessor_and_archived_successor_keep_final_bidirectional_relation(self):
+        change_dir = self.prepare_supersede_fixture(successor_archived=True)
+        result = run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.write_distilled_alpha_record(
+            outcome="Alpha was superseded and taken over by beta-change; unfinished scope remains with successor.",
+            validation="Not a full alpha acceptance PASS; only supersession facts were verified.",
+            related_changes=["beta-change"],
+        )
+
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+
+        self.assertEqual(archive.returncode, 0, archive.stderr)
+        archived_alpha = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
+        archived_beta = self.root / ".dev-docs" / "changes" / "archive" / "beta-change"
+        change_module = load_change_module()
+        alpha_frontmatter = change_module.read_change_frontmatter(archived_alpha / "change.md", label="alpha archive")
+        beta_frontmatter = change_module.read_change_frontmatter(archived_beta / "change.md", label="beta archive")
+        self.assertIn("beta-change", alpha_frontmatter["related_changes"])
+        self.assertIn("alpha-change", beta_frontmatter["related_changes"])
+        self.assertFalse(change_dir.exists())
+        self.assertEqual([path.name for path in archived_alpha.iterdir()], ["change.md"])
+
+    def test_supersede_rejects_missing_one_way_unknown_and_self_without_side_effect(self):
+        cases = [
+            ({"successor_bidirectional": False}, ["--id", "alpha-change", "--successor-id", "beta-change"], "RELATED_CHANGE_MISSING"),
+            ({}, ["--id", "alpha-change", "--successor-id", "missing-change"], "UNKNOWN_SUCCESSOR"),
+            ({}, ["--id", "alpha-change", "--successor-id", "alpha-change"], "SELF_SUPERSEDE"),
+        ]
+        for fixture_kwargs, args, code in cases:
+            with self.subTest(code=code):
+                change_dir = self.prepare_supersede_fixture(**fixture_kwargs)
+                before = (change_dir / "state.yaml").read_text(encoding="utf-8")
+                result = run_change(self.root, "supersede", *args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(stderr_json(result)["code"], code)
+                self.assertEqual((change_dir / "state.yaml").read_text(encoding="utf-8"), before)
+
+    def test_supersede_rejects_active_predecessor_change_drift_without_side_effect(self):
+        change_dir = self.prepare_supersede_fixture()
+        before = (change_dir / "state.yaml").read_text(encoding="utf-8")
+        change = change_dir / "change.md"
+        change.write_text(change.read_text(encoding="utf-8") + "\nArbitrary drift\n", encoding="utf-8")
+
+        result = run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(stderr_json(result)["code"], "IDENTITY_DRIFT")
+        self.assertEqual((change_dir / "state.yaml").read_text(encoding="utf-8"), before)
+
+    def test_supersede_head_drift_only_accepts_exact_unrecorded_checkpoint(self):
+        change_dir = self.prepare_supersede_fixture()
+        start = run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        self.assertEqual(start.returncode, 0, start.stderr)
+        (self.root / "src").mkdir()
+        (self.root / "src" / "alpha.txt").write_text("alpha\n", encoding="utf-8")
+        git(self.root, "add", "src/alpha.txt")
+        git(self.root, "commit", "-m", "feat(alpha): implement task 1")
+        result = run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = load_change_module().read_yaml_file(change_dir / "state.yaml")
+        self.assertEqual(state["tasks"][0]["status"], "IN_PROGRESS")
+        self.assertIsNone(state["tasks"][0]["checkpoint_commit"])
+        self.assertEqual(state["superseded_by"]["unrecorded_checkpoint"]["changed_paths"], ["src/alpha.txt"])
+
+        change_dir = self.prepare_supersede_fixture()
+        run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        (self.root / "src").mkdir()
+        (self.root / "src" / "alpha.txt").write_text("alpha\n", encoding="utf-8")
+        git(self.root, "add", "src/alpha.txt")
+        git(self.root, "commit", "-m", "wrong subject")
+        before = (change_dir / "state.yaml").read_text(encoding="utf-8")
+        bad = run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change")
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertEqual(stderr_json(bad)["code"], "IDENTITY_DRIFT")
+        self.assertEqual((change_dir / "state.yaml").read_text(encoding="utf-8"), before)
+
+    def test_supersede_rejects_terminal_conflict_and_archive_requires_successor_outcome(self):
+        change_dir = self.complete_alpha_change()
+        self.create_successor_change()
+        terminal = run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change")
+        self.assertNotEqual(terminal.returncode, 0)
+        self.assertEqual(stderr_json(terminal)["code"], "TERMINAL_CHANGE")
+
+        change_dir = self.prepare_supersede_fixture()
+        self.assertEqual(run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change").returncode, 0)
+        self.write_distilled_alpha_record(outcome="Alpha stopped with unfinished scope.", related_changes=["beta-change"])
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(archive.returncode, 0)
+        self.assertEqual(stderr_json(archive)["code"], "UNDISTILLED_RECORD")
+        self.assertTrue(change_dir.exists())
+
+    def test_superseded_archive_rejects_relation_mismatch_without_side_effect(self):
+        change_dir = self.prepare_supersede_fixture()
+        self.assertEqual(run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change").returncode, 0)
+        before = sorted(path.name for path in change_dir.iterdir())
+        self.write_distilled_alpha_record(
+            outcome="Alpha was superseded and taken over by beta-change; unfinished scope remains with successor.",
+            validation="Not a full alpha acceptance PASS; only supersession facts were verified.",
+            related_changes=[],
+        )
+
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+
+        self.assertNotEqual(archive.returncode, 0)
+        self.assertEqual(stderr_json(archive)["code"], "UNDISTILLED_RECORD")
+        self.assertTrue(change_dir.exists())
+        self.assertEqual(sorted(path.name for path in change_dir.iterdir()), before)
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+
+    def test_superseded_archive_rejects_wrong_relation_without_side_effect(self):
+        change_dir = self.prepare_supersede_fixture()
+        self.assertEqual(run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change").returncode, 0)
+        before = sorted(path.name for path in change_dir.iterdir())
+        self.write_distilled_alpha_record(
+            outcome="Alpha was superseded and taken over by beta-change; unfinished scope remains with successor.",
+            validation="Not a full alpha acceptance PASS; only supersession facts were verified.",
+            related_changes=["gamma-change"],
+        )
+
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+
+        self.assertNotEqual(archive.returncode, 0)
+        self.assertEqual(stderr_json(archive)["code"], "UNDISTILLED_RECORD")
+        self.assertTrue(change_dir.exists())
+        self.assertEqual(sorted(path.name for path in change_dir.iterdir()), before)
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+
+    def test_superseded_archive_rejects_misleading_validation_pass_without_side_effect(self):
+        change_dir = self.prepare_supersede_fixture()
+        self.assertEqual(run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change").returncode, 0)
+        before = sorted(path.name for path in change_dir.iterdir())
+        self.write_distilled_alpha_record(
+            outcome="Alpha was superseded and taken over by beta-change; unfinished scope remains with successor.",
+            validation="All original alpha acceptance criteria passed successfully.",
+            related_changes=["beta-change"],
+        )
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(archive.returncode, 0)
+        self.assertEqual(stderr_json(archive)["code"], "UNDISTILLED_RECORD")
+        self.assertTrue(change_dir.exists())
+        self.assertEqual(sorted(path.name for path in change_dir.iterdir()), before)
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+
+    def test_superseded_archive_rejects_validation_without_non_success_distinction(self):
+        change_dir = self.prepare_supersede_fixture()
+        self.assertEqual(run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change").returncode, 0)
+        self.write_distilled_alpha_record(
+            outcome="Alpha was superseded and taken over by beta-change; unfinished scope remains with successor.",
+            validation="Supersession facts were verified.",
+            related_changes=["beta-change"],
+        )
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(archive.returncode, 0)
+        self.assertEqual(stderr_json(archive)["code"], "UNDISTILLED_RECORD")
+        self.assertTrue(change_dir.exists())
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+
+    def test_supersede_rejects_dirty_index_allowed_dirty_and_keeps_state(self):
+        change_dir = self.prepare_supersede_fixture()
+        before = (change_dir / "state.yaml").read_text(encoding="utf-8")
+        (self.root / "notes.txt").write_text("indexed\n", encoding="utf-8")
+        git(self.root, "add", "notes.txt")
+        indexed = run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change")
+        self.assertNotEqual(indexed.returncode, 0)
+        self.assertEqual(stderr_json(indexed)["code"], "DIRTY_INDEX")
+        self.assertEqual((change_dir / "state.yaml").read_text(encoding="utf-8"), before)
+
+        change_dir = self.prepare_supersede_fixture()
+        before = (change_dir / "state.yaml").read_text(encoding="utf-8")
+        (self.root / "README.md").write_text("dirty allowed\n", encoding="utf-8")
+        dirty = run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change")
+        self.assertNotEqual(dirty.returncode, 0)
+        self.assertEqual(stderr_json(dirty)["code"], "DIRTY_ALLOWED_PATH")
+        self.assertEqual((change_dir / "state.yaml").read_text(encoding="utf-8"), before)
 
     def test_completion_and_archive_require_reviews_validation_and_retain_only_distilled_change(self):
         change_dir = self.complete_alpha_change()

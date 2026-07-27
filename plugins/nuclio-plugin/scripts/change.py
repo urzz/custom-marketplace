@@ -49,6 +49,7 @@ COMMANDS = (
     "record-repair",
     "record-validation",
     "complete",
+    "supersede",
     "archive",
     "legacy-move",
 )
@@ -69,6 +70,24 @@ PLAN_TOP_KEYS = {
 TASK_KEYS = {"id", "name", "steps", "acceptance", "validation", "delegate", "review", "checkpoint_subject"}
 ARCHIVE_ACTIVE_ARTIFACTS = ("change.md", "plan.yaml", "state.yaml")
 ARCHIVE_REQUIRED_HEADINGS = ("Goal", "Outcome", "Validation", "Knowledge Updates")
+SUPERSEDED_VALIDATION_CONTEXT_RE = re.compile(r"\bacceptance\b|\bcriteria\b|\bvalidation\b|\bpass(?:ed)?\b|\bsuccess(?:ful|fully)?\b|验收|验证|通过|成功", flags=re.I)
+SUPERSEDED_VALIDATION_NON_SUCCESS_RE = re.compile(
+    r"\bnot\s+(?:a\s+)?full\b|\bnot\s+fully\b|\bnot\s+complete(?:ly|d)?\b|\bnot\s+all\b|"
+    r"\bno\s+full\b|\bwithout\s+full\b|\bincomplete\b|\bpartial\b|\bunfinished\b|\bunverified\b|"
+    r"未全部|未完整|未完全|不完整|不完全|并非|不是|非.*(?:全部|完整|完全).*?(?:成功|通过|验证|验收)",
+    flags=re.I,
+)
+SUPERSEDED_FULL_SUCCESS_CLAIM_RE = re.compile(
+    r"(?:\b(?:all|full|fully|complete(?:d|ly)?|entire)\b.{0,80}\b(?:original|predecessor|old|prior|acceptance|criteria|validation|test|change)\b.{0,80}\b(?:pass(?:ed)?|success(?:ful|fully)?|succeeded|verified|validated|complete(?:d)?)\b)"
+    r"|(?:\b(?:original|predecessor|old|prior|acceptance|criteria|validation|test|change)\b.{0,80}\b(?:all|full|fully|complete(?:d|ly)?|entire)\b.{0,80}\b(?:pass(?:ed)?|success(?:ful|fully)?|succeeded|verified|validated|complete(?:d)?)\b)"
+    r"|(?:(?:原|前序|旧|原始).{0,40}(?:验收|验证|测试|接受).{0,40}(?:全部|完整|完全).{0,20}(?:通过|成功|PASS))",
+    flags=re.I | re.S,
+)
+SUPERSEDED_NEGATED_FULL_SUCCESS_RE = re.compile(
+    r"\bnot\s+(?:a\s+)?(?:full|fully|all|complete|entire)\b|\bno\s+full\b|\bwithout\s+full\b|"
+    r"\b(?:not|never)\s+.{0,40}\b(?:pass(?:ed)?|success|verified|validated)\b|未(?:全部|完整|完全)|不(?:完整|完全)|并非|不是",
+    flags=re.I,
+)
 RISK_LEVELS = {"low", "medium", "high"}
 REVIEW_POLICIES = {"self", "final", "task-and-final"}
 DELEGATES = {"main", "subagent", "auto"}
@@ -78,7 +97,9 @@ NEXT_RUN_FINAL_REVIEW = "RUN_FINAL_REVIEW"
 NEXT_RUN_VALIDATION = "RUN_VALIDATION"
 NEXT_REQUEST_REPAIR_DECISION = "REQUEST_REPAIR_DECISION"
 NEXT_COMPLETE = "COMPLETE"
+NEXT_ARCHIVE_SUPERSEDED = "ARCHIVE_SUPERSEDED"
 NEXT_HALT = "HALT"
+TERMINAL_STATUSES = {"COMPLETED", "SUPERSEDED"}
 V1_MARKER_FILES = {"contract.yaml", "context.jsonl", "state.json"}
 V1_MARKER_DIRS = {"packets", "evidence"}
 SKELETON_TEMPLATES = {
@@ -273,7 +294,13 @@ def build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--id", required=True)
     complete.set_defaults(func=cmd_complete)
 
-    archive = subparsers.add_parser("archive", help="archive a completed change directory")
+    supersede = subparsers.add_parser("supersede", help="mark an active predecessor change as superseded by a verified successor")
+    supersede.add_argument("--id", required=True, help="predecessor change id")
+    supersede.add_argument("--successor-id", required=True, help="successor change id")
+    supersede.add_argument("--decision", default="successor change takes over unfinished predecessor scope")
+    supersede.set_defaults(func=cmd_supersede)
+
+    archive = subparsers.add_parser("archive", help="archive a completed or superseded change directory")
     archive.add_argument("--id", required=True)
     archive.set_defaults(func=cmd_archive)
 
@@ -632,7 +659,7 @@ def load_state(paths: Paths, change_id: str) -> dict[str, Any]:
     return data
 
 
-def load_verified_state_and_plan(paths: Paths, change_id: str, *, allow_head_drift: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+def load_verified_state_and_plan(paths: Paths, change_id: str, *, allow_head_drift: bool = False, allow_spec_drift: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
     state = load_state(paths, change_id)
     plan_path = plan_path_for(paths, change_id)
     spec_path = spec_path_for(paths, change_id)
@@ -643,7 +670,10 @@ def load_verified_state_and_plan(paths: Paths, change_id: str, *, allow_head_dri
         raise NuclioError("IDENTITY_DRIFT", "plan revision drift", state_revision=state.get("plan_revision"), plan_revision=plan["revision"])
     if state.get("plan_sha256") != sha256_file(plan_path):
         raise NuclioError("IDENTITY_DRIFT", "plan hash drift")
-    if state.get("spec_sha256") != sha256_file(spec_path):
+    if allow_spec_drift:
+        if not isinstance(state.get("spec_sha256"), str) or not state["spec_sha256"]:
+            raise NuclioError("IDENTITY_DRIFT", "state spec_sha256 is missing")
+    elif state.get("spec_sha256") != sha256_file(spec_path):
         raise NuclioError("IDENTITY_DRIFT", "spec hash drift")
     current = git_head(paths)
     if not allow_head_drift and state.get("current_head") != current:
@@ -653,6 +683,10 @@ def load_verified_state_and_plan(paths: Paths, change_id: str, *, allow_head_dri
 
 def write_state(paths: Paths, change_id: str, state: dict[str, Any]) -> None:
     state["current_head"] = git_head(paths)
+    dump_yaml_atomic(state_path_for(paths, change_id), state)
+
+
+def write_state_preserving_head(paths: Paths, change_id: str, state: dict[str, Any]) -> None:
     dump_yaml_atomic(state_path_for(paths, change_id), state)
 
 
@@ -905,13 +939,24 @@ def cmd_init_state(args: argparse.Namespace, paths: Paths) -> int:
     return emit_ok({"ok": True, "change_id": change_id, "path": rel(state_path, paths.root), "next_action": NEXT_DISPATCH_TASK, "head": head})
 
 
+def load_status_state_and_plan(paths: Paths, change_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    state = load_state(paths, change_id)
+    allow_superseded_archive_recovery = state.get("status") == "SUPERSEDED" and state.get("next_action") == NEXT_ARCHIVE_SUPERSEDED
+    return load_verified_state_and_plan(
+        paths,
+        change_id,
+        allow_head_drift=allow_superseded_archive_recovery,
+        allow_spec_drift=allow_superseded_archive_recovery,
+    )
+
+
 def cmd_status(args: argparse.Namespace, paths: Paths) -> int:
-    state, _plan = load_verified_state_and_plan(paths, args.id)
+    state, _plan = load_status_state_and_plan(paths, args.id)
     return emit_ok({"ok": True, "change_id": args.id, "state": state})
 
 
 def cmd_next_action(args: argparse.Namespace, paths: Paths) -> int:
-    state, _plan = load_verified_state_and_plan(paths, args.id)
+    state, _plan = load_status_state_and_plan(paths, args.id)
     return emit_ok({"ok": True, "change_id": args.id, "next_action": state["next_action"], "current_task_id": state.get("current_task_id")})
 
 
@@ -1091,6 +1136,141 @@ def cmd_record_validation(args: argparse.Namespace, paths: Paths) -> int:
     return emit_ok({"ok": True, "change_id": args.id, "next_action": state["next_action"]})
 
 
+def require_known_related(frontmatter: dict[str, Any], change_id: str, related_id: str, *, label: str) -> None:
+    if frontmatter.get("id") != change_id:
+        raise NuclioError("RELATED_CHANGE_INVALID", f"{label} change.md id mismatch", expected=change_id, actual=frontmatter.get("id"))
+    related = frontmatter.get("related_changes")
+    if not isinstance(related, list) or related_id not in related:
+        raise NuclioError("RELATED_CHANGE_MISSING", f"{label} change.md must list related change", change_id=change_id, related_change=related_id)
+
+
+def read_change_frontmatter(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise NuclioError("MISSING_ARTIFACT", f"missing {label} change.md: {path}") from exc
+    except UnicodeDecodeError as exc:
+        raise NuclioError("INVALID_UTF8", f"{label} change.md must be UTF-8: {path}") from exc
+    frontmatter, _body = parse_markdown_frontmatter(text)
+    return frontmatter
+
+
+def locate_verified_successor(paths: Paths, predecessor_id: str, successor_id: str) -> dict[str, Any]:
+    if predecessor_id == successor_id:
+        raise NuclioError("SELF_SUPERSEDE", "successor must differ from predecessor")
+    active_dir = active_change_dir(paths, successor_id)
+    archived_dir = archive_change_dir(paths, successor_id)
+    active_exists = active_dir.is_dir()
+    archived_exists = archived_dir.is_dir()
+    if active_exists and archived_exists:
+        raise NuclioError("SUCCESSOR_AMBIGUOUS", "successor exists in both active and archive", successor_id=successor_id)
+    if not active_exists and not archived_exists:
+        raise NuclioError("UNKNOWN_SUCCESSOR", "successor change is not active or archived", successor_id=successor_id)
+    location = "active" if active_exists else "archive"
+    directory = active_dir if active_exists else archived_dir
+    change_path = directory / "change.md"
+    frontmatter = read_change_frontmatter(change_path, label="successor")
+    require_known_related(frontmatter, successor_id, predecessor_id, label="successor")
+    if location == "active":
+        missing = [name for name in ("change.md", "plan.yaml") if not (directory / name).is_file()]
+        if missing:
+            raise NuclioError("SUCCESSOR_INCOMPLETE", "active successor must include complete Spec and Plan", missing=missing)
+        plan = validate_plan_file(directory / "plan.yaml")
+        if plan["change_id"] != successor_id:
+            raise NuclioError("SUCCESSOR_INCOMPLETE", "active successor plan change_id mismatch", expected=successor_id, actual=plan["change_id"])
+    else:
+        artifacts = archive_artifacts(directory)
+        if artifacts != ["change.md"]:
+            raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor must be a pruned one-file record", artifacts=artifacts)
+        if frontmatter.get("status") != "completed":
+            raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor must be a completed historical record", status=frontmatter.get("status"))
+    return {"id": successor_id, "location": location, "path": rel(directory, paths.root)}
+
+
+def require_no_in_progress_repair(state: dict[str, Any]) -> None:
+    repair = state.get("repair")
+    if isinstance(repair, dict) and repair.get("status") == "IN_PROGRESS":
+        raise NuclioError("REPAIR_IN_PROGRESS", "cannot supersede while repair is in progress", repair_id=repair.get("id"))
+
+
+def verified_unrecorded_task_checkpoint(paths: Paths, state: dict[str, Any], plan: dict[str, Any], git_head_value: str) -> dict[str, Any] | None:
+    current_task_id = state.get("current_task_id")
+    if not isinstance(current_task_id, int):
+        return None
+    try:
+        entry = state_task(state, current_task_id)
+        task = plan_task(plan, current_task_id)
+    except NuclioError:
+        return None
+    if state.get("phase") != "TASK_IN_PROGRESS" or state.get("next_action") != NEXT_HALT:
+        return None
+    if entry.get("status") != "IN_PROGRESS" or entry.get("checkpoint_commit") is not None:
+        return None
+    task_base = entry.get("task_base")
+    if not isinstance(task_base, str) or state.get("current_head") != task_base:
+        return None
+    parent = commit_parent(paths, "HEAD")
+    if parent != task_base:
+        return None
+    subject = commit_subject(paths, "HEAD")
+    if subject != task["checkpoint_subject"]:
+        return None
+    changed_paths = commit_changed_paths(paths, "HEAD")
+    require_all_commit_paths_allowed(changed_paths, plan["allowed_paths"])
+    return {"task_id": current_task_id, "checkpoint_commit": git_head_value, "changed_paths": changed_paths, "checkpoint_subject": subject}
+
+
+def require_supersede_head_identity(paths: Paths, state: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any] | None:
+    current = git_head(paths)
+    if state.get("current_head") == current:
+        return None
+    checkpoint = verified_unrecorded_task_checkpoint(paths, state, plan, current)
+    if checkpoint is None:
+        raise NuclioError("IDENTITY_DRIFT", "state current_head differs from git HEAD outside the single verified unrecorded checkpoint exception", state_head=state.get("current_head"), git_head=current)
+    return checkpoint
+
+
+def cmd_supersede(args: argparse.Namespace, paths: Paths) -> int:
+    predecessor_id = validate_id(args.id)
+    successor_id = validate_id(args.successor_id)
+    if predecessor_id == successor_id:
+        raise NuclioError("SELF_SUPERSEDE", "successor must differ from predecessor")
+    state, plan = load_verified_state_and_plan(paths, predecessor_id, allow_head_drift=True)
+    if state.get("status") in TERMINAL_STATUSES or state.get("phase") in TERMINAL_STATUSES:
+        raise NuclioError("TERMINAL_CHANGE", "terminal changes cannot be superseded", status=state.get("status"), phase=state.get("phase"))
+    if state.get("change_id") != predecessor_id or plan.get("change_id") != predecessor_id:
+        raise NuclioError("IDENTITY_DRIFT", "predecessor identity mismatch")
+    require_no_in_progress_repair(state)
+    require_clean_index(paths)
+    require_no_preexisting_allowed_dirty(paths, plan["allowed_paths"])
+    successor = locate_verified_successor(paths, predecessor_id, successor_id)
+    unrecorded_checkpoint = require_supersede_head_identity(paths, state, plan)
+    superseded_by: dict[str, Any] = {
+        "successor_id": successor_id,
+        "successor_location": successor["location"],
+        "successor_path": successor["path"],
+        "decision": require_non_empty_string(args.decision, "decision"),
+    }
+    if unrecorded_checkpoint is not None:
+        superseded_by["unrecorded_checkpoint"] = unrecorded_checkpoint
+    state.update(
+        {
+            "status": "SUPERSEDED",
+            "phase": "SUPERSEDED",
+            "next_action": NEXT_ARCHIVE_SUPERSEDED,
+            "current_task_id": None,
+            "blocker": None,
+            "superseded_by": superseded_by,
+        }
+    )
+    if unrecorded_checkpoint is None:
+        write_state(paths, predecessor_id, state)
+    else:
+        state["current_head"] = unrecorded_checkpoint["checkpoint_commit"]
+        write_state_preserving_head(paths, predecessor_id, state)
+    return emit_ok({"ok": True, "change_id": predecessor_id, "status": "SUPERSEDED", "next_action": NEXT_ARCHIVE_SUPERSEDED, "superseded_by": superseded_by})
+
+
 def cmd_complete(args: argparse.Namespace, paths: Paths) -> int:
     state, plan = load_verified_state_and_plan(paths, args.id)
     if state["next_action"] != NEXT_COMPLETE:
@@ -1171,7 +1351,7 @@ def markdown_heading_sections(body: str) -> dict[str, str]:
     return sections
 
 
-def require_distilled_change_record(paths: Paths, change_id: str) -> None:
+def require_distilled_change_record(paths: Paths, change_id: str) -> tuple[dict[str, Any], dict[str, str]]:
     change = spec_path_for(paths, change_id)
     try:
         text = change.read_text(encoding="utf-8")
@@ -1208,6 +1388,32 @@ def require_distilled_change_record(paths: Paths, change_id: str) -> None:
     empty_headings = [heading for heading in ARCHIVE_REQUIRED_HEADINGS if heading in sections and not sections[heading].strip()]
     if missing_headings or empty_headings:
         raise NuclioError("UNDISTILLED_RECORD", "change.md must contain non-empty completed historical-record headings", missing_headings=missing_headings, empty_headings=empty_headings)
+    return frontmatter, sections
+
+
+def require_superseded_validation_section(validation: str) -> None:
+    compact = " ".join(validation.split())
+    if not SUPERSEDED_VALIDATION_CONTEXT_RE.search(compact) or not SUPERSEDED_VALIDATION_NON_SUCCESS_RE.search(compact):
+        raise NuclioError(
+            "UNDISTILLED_RECORD",
+            "superseded record Validation must state predecessor acceptance was not fully successful or not completely verified",
+        )
+    for statement in (part.strip() for part in re.split(r"[.!?。！？;；]+", compact) if part.strip()):
+        if SUPERSEDED_FULL_SUCCESS_CLAIM_RE.search(statement) and not SUPERSEDED_NEGATED_FULL_SUCCESS_RE.search(statement):
+            raise NuclioError(
+                "UNDISTILLED_RECORD",
+                "superseded record Validation must not claim full predecessor acceptance PASS",
+            )
+
+
+def require_distilled_superseded_record(paths: Paths, change_id: str, successor_id: str) -> None:
+    frontmatter, sections = require_distilled_change_record(paths, change_id)
+    if successor_id not in frontmatter.get("related_changes", []):
+        raise NuclioError("UNDISTILLED_RECORD", "superseded record must keep successor in related_changes", successor_id=successor_id)
+    outcome = sections.get("Outcome", "")
+    if successor_id not in outcome or not re.search(r"接管|supersed|take[sn]? over|successor", outcome, flags=re.I):
+        raise NuclioError("UNDISTILLED_RECORD", "superseded record Outcome must explicitly identify the successor takeover", successor_id=successor_id)
+    require_superseded_validation_section(sections.get("Validation", ""))
 
 
 def load_archive_verified_state_and_plan(paths: Paths, change_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1220,14 +1426,24 @@ def load_archive_verified_state_and_plan(paths: Paths, change_id: str) -> tuple[
         raise NuclioError("IDENTITY_DRIFT", "plan revision drift", state_revision=state.get("plan_revision"), plan_revision=plan["revision"])
     if state.get("plan_sha256") != sha256_file(plan_path):
         raise NuclioError("IDENTITY_DRIFT", "plan hash drift")
-    if state.get("status") != "COMPLETED" or state.get("phase") != "COMPLETED":
-        raise NuclioError("CHANGE_NOT_COMPLETE", "change must be complete before archive")
-    current = git_head(paths)
-    if state.get("current_head") != current:
-        raise NuclioError("IDENTITY_DRIFT", "state current_head differs from git HEAD", state_head=state.get("current_head"), git_head=current)
-    if not isinstance(state.get("spec_sha256"), str) or not state["spec_sha256"]:
-        raise NuclioError("IDENTITY_DRIFT", "state spec_sha256 is missing")
-    require_distilled_change_record(paths, change_id)
+    status = state.get("status")
+    phase = state.get("phase")
+    if status == "COMPLETED" and phase == "COMPLETED":
+        current = git_head(paths)
+        if state.get("current_head") != current:
+            raise NuclioError("IDENTITY_DRIFT", "state current_head differs from git HEAD", state_head=state.get("current_head"), git_head=current)
+        if not isinstance(state.get("spec_sha256"), str) or not state["spec_sha256"]:
+            raise NuclioError("IDENTITY_DRIFT", "state spec_sha256 is missing")
+        require_distilled_change_record(paths, change_id)
+    elif status == "SUPERSEDED" and phase == "SUPERSEDED" and state.get("next_action") == NEXT_ARCHIVE_SUPERSEDED:
+        superseded_by = state.get("superseded_by")
+        if not isinstance(superseded_by, dict) or not isinstance(superseded_by.get("successor_id"), str):
+            raise NuclioError("INVALID_STATE", "SUPERSEDED state must record superseded_by.successor_id")
+        if not isinstance(state.get("spec_sha256"), str) or not state["spec_sha256"]:
+            raise NuclioError("IDENTITY_DRIFT", "state spec_sha256 is missing")
+        require_distilled_superseded_record(paths, change_id, superseded_by["successor_id"])
+    else:
+        raise NuclioError("CHANGE_NOT_COMPLETE", "change must be complete or superseded before archive", status=status, phase=phase)
     return state, plan
 
 
