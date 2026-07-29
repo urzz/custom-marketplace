@@ -6,6 +6,7 @@
 
 - [评估原则](#评估原则)
 - [固定字段](#固定字段)
+- [审查效率场景矩阵](#审查效率场景矩阵)
 - [18 个 v2 cases](#18-个-v2-cases)
 - [全局断言](#全局断言)
 
@@ -41,6 +42,19 @@
 | `Forbidden Writes` | 禁止写入的路径或类别。 |
 | `Key Assertions` | 必须满足的行为断言。 |
 
+## 审查效率场景矩阵
+
+审查策略由场景、失败后果、耦合和验证强度决定，不按编程语言决定。Eval 必须覆盖语言无关四类场景，并同时保护 integration-focused final、增量 commit range、证据复用条件和 mandatory deep-read triggers：
+
+| 场景 | 推荐审查合同 | 关键断言 |
+| --- | --- | --- |
+| 普通多模块且强验证 | change-level `final`，final review 以 integration-focused final 为主 | Task 通过增量 commit range、task base、checkpoint commit 和 deterministic validation 提供可复核证据；final 聚焦 whole-change 集成语义、接口衔接、用户可见行为和未覆盖风险，不按规模机械全量重审每行。 |
+| 选择性风险 Task | change-level `final` 加指定 `task.review=task-and-final` | 只有失败后果、耦合或验证缺口明显的指定 Task 进入 Task review gate；其他 Task 不产生 Task review gate，仍由 checkpoint commit、validation 与 final review 覆盖。 |
+| 高风险严格路径 | change-level `task-and-final` | 每个 Task 都必须 task-and-final，final review mandatory；L3/high risk 不降级为 final-only。 |
+| repair 或重复触碰 | 依据源 gate 回到 review/validation，并触发 final 深读 | repair、同一路径重复触碰、跨 Task 交叉修改、checkpoint/HEAD/Spec/Plan 漂移、失败后果升高或证据缺口属于 mandatory deep-read triggers；final 不得复用已漂移证据。 |
+
+证据复用条件：final review 保持 mandatory，但可复用未漂移的 Task review 与 validation 证据；可复用证据必须绑定 task base、增量 commit range、checkpoint commit、changed paths、命令 exit code、result summary、Spec/Plan/HEAD identity 和未发生 repair 或重复触碰后的漂移。任何 repair、重复触碰、路径交叉、验证失败后修复、identity drift、checkpoint mismatch 或 acceptance/risk 变化都会使相关 Task review/validation 证据不可直接复用，并要求 final 深读相关 diff、合同和验证证据。
+
 ## 18 个 v2 cases
 
 ### 1. 小型单 Task 主会话直做
@@ -53,19 +67,19 @@
 
 ### 2. 普通多 Task 功能
 
-- `User Prompt`: “给 CLI 增加 dry-run 选项并更新文档”，涉及实现、测试和文档。
-- `Expected Route`: `work` 创建或恢复唯一 active change，按需读取源码/测试，写入多 Task Plan，使用 change-level `allowed_paths` 覆盖 CLI、测试和文档，批准后按 `next-action` 顺序执行每个 Task。
+- `User Prompt`: “给 CLI 增加 dry-run 选项并更新文档”，涉及实现、测试和文档；其中默认行为保持不变的普通 Task 验证充分，但修改执行路径的少数风险 Task 失败后果更高。
+- `Expected Route`: `work` 创建或恢复唯一 active change，按需读取源码/测试，写入多 Task Plan；若普通多模块变更具备强验证且多数失败后果可控，采用 change-level `final`，但对少数风险 Task 设置 `task.review=task-and-final`；使用 change-level `allowed_paths` 覆盖 CLI、测试和文档，批准后按 `next-action` 顺序执行每个 Task，最终执行 integration-focused final。
 - `Allowed Writes`: active change 的 `change.md`、`plan.yaml`、helper 写入的 `state.yaml`、批准的 CLI/测试/文档路径、archive 路径。
 - `Forbidden Writes`: 未列入 `allowed_paths` 的子系统、per-Task files ownership、owner mapping、知识候选确认前的 knowledge 文件、legacy。
-- `Key Assertions`: 多 Task 通过有序 Tasks 与 checkpoint commits 控制增量；Plan 不创建 runtime owner routing；每个 checkpoint changed paths 必须全部在 change-level `allowed_paths` 内。
+- `Key Assertions`: 多 Task 通过有序 Tasks 与 checkpoint commits 控制增量；选择性风险 Task 可用 `task.review=task-and-final` 提升为 Task review gate，其他 Task 不产生 Task review gate；每个 Task 的 task base、增量 commit range、checkpoint commit、changed paths 和 validation 为 final 提供可复核证据；integration-focused final 聚焦 whole-change 集成语义、接口衔接和用户可见行为，不按规模机械全量重审每行；Plan 不创建 runtime owner routing；每个 checkpoint changed paths 必须全部在 change-level `allowed_paths` 内。
 
 ### 3. 大型跨模块默认委派
 
 - `User Prompt`: “调整认证中间件和数据访问层的权限模型”。
-- `Expected Route`: `work` 推荐澄清风险边界，写入 high risk、`task-and-final`、多 Task Plan；批准后大型/跨模块单元默认委派有界 generic subagent 或说明为何直做更安全。
+- `Expected Route`: `work` 推荐澄清风险边界，写入高风险 high risk、change-level `task-and-final`、多 Task Plan；批准后大型/跨模块单元默认委派有界 generic subagent 或说明为何直做更安全。
 - `Allowed Writes`: active change 三层 artifact、批准范围内认证/数据访问/测试路径、确认后的知识更新、archive 路径。
 - `Forbidden Writes`: 无批准直接实施、无 task review 直接完成、Nuclio 专用 agent 流水线、递归委派、并行产品写入、自动 owner fixer。
-- `Key Assertions`: 大型变更默认委派有界单元；subagent dispatch 必含 `allowed_paths`、task base、expected checkpoint subject、validation、TaskStop/Stop Task 与 Controller/task-tracking 生命周期控制禁令、以及 compact return；主会话只以 Git/helper/确定性证据推进。
+- `Key Assertions`: 高风险严格路径必须每个 Task 都执行 task-and-final review，final review mandatory，不能因语言或文件数量降级为 final-only；大型变更默认委派有界单元；subagent dispatch 必含 `allowed_paths`、task base、expected checkpoint subject、validation、TaskStop/Stop Task 与 Controller/task-tracking 生命周期控制禁令、以及 compact return；主会话只以 Git/helper/确定性证据推进。
 
 ### 4. file-first 指定片段查看
 
@@ -142,10 +156,10 @@
 ### 13. in-scope repair
 
 - `User Prompt`: task review 发现已批准范围内某测试漏了边界条件，修复路径仍在 `allowed_paths` 内。
-- `Expected Route`: `work` 记录 review FAIL 后进入 `REQUEST_REPAIR_DECISION`，请求人工判断是否 in-scope；同意后 `start-repair`、实施、closure validation、一个 repair checkpoint、`record-repair` 返回原 gate。
+- `Expected Route`: `work` 记录 review FAIL 后进入 `REQUEST_REPAIR_DECISION`，请求人工判断是否 in-scope；同意后 `start-repair`、实施、closure validation、一个 repair checkpoint、`record-repair` 返回原 gate；若 repair 造成同一路径重复触碰或跨 Task 交叉修改，后续 final 必须对相关 diff、合同与证据深读。
 - `Allowed Writes`: helper 写 State repair 字段、批准范围内 repair paths、一个 repair checkpoint commit。
 - `Forbidden Writes`: 自动 repair 循环、owner budget、fixer routing、Plan 未变却强制重新审批、超出 `allowed_paths` 的 repair。
-- `Key Assertions`: in-scope repair 不改变 Goal/Constraints/Acceptance/risk/Plan 合同；每次 repair 前必须有 `REQUEST_REPAIR_DECISION` 和人工判断。
+- `Key Assertions`: in-scope repair 不改变 Goal/Constraints/Acceptance/risk/Plan 合同；每次 repair 前必须有 `REQUEST_REPAIR_DECISION` 和人工判断；repair、重复触碰、跨 Task 交叉修改、验证失败后修复或失败后果升高属于 mandatory deep-read triggers，相关 Task 的旧证据不可无条件复用，final 深读必须覆盖受影响 diff、合同和验证证据。
 
 ### 14. 范围扩大 successor 收口
 

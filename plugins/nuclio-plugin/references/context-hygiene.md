@@ -10,6 +10,7 @@ Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可
 - [终端输出预算](#终端输出预算)
 - [Subagent prompt 预算](#subagent-prompt-预算)
 - [Subagent return 预算](#subagent-return-预算)
+- [Review-specific read budget](#review-specific-read-budget)
 - [100k 警戒线](#100k-警戒线)
 - [status 与 next-action 恢复](#status-与-next-action-恢复)
 - [非 Gate 声明](#非-gate-声明)
@@ -99,6 +100,16 @@ Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可
 - report/notes 路径仅当主会话明确要求且该路径在授权范围内。
 
 不要要求 subagent 返回完整 diff、完整日志、过程 transcript 或自我 Gate 通过声明。主会话必须用 Git、helper State 和确定性证据核验。
+
+## Review-specific read budget
+
+审查读取也遵循场景化预算，不把“保险起见全文重读”当默认策略。审查前先确定问题类型：Task 增量正确性、whole-change integration、validation 充分性、风险/非目标漂移或 repair closure。
+
+Task review 默认读取：Plan 中该 Task 的合同、`task_base..task_head` diff summary 或必要 diff、changed paths、Task validation command/exit code/摘要、checkpoint subject 和相关接口片段。只在增量触及安全、权限、迁移、public API、数据模型、并发/状态、破坏性/外向动作、高失败影响、验证缺口、或 diff summary 无法解释行为时深读完整文件或相邻模块。
+
+Final review 默认先读取：Spec/Plan 摘要、checkpoint map、各 Task diff summary、task review 结论、whole-change 验证摘要、热点路径和已知 blocker/repair 摘要。Final review 必须覆盖整体集成语义，但允许复用未漂移的 Task review 与验证证据；证据复用条件是 checkpoint range、changed paths、reviewed diff、validation command、exit code、相关文件/提交范围和相关合同均未漂移，且 final diff summary 未显示跨 Task 新耦合。
+
+重复读取禁止项：不要无条件重读已审查且未变化的隔离 Task 增量；不要把所有 checkpoint diff、完整 State、完整 Plan、完整日志、完整 archive 或 agent transcript 作为 final review 起点；不要为普通多文件或跨模块变更自动扩大到全仓库源码。出现 identity drift、validation FAIL、review 过期、热点触发、接口耦合不明或用户指定路径时，才针对触发点深读。
 
 ## 100k 警戒线
 

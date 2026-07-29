@@ -143,6 +143,31 @@ PLAN_OWNER_FORBIDDEN_KEYS = {
     "finding_routes",
     "behavioral_eval_owner",
 }
+REVIEW_EFFICIENCY_FORBIDDEN_DEFAULT_PATTERNS = {
+    "scale/file/task-count mandatory full reread": re.compile(
+        r"(?i)(?:"
+        r"(?:按(?:规模|文件数|文件数量|Task 数|任务数|任务数量)|by (?:scale|file count|task count)).{0,60}"
+        r"(?:机械|mechanical|强制|mandatory|must|required|默认|无条件|always).{0,60}"
+        r"(?:全量重审|full (?:re-)?review|full reread|reread (?:the )?(?:entire|whole))"
+        r"|(?:机械|mechanical|强制|mandatory|must|required|默认|无条件|always).{0,60}"
+        r"(?:按(?:规模|文件数|文件数量|Task 数|任务数|任务数量)|by (?:scale|file count|task count)).{0,60}"
+        r"(?:全量重审|full (?:re-)?review|full reread|reread (?:the )?(?:entire|whole))"
+        r")"
+    ),
+    "unconditional final line-by-line reread": re.compile(
+        r"(?i)(?:"
+        r"(?:final review|final|终审|最终审查).{0,80}"
+        r"(?:无条件|unconditional|always|必须|must|required|默认).{0,60}"
+        r"(?:逐行重读|逐行重审|line-by-line|every line|每行)"
+        r"|(?:无条件|unconditional|always|必须|must|required|默认).{0,60}"
+        r"(?:final review|final|终审|最终审查).{0,80}"
+        r"(?:逐行重读|逐行重审|line-by-line|every line|每行)"
+        r")"
+    ),
+}
+REVIEW_EFFICIENCY_NEGATIVE_CONTEXT_RE = re.compile(
+    r"(?i)(?:do not|does not|must not|not |never|forbid|forbidden|prohibit|without|不得|不能|不要|禁止|阻止|不按|不因|不对|不是|无需|无须|非)"
+)
 
 
 # Helpers
@@ -250,10 +275,21 @@ def line_is_allowed_historical_or_negative(line: str) -> bool:
     return False
 
 
+def review_efficiency_line_is_negative(line: str) -> bool:
+    return bool(REVIEW_EFFICIENCY_NEGATIVE_CONTEXT_RE.search(line))
+
+
 def assert_no_positive_pattern(testcase: unittest.TestCase, text: str, patterns: dict[str, re.Pattern[str]], source: Path | str) -> None:
     for name, pattern in patterns.items():
         for number, line in enumerate(text.splitlines(), 1):
             if pattern.search(line) and not line_is_allowed_historical_or_negative(line):
+                testcase.fail(f"{source}:{number}: positive forbidden {name}: {line}")
+
+
+def assert_no_positive_review_efficiency_forbidden_defaults(testcase: unittest.TestCase, text: str, source: Path | str) -> None:
+    for name, pattern in REVIEW_EFFICIENCY_FORBIDDEN_DEFAULT_PATTERNS.items():
+        for number, line in enumerate(text.splitlines(), 1):
+            if pattern.search(line) and not review_efficiency_line_is_negative(line):
                 testcase.fail(f"{source}:{number}: positive forbidden {name}: {line}")
 
 
@@ -543,6 +579,18 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
                 text = text.replace("cannot claim full closure", "")
                 path.write_text(text, encoding="utf-8")
 
+        def size_based_full_reread_default(plugin: Path) -> None:
+            append_text(
+                plugin / "references" / "eval-prompts.md",
+                "\nFinal review must按文件数机械全量重审 every changed line before completion.\n",
+            )
+
+        def unconditional_final_line_by_line_reread(plugin: Path) -> None:
+            append_text(
+                plugin / "references" / "eval-prompts.md",
+                "\nFinal review must always perform line-by-line reread for every task, regardless of existing evidence.\n",
+            )
+
         for name, mutator in {
             "nested agents/schemas runtime files": nested_agent_and_schema_files,
             "skill Markdown link outside one-level references": bad_skill_markdown_link,
@@ -564,6 +612,8 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
             "remove successor backlink guidance": remove_successor_backlink_guidance,
             "restore link-related/hash refresh guidance": restore_hash_refresh_guidance,
             "remove residual active reporting": remove_archived_residual_active_reporting,
+            "size-based mandatory full reread default": size_based_full_reread_default,
+            "unconditional final line-by-line reread": unconditional_final_line_by_line_reread,
         }.items():
             self.assert_mutant_detected(name, mutator)
 
@@ -678,6 +728,62 @@ class EvalContractTests(unittest.TestCase):
                 self.assertRegex(fields["Expected Route"], r"`(?:init|work)`")
                 self.assertNotIn("Owner Task", "\n".join(fields.values()))
                 self.assertNotIn("owner_skill", "\n".join(fields.values()))
+
+    def test_eval_prompts_cover_review_efficiency_policy_semantics(self):
+        text = read_text(REFERENCES / "eval-prompts.md")
+        cases = parse_eval_cases(text)
+        self.assertEqual(len(cases), 18)
+        combined_case_text = "\n".join("\n".join(fields.values()) for fields in cases.values())
+        review_matrix = markdown_section(text, "审查效率场景矩阵")
+        global_assertions = markdown_section(text, "全局断言")
+        review_efficiency_corpus = combined_case_text + "\n" + review_matrix + "\n" + global_assertions
+
+        semantic_groups = {
+            "integration-focused final": ["integration-focused final", "集成", "whole-change"],
+            "incremental commit range": ["增量 commit range", "task base", "checkpoint commit"],
+            "evidence reuse conditions": ["证据复用", "未漂移", "Task review", "validation"],
+            "mandatory deep-read triggers": ["mandatory deep-read triggers", "repair", "重复触碰", "失败后果"],
+        }
+        for group, needles in semantic_groups.items():
+            with self.subTest(group=group):
+                missing = [needle for needle in needles if needle not in review_efficiency_corpus]
+                self.assertFalse(missing, f"missing review-efficiency anchors for {group}: {missing}")
+
+        language_independent_scenarios = {
+            "ordinary multi module": ["普通多模块", "强验证", "final"],
+            "selective risky task": ["选择性风险 Task", "task.review=task-and-final", "其他 Task"],
+            "strict high risk": ["高风险", "task-and-final", "每个 Task"],
+            "repair or repeated touch": ["repair", "重复触碰", "深读"],
+        }
+        for scenario, needles in language_independent_scenarios.items():
+            with self.subTest(scenario=scenario):
+                missing = [needle for needle in needles if needle not in review_efficiency_corpus]
+                self.assertFalse(missing, f"missing language-independent scenario anchors for {scenario}: {missing}")
+        forbidden_language_defaults = [
+            r"Python.{0,20}默认.{0,20}(?:task-and-final|final)",
+            r"JavaScript.{0,20}默认.{0,20}(?:task-and-final|final)",
+            r"(?<!不)按编程语言决定.{0,20}(?:review|审查)",
+            r"(?<!不)按语言决定审查策略",
+        ]
+        for forbidden in forbidden_language_defaults:
+            with self.subTest(forbidden=forbidden):
+                self.assertNotRegex(review_efficiency_corpus, forbidden)
+        assert_no_positive_review_efficiency_forbidden_defaults(
+            self,
+            review_efficiency_corpus,
+            "eval-prompts.md review-efficiency corpus",
+        )
+
+    def test_review_efficiency_negative_guard_allows_current_denials(self):
+        allowed_lines = [
+            "final 不按规模机械全量重审每行。",
+            "final review does not require unconditional line-by-line reread when evidence is reusable.",
+            "静态测试能阻止未来重新引入按规模机械全量重审或无条件 final 逐行重读。",
+        ]
+        for line in allowed_lines:
+            with self.subTest(line=line):
+                self.assertTrue(review_efficiency_line_is_negative(line))
+                assert_no_positive_review_efficiency_forbidden_defaults(self, line, "allowed review-efficiency denial")
 
     def test_eval_prompts_do_not_use_v1_routing_or_packet_assertions(self):
         text = read_text(REFERENCES / "eval-prompts.md")

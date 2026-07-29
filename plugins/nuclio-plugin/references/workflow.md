@@ -196,11 +196,22 @@ Review/validation FAIL 只记录违反合同、具体路径、证据和 decision
 
 ## 风险驱动验证与审查
 
-Risk guidance: `plan.yaml` 使用 `risk_level` 与 `review_policy` 组合控制审查：
+Risk guidance: `plan.yaml` 使用 `risk_level` 与 `review_policy` 组合控制审查。review_policy 由场景、失败后果、耦合和验证证据决定，不按编程语言、文件数量或 Task 数量机械决定。
 
-- `self`：低风险文档、简单配置、明确一文件修复可由主会话自检；仍必须运行适用 deterministic validation。
-- `final`：普通多文件功能可先完成所有 Tasks，再运行 whole-change review 与验证。
-- `task-and-final`：高风险、跨模块、public API、数据模型、安全、迁移、破坏性或用户要求的工作，每个 Task 独立 review，全部 Tasks 后再 final review。
+选择矩阵：
+
+| 场景 | 建议 review policy | 说明 |
+| --- | --- | --- |
+| 低风险文档、简单配置、明确单点修复，且 deterministic validation 可直接观察结果 | `self` | 主会话自检可满足 review；仍必须运行适用 deterministic validation。 |
+| 普通语言无关开发、常规多文件或跨模块改动、多个顺序 Tasks，失败影响有限，且有强 deterministic validation 覆盖主要行为 | `final` | 先完成所有 Tasks，再运行 whole-change review 与验证；多文件、跨模块或多 Task 本身不自动升级。 |
+| change-level `final` 中只有少数风险 Task 需要早看 | 顶层 `review_policy: final`，对应 Task 使用 `review: task-and-final` | Task review 只提升少数风险 Task，用于 public seam、难回滚片段、局部耦合热点或验证薄弱 Task，其余增量留给 final review。 |
+| 安全、权限、迁移、public API、数据模型、并发/状态协调、破坏性或外向动作、高失败影响、验证弱、集成风险难观察、用户明确要求，或 `risk_level: high` | `task-and-final` | 每个 Task 独立 review，全部 Tasks 后再 final review；这是严格路径。 |
+
+Task review 读取该 Task 的实际 checkpoint 增量 `task_base..task_head`，结合 Plan Task 合同、changed paths、Task validation evidence 和 checkpoint subject 判断，不默认重读其他 Task 的已稳定增量。若发现 parent/subject/range、allowed paths、validation、或接口假设漂移，review 必须 fail closed。
+
+Final review 是 integration-focused final review：先读批准合同（Spec/Plan 摘要）、checkpoint map、各 Task diff summary、validation evidence、task review 结论和热点路径，再按触发条件深读。它仍覆盖整体集成语义、跨 Task 接口、遗漏路径、风险/非目标和验证充分性；但可以复用未漂移的 Task review 与 validation 证据，不要求无条件重读已审查且未变化的隔离增量。
+
+强制深读触发条件：安全/权限/迁移/数据模型/public API；并发、状态机或恢复语义；破坏性、不可逆或外向动作；高失败影响；validation 缺口或失败后修复；checkpoint range、parent、subject、allowed-path 或 identity drift；Task review 未覆盖、过期或与 final diff summary 不一致；接口/配置/文档合同跨 Task 耦合；用户或 reviewer 指定的热点。
 
 `high` 风险必须使用 `task-and-final`。deterministic validation FAIL、identity drift、checkpoint mismatch、allowed-path violation 或 unresolved blocker 都不能完成。
 

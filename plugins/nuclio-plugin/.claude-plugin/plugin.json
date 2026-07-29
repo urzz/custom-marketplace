@@ -1,7 +1,7 @@
 {
   "name": "nuclio",
-  "description": "Use when a project needs Nuclio v2 with /nuclio:work for an active three-layer change.md Spec role, plan.yaml approval contract, and state.yaml recovery workflow using file-first approval, the single PyYAML-based change.py helper, checkpoint commits, risk-based delegation/review, simplified fail-closed successor/predecessor closure where successor change.md links the predecessor, active predecessor relation is recorded in state.superseded_by, predecessor archive related_changes is validated against that State relation, and a knowledge-first finish archives only a concise one-file change.md record while existing archives are not migrated; /nuclio:init remains limited to v2 skeleton setup, repair, and whole-directory legacy/v1 moves",
-  "version": "4.0.3",
+  "description": "Use when a project needs Nuclio v2 4.0.4 with /nuclio:work for an active three-layer change.md Spec role, plan.yaml approval contract, and state.yaml recovery workflow using file-first approval, the single PyYAML-based change.py helper, checkpoint commits, scenario-based incremental review where ordinary development can stay final-only, selected risky Tasks may receive task review, and high-risk work remains task-and-final, plus simplified fail-closed successor/predecessor closure where successor change.md links the predecessor, active predecessor relation is recorded in state.superseded_by, predecessor archive related_changes is validated against that State relation, and a knowledge-first finish archives only a concise one-file change.md record while existing archives are not migrated; /nuclio:init remains limited to v2 skeleton setup, repair, and whole-directory legacy/v1 moves",
+  "version": "4.0.4",
   "author": {
     "name": "Jade Liu",
     "email": "[redacted-email]"

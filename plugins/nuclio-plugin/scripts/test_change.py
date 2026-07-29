@@ -1111,6 +1111,84 @@ class ChangeHelperTests(unittest.TestCase):
         self.assertEqual(payload["code"], "REVIEW_NOT_PASSED")
         self.assertEqual(payload["details"]["tasks"], [1])
 
+    def test_change_level_final_selectively_runs_only_task_marked_task_and_final_review(self):
+        self.init_git()
+        change_dir = self.create_change()
+        tasks = [
+            {
+                "id": 1,
+                "name": "Implement risky task",
+                "steps": ["Edit risky source"],
+                "acceptance": ["Risky source is present"],
+                "validation": ["python -m pytest"],
+                "delegate": "main",
+                "review": "task-and-final",
+                "checkpoint_subject": "feat(alpha): implement risky task",
+            },
+            {
+                "id": 2,
+                "name": "Implement ordinary task",
+                "steps": ["Edit ordinary source"],
+                "acceptance": ["Ordinary source is present"],
+                "validation": ["python -m pytest"],
+                "delegate": "main",
+                "review": "self",
+                "checkpoint_subject": "feat(alpha): implement ordinary task",
+            },
+        ]
+        self.write_plan(review="final", tasks=tasks)
+        git(self.root, "add", ".dev-docs/changes/alpha-change/change.md", ".dev-docs/changes/alpha-change/plan.yaml")
+        git(self.root, "commit", "-m", "docs: approve alpha plan")
+        self.assertEqual(run_change(self.root, "init-state", "--id", "alpha-change").returncode, 0)
+
+        self.assertEqual(run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1").returncode, 0)
+        (self.root / "src").mkdir()
+        (self.root / "src" / "risky.txt").write_text("risky\n", encoding="utf-8")
+        git(self.root, "add", "src/risky.txt")
+        git(self.root, "commit", "-m", "feat(alpha): implement risky task")
+        task_one = run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "1", "--validation-status", "PASS", "--validation-summary", "task 1 ok")
+        self.assertEqual(task_one.returncode, 0, task_one.stderr)
+        self.assertEqual(stdout_json(task_one)["next_action"], "RUN_TASK_REVIEW")
+
+        task_one_review = run_change(
+            self.root,
+            "record-review",
+            "--id", "alpha-change",
+            "--scope", "task",
+            "--task-id", "1",
+            "--status", "PASS",
+            "--contract", "risky task contract",
+            "--evidence", "task 1 reviewed",
+        )
+        self.assertEqual(task_one_review.returncode, 0, task_one_review.stderr)
+        self.assertEqual(stdout_json(task_one_review)["next_action"], "DISPATCH_TASK")
+
+        self.assertEqual(run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "2").returncode, 0)
+        (self.root / "src" / "ordinary.txt").write_text("ordinary\n", encoding="utf-8")
+        git(self.root, "add", "src/ordinary.txt")
+        git(self.root, "commit", "-m", "feat(alpha): implement ordinary task")
+        task_two = run_change(self.root, "record-task", "--id", "alpha-change", "--task-id", "2", "--validation-status", "PASS", "--validation-summary", "task 2 ok")
+        self.assertEqual(task_two.returncode, 0, task_two.stderr)
+        self.assertEqual(stdout_json(task_two)["next_action"], "RUN_FINAL_REVIEW")
+
+        state = load_change_module().read_yaml_file(change_dir / "state.yaml")
+        self.assertEqual(set(state["review"]["task_reviews"]), {"1"})
+        self.assertEqual(state["review"]["task_reviews"]["1"]["status"], "PASS")
+        self.assertNotIn("2", state["review"]["task_reviews"])
+
+        extra_task_review = run_change(
+            self.root,
+            "record-review",
+            "--id", "alpha-change",
+            "--scope", "task",
+            "--task-id", "2",
+            "--status", "PASS",
+            "--contract", "ordinary task contract",
+            "--evidence", "task 2 should use final review only",
+        )
+        self.assertNotEqual(extra_task_review.returncode, 0)
+        self.assertEqual(stderr_json(extra_task_review)["code"], "REVIEW_NOT_REQUIRED")
+
     def test_legacy_move_preserves_clear_v1_tree_verbatim(self):
         docs = self.root / ".dev-docs"
         v1_change = docs / "changes" / "old-change"

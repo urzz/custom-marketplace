@@ -263,7 +263,9 @@ tasks:
 
 Task 字段固定：唯一正整数 `id`、`name`、非空 `steps`、非空 `acceptance`、`validation` 命令列表、`delegate`、`review`、`checkpoint_subject`。
 
-`risk_level` 允许 `low|medium|high`。`review_policy` 允许 `self|final|task-and-final`。`repair_policy` 当前仅允许 `in-scope`。`high` 风险必须使用 `task-and-final`。
+`risk_level` 允许 `low|medium|high`。`review_policy` 允许 `self|final|task-and-final`。`repair_policy` 当前仅允许 `in-scope`。`high` 风险必须使用 `task-and-final`。review_policy 由场景、失败后果、耦合和验证证据决定，不按编程语言、文件数量或 Task 数量机械决定；普通多文件、跨模块或多 Task 工作在验证强且失败影响有限时可使用 `final`。
+
+Task `review` 表达该 Task 是否需要相对顶层策略的额外关注：在顶层 `review_policy: final` 下，Task `review` 只提升少数风险 Task；具体使用 `review: task-and-final` 标记 public seam、局部高耦合、难回滚或验证薄弱的增量；它不创建 owner routing、per-Task ownership 或新 schema 字段。顶层 `review_policy: task-and-final` 仍表示每个 Task 都需要 Task review 与最终 whole-change review。
 
 Plan 禁止 placeholder、重复 key、错误类型、不安全 YAML tag、动态 State 字段、runtime owner mapping 和 per-Task files ownership。Goal、Constraints、Non-goals、Acceptance、allowed paths、Task 合同、验证、风险或 review policy 变化时，必须提高 revision、重新校验并重新获得用户批准。
 
@@ -347,7 +349,9 @@ Helper 不自动 reset、rebase、squash、stash 或改写历史。完成后保�
 
 ## review、validation 与 repair
 
-`self` 可跳过独立 reviewer，但不能跳过适用 validation。`final` 在全部 Tasks 后运行 whole-change review。`task-and-final` 对每个 Task 与 whole change 都独立 review。
+`self` 可跳过独立 reviewer，但不能跳过适用 validation。`final` 在全部 Tasks 后运行 whole-change review；可通过少数 Task `review: task-and-final` 在 change-level `final` 下提前审查局部高风险增量。`task-and-final` 对每个 Task 与 whole change 都独立 review。
+
+Task review 读取 `task_base..task_head` 增量、Task 合同、changed paths、checkpoint subject 和 Task validation evidence。Final review 先看 Spec/Plan 摘要、checkpoint map、diff summary、validation evidence、task review 结论和热点，再按触发条件深读；它仍覆盖整体 integration semantics，但可复用未漂移 Task review 与 validation evidence，不要求无条件重读已审查且未变化的隔离增量。安全、权限、迁移、public API、数据模型、并发/状态、破坏性/外向、高失败影响、弱验证、identity/checkpoint/allowed-path 漂移、repair 后闭环或用户指定热点必须深读。
 
 Review 或 validation FAIL 时，只记录违反合同、具体路径、证据和 decision，`next_action` 进入 `REQUEST_REPAIR_DECISION`。Helper 不做 owner mapping、budget 分配、自动 fixer 或自动循环。
 

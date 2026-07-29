@@ -96,13 +96,14 @@ Do not create runtime per-Task owner fields, finding-to-person routing, behavior
 
 ## Review, validation, and in-scope repair
 
-Risk and review policies:
+Risk and review policies are scenario, consequence, coupling, and evidence driven（由场景、失败后果、耦合和验证证据驱动）, not language driven:
 
 - `self`: main-session self-check may satisfy review for low-risk changes, but required validation still runs.
-- `final`: all Tasks complete first, then a whole-change review runs before validation completion.
-- `task-and-final`: each Task receives review before the next Task or later gate, and the whole change also receives final review.
+- `final`: all Tasks complete first, then a whole-change review runs before validation completion. A normal language-agnostic change with several files, several modules, or several Tasks may still use `final` when behavior is well covered by strong deterministic validation and failure impact is limited; ordinary multi-file or cross-module shape by itself does not automatically require `task-and-final`（普通多文件或跨模块本身不自动要求 task-and-final）.
+- Task-level `review: task-and-final` under change-level `final`: use this only to promote a few risky Tasks for early independent attention while leaving the rest to final review.
+- `task-and-final`: each Task receives review before the next Task or later gate, and the whole change also receives final review. Use it for security, permissions, migrations, public API/data model shifts, concurrency/state coordination, destructive or outward actions, high failure impact, weak validation, broad coupling with hard-to-observe integration risk, explicit user request, or `high` risk.
 
-Review or validation `FAIL` records the violated contract, concrete paths, evidence, and decision point. It does not assign an owner or trigger an automatic fixer. With `repair_policy: in-scope`, the Coordinator may ask for a human repair decision when the fix still satisfies the approved Goal, Constraints, Non-goals, and Acceptance; every repair path is inside `allowed_paths`; no dependency, API, migration, irreversible, or outward action is added; risk does not rise; and the Plan contract remains unchanged.
+Task review reads the concrete checkpoint increment from `task_base..task_head`. Final review remains mandatory where policy requires it and covers whole-change integration semantics, but may reuse unchanged Task review and validation evidence instead of unconditionally rereading isolated increments that were already reviewed and have not drifted. Review or validation `FAIL` records the violated contract, concrete paths, evidence, and decision point. It does not assign an owner or trigger an automatic fixer. With `repair_policy: in-scope`, the Coordinator may ask for a human repair decision when the fix still satisfies the approved Goal, Constraints, Non-goals, and Acceptance; every repair path is inside `allowed_paths`; no dependency, API, migration, irreversible, or outward action is added; risk does not rise; and the Plan contract remains unchanged.
 
 For an approved in-scope repair, run `start-repair`, implement only the approved paths, run closure validation, create exactly one repair checkpoint commit with the helper-provided subject, then run `record-repair`. If repair would exceed `allowed_paths`, change the Spec/Plan contract, raise risk, or perform irreversible/outward actions, return to Plan revision, validation, and file-first approval.
 
