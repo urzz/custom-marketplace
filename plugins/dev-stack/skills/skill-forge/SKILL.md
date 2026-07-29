@@ -1,151 +1,123 @@
 ---
 name: skill-forge
-description: Use when creating, designing, or implementing a new Claude Code skill from scratch, or when modifying, improving, auditing, or reviewing an existing skill.
+description: Use when explicitly creating, modifying, optimizing, or auditing Claude Code skills, including SKILL.md, supporting references/scripts/assets, plugin agents, trigger behavior, and skill validation.
+disable-model-invocation: true
 ---
 
 # Skill Forge
 
-End-to-end workflow for creating and iterating Claude Code skills. The workflow uses a Risk-Adaptive Composite: route first, classify risk deterministically, then select the lightest path that preserves user approval, deterministic evidence, ownership isolation, and review independence.
-
-## Critical Constraints
-
-Mandatory rules:
-
-1. Route before every action. Never edit, audit, dispatch, or validate before matching CREATE, MODIFY, CHANGE_AUDIT, or FULL_AUDIT.
-2. AUDIT paths are read-only. They may run read-only commands and produce findings, but must not Edit/Write product files or commit.
-3. Risk classification is deterministic and conservative: use the highest matching level; if required facts are missing, raise one level; never silently downgrade during a run.
-4. Deterministic checks run before LLM review. If a schema/static/test check fails and can be run locally, fix or report that failure before any reviewer dispatch.
-5. Main Session is the only Controller. Bounded agents never modify state, Gate, rubric, review-state.json, helper ledgers, or Controller decisions.
-6. L2/L3 file-backed flow uses scripts/review-state-helper.py as the only review-state.json writer and next-action as the only transition authority.
-7. L2/L3 implementation/fix writes remain sequential in this version. Do not introduce parallel product writes.
-8. Do not use EnterPlanMode. Specs and Plans are written to files for user review.
-9. Do not call other skills, agents, workflows, MCP, network services, hooks, daemons, or worktrees unless this skill explicitly dispatches its owned bounded agents in the L2/L3 flow.
-10. Squash/reset/rebase/history rewrite is never placed in bounded-agent prompts and requires the current user's explicit approval after validation.
+为 Claude Code 创建、修改和审查 Skill。先通过需求澄清理解真实问题，再用 Spec、Plan、确定性验证和按需行为评测完成工作；不要把普通 Skill 维护扩张为通用软件交付状态机。
 
 ## Contents
 
-- [Critical Constraints](#critical-constraints)
-- [Routing](#routing)
-- [Risk Classification](#risk-classification)
-- [Intermediate Artifacts](#intermediate-artifacts)
-- [Phase 1: Discovery or Audit](#phase-1-discovery-or-audit)
-- [Phase 2: Spec](#phase-2-spec)
-- [Phase 3: Plan and Approval](#phase-3-plan-and-approval)
-- [Phase 4: Implement](#phase-4-implement)
-- [Phase 5: Validate and Complete](#phase-5-validate-and-complete)
+- [核心规则](#核心规则)
+- [路由](#路由)
+- [CREATE 和 MODIFY](#create-和-modify)
+- [AUDIT](#audit)
+- [验证与完成](#验证与完成)
 
-## Routing
+## 核心规则
 
-| Signal | Path |
+1. 先路由，再执行任何写入或验证。只接受 CREATE、MODIFY、CHANGE_AUDIT 或 FULL_AUDIT。
+2. AUDIT 始终只读，不创建 `.skill-forge` 产物；用户要求修复后重新进入 MODIFY。
+3. CREATE 和 MODIFY 必须先完成需求澄清，写入 `spec.md` 并获得用户确认，再生成 `plan.yaml` 或修改目标 Skill。
+4. 使用 Focused 或 Grill 澄清深度；不要重复询问仓库、review 文档或上下文已经回答的问题。
+5. 先运行确定性检查，再做语义审查或行为评测。LLM 判断不能替代失败的 schema、静态检查、脚本或测试。
+6. 主 Session 是唯一 Controller。产品写入保持顺序；Subagent 只接收一个 Plan Task 的精确文件边界。
+7. 不自动 commit、squash、reset、rebase、checkout、stash，不创建或切换分支、worktree。完成后保留已验证 working tree。
+8. 不调用其他 Skill、workflow、MCP、网络服务、hook 或 daemon。仅在本流程明确需要时使用插件提供的 bounded agents。
+9. 保留用户已有未提交改动。若目标路径存在非本次修改，先理解并协同编辑；无法安全合并时停止并说明冲突。
+10. 用户可见 prose 和生成文档默认使用用户当前主要语言；代码、命令、路径、配置键和协议字段保持原文。
+
+## 路由
+
+| 用户信号 | 路由 |
 |---|---|
-| User describes a new skill/capability and no existing skill is referenced | CREATE |
-| User points to an existing skill plus a modification verb such as improve/fix/update/优化/修改/修复 | MODIFY |
-| User asks to review/check/audit/validate a bounded change set | CHANGE_AUDIT |
-| User asks for full skill/plugin completeness, release readiness, or cross-file drift audit | FULL_AUDIT |
-| CWD contains SKILL.md plus a modification verb | MODIFY |
-| CWD contains SKILL.md plus a review/check/audit verb | CHANGE_AUDIT unless the user asks for full coverage |
-| Ambiguous | Ask: “是创建新 skill、改进已有 skill、审查当前变更，还是做完整审计？” |
-| No match | HALT and ask the user to choose CREATE / MODIFY / CHANGE_AUDIT / FULL_AUDIT |
+| 描述一个新 Skill，未引用已有 Skill | CREATE |
+| 指向已有 Skill，并要求修改、优化、修复或重构 | MODIFY |
+| 要求审查指定 diff、commit 或变更集 | CHANGE_AUDIT |
+| 要求完整 Skill/plugin 审计、发布准备或跨文件一致性检查 | FULL_AUDIT |
+| 只涉及普通业务代码或通用代码 review | HALT，说明不属于 Skill Forge |
+| 无法确定 | 询问用户要创建、修改、审查当前变更，还是完整审计 |
 
-Audit boundaries:
+CHANGE_AUDIT 以用户指定范围为入口，并读取直接受影响的稳定合同。FULL_AUDIT 读取完整 Skill、本层 references/scripts/assets、相关插件级 agents、插件 metadata、README 和 CLAUDE 同步点。
 
-- CHANGE_AUDIT examines the user-specified change range, changed product paths, relevant contracts, and directly affected neighbors. It is not limited to git diff when affected contracts require reading stable files.
-- FULL_AUDIT reads the complete skill-local files, one-level references, skill-local agents, scripts/tests, relevant plugin-level agents, plugin metadata, marketplace/README/CLAUDE synchronization points, and validation commands. It must not treat git diff as the only scope.
-- Both audit paths are read-only and may recommend a later MODIFY path only after user confirmation.
+## CREATE 和 MODIFY
 
-## Risk Classification
+### 1. Discovery 与需求澄清
 
-Classify after Routing and before Spec/Plan/implementation.
+1. 读取适用的仓库规则和目标 Skill 结构。
+2. CREATE 明确用户问题、目标用户、最小能力、输入、输出、触发边界、副作用和验证方式。
+3. MODIFY 读取目标 `SKILL.md`、直接引用的 supporting files、相关 scripts/tests、插件级 agents、metadata 和同步文档；区分根因与表面症状，明确必须保持的行为。
+4. 把 review 或设计文档当作输入，用当前源码和可执行检查验证；不要把旧结论直接当成当前事实。
+5. 读取 [需求澄清协议](references/clarification.md)。默认使用 Focused；用户说 `grill me`、要求苏格拉底式追问，或存在会改变架构、权限、副作用或验收的重大不确定性时使用 Grill。
+6. 一次只问一个会改变 Spec 的关键问题，并在证据充分时给出推荐答案和理由。
+7. 达到澄清停止条件后，在对话中输出简洁 First Principles Synthesis。它不是独立 artifact，也不需要单独确认。
 
-General rules:
+### 2. Spec
 
-1. Evaluate all matching conditions and select the highest risk level.
-2. If information is insufficient to prove a lower level, raise one level.
-3. The user may request a stricter path; honor it.
-4. Stop and upgrade when scope expands, ownership becomes unclear, validation is not observable, or an irreversible/outward-facing action appears.
-5. File count is only a signal. Prefer behavior impact, reversibility, coupling, validation quality, authority surface, and failure consequence.
+在 `.skill-forge/<skill-name>-<change-topic>/spec.md` 写入用户可读合同。首次使用时确保 `.skill-forge/.gitignore` 包含 `*`。使用 [模板](references/templates.md) 中的 Spec 结构，至少包含：
 
-| Level | Conditions | Successful path |
-|---|---|---|
-| L0 Mechanical | No behavior/control-plane change; local reversible edit; deterministic validation is obvious; no irreversible or outward-facing action; no pending user choice | Compact contract, Main Session implements directly, targeted deterministic checks, diff self-review, dispatch 0 agents, no extra confirmation except pending choices/irreversible actions |
-| L1 Routine | Clear bounded scope; reversible; adequate tests/static checks; does not touch L2/L3 control plane; no cross-owner ambiguity | Simplified change contract, default Main Session implementation, optional at most one bounded implementation unit, all relevant deterministic checks, one whole-diff review; upgrade if cross-context, multiple owners, or file-backed recovery is needed |
-| L2 Structural | Routing/Gate/Pattern/Architecture changes; agent contract; shared templates; public workflow docs; multi-caller behavior; ordinary scripts; structural coupling where deterministic evidence is strong enough for some tasks | File-backed helper flow. Dispatch T implementation units, R task reviewers where R ≤ T for risk tasks only, one mandatory final reviewer, and E behavioral eval where E is 0 or 1 |
-| L3 High Risk | State schema/transition/ownership/ledger/budget/hash/recovery/completion; write authority; destructive Git; security-sensitive or irreversible behavior; high failure impact; legacy strict run | Strict file-backed path with every Task using task-and-final review, mandatory final review, structural validation, and applicable behavioral validation |
+- 目标；
+- 第一性原理：根本问题、最小必要能力、不可变约束、关键假设；
+- 当前问题与预期行为；
+- Should Trigger 与 Should Not Trigger；
+- 非目标；
+- 验收标准与验证场景；
+- 仅在适用时记录权限、副作用、依赖或发布要求。
 
-Runtime upgrade is allowed; silent downgrade is forbidden. If an L0/L1 run discovers L2/L3 conditions, stop before further product edits, summarize evidence, and obtain an updated contract.
+展示 Spec 路径和简短摘要，请用户确认。确认前不得生成 Plan 或修改目标 Skill。需求变化时先更新 Spec 并重新确认。
 
-## Intermediate Artifacts
+### 3. Plan
 
-Use `.skill-forge/<skill-name>-<change-topic>/` with flat files only and a local `.gitignore` containing `*`. The run directory stores `spec.md`, `plan.yaml`, stable briefs, reports, observations, review packages, eval prompts, `rubric-snapshot.md`, and `review-state.json` when L2/L3 initializes state. Stable brief paths are created inside the run by the Controller; do not rely on temporary/default brief names.
+根据已确认 Spec 在同一 run 目录写入 `plan.yaml`，使用 [模板](references/templates.md) 中的精简 schema：
 
-For L2/L3 protocol details, use the canonical authority: [Review State Protocol](references/review-state-protocol.md). Templates live in [Templates](references/templates.md); validation dimensions live in [Internal Validation Checklist](references/validation-checklist.md); pattern selection uses [Google 8 Agent Design Patterns](references/design-patterns.md).
+- `spec` 与 `spec_sha256` 锁定已确认 Spec；
+- `impacts` 使用四个布尔标记，不使用 L0-L3、风险关键词或 review policy；
+- 每个 Task 只包含 `id`、`name`、精确 `files`、`steps`、`acceptance` 和 `checks`；
+- 不写 model、file type、通用 rubric、Task report、commit 或 Gate 合同。
 
-## Phase 1: Discovery or Audit
+使用 bundled validator 计算 Spec hash 并校验 Plan：
 
-### CREATE
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/plan_contract.py" hash-spec .skill-forge/<run>/spec.md
+python3 "${CLAUDE_SKILL_DIR}/scripts/plan_contract.py" validate .skill-forge/<run>/plan.yaml --repo-root <repo-root>
+```
 
-Ask one recommendation-first question at a time until the core problem, minimum capability, non-goals, triggers, side effects, and validation needs are clear. Skip questions whose answers can be inferred from local files. Output the Phase 1 template and wait for user confirmation before Spec.
+校验失败时修正 Plan，不能绕过。展示 Plan 路径、Task 数、create/modify/delete 摘要、影响标记和 checks。
 
-### MODIFY
+若 Plan 完全落在已确认 Spec 内且没有新增删除、依赖、权限、外部副作用或用户选择，直接继续实施。否则先请求一次 Plan 确认；用户修改后重新生成并校验。
 
-Read the existing skill surface needed to understand the requested change. For vague optimization requests, ask at least one recommendation-first question before diagnosing. Output the Change First Principles template and wait for user confirmation before Spec unless the user has already provided an explicit reversible L0/L1 contract with no pending choice.
+### 4. 顺序实施
 
-### CHANGE_AUDIT and FULL_AUDIT
+1. 记录实现前 Git 状态和 diff base，但不要求干净工作区。
+2. 按 Plan 顺序执行 Task；同一时间只允许一个产品写入单元。
+3. 小型单 Task 由主 Session 直接实施。多 Task、上下文较重或文件边界清晰时使用 `dev-stack:skill-file-implementer`。
+4. Subagent 只读取已确认 Spec、Plan 中自己的 Task 和必要接口文件；只能修改 Task 路径，直接返回不超过 15 行的结果，不写 brief/report/observation，不 commit，也不修改 Spec、Plan 或 State。
+5. 每个 Task 后运行其全部 `checks`。失败时只在原 Task 范围内修复并重跑。
+6. 需要新路径、依赖、权限、副作用，改变触发边界或原验收不可观察时停止实施，更新 Spec 并重新确认。
+7. 只有跨会话且多 Task 的工作确实需要恢复时，才可创建 [模板](references/templates.md) 中的轻量 `state.json`；不得记录 diff、finding、日志、agent 对话或 transition history。
 
-Produce a structured audit report with scope, files read, deterministic checks run, semantic findings, baseline/existing debt separation, and recommended next path. Do not modify files. If fixes are requested, re-route to MODIFY and classify risk from the proposed fix, not from the audit label.
+## AUDIT
 
-## Phase 2: Spec
+1. 明确 CHANGE_AUDIT 或 FULL_AUDIT 的范围和基线。
+2. 保持只读；允许运行不写产品文件的确定性检查。
+3. 先报告可复现 bug、行为风险、触发误差、结构问题和缺失测试，按严重度排序并引用文件与行号。
+4. 区分本次变更新增问题与既有问题。没有发现时明确说明，并列出未执行检查或剩余风险。
+5. 不创建 Spec、Plan、State、review package 或 eval 输出。用户要求修复时，从 findings 重新进入 MODIFY。
 
-Goal: create the user-readable contract.
+## 验证与完成
 
-1. CREATE uses Full Spec. MODIFY uses Delta Spec.
-2. Include risk level, why lower levels are insufficient, non-goals, validation plan, rollback/recovery expectations, and upgrade triggers.
-3. Pattern Selection runs only for CREATE, Pattern/Architecture changes, or genuine design choices. Otherwise preserve the existing pattern and state that no selection was needed.
-4. For L2/L3, Spec and Plan share one joint implementation approval Gate in Phase 3; Phase 2 saves the Spec for review but does not ask for a separate implementation approval.
-5. For L0/L1, do not repeat confirmation when the user's request already clearly authorizes a reversible bounded change and no choices remain. Still confirm irreversible, outward-facing, or expanded-scope work.
+读取 [验证清单](references/validation-checklist.md)，按以下顺序完成：
 
-Save Spec to `.skill-forge/<skill-name>-<change-topic>/spec.md`; create `.skill-forge/.gitignore` with `*` if missing. If the user requests changes, update the Spec before Plan.
+1. 汇总并运行所有 Task `checks`，再运行适用的 Skill、script 和 plugin 确定性检查。
+2. `impacts.script_changed=true` 时运行相关单元测试、`--help` 和至少一个真实 CLI 示例。
+3. `impacts.trigger_or_behavior_changed=true` 时，从 Spec 选择 3-5 个 fresh-session cases；description 变化同时覆盖 Should Trigger 和 Should Not Trigger。
+4. 没有隔离 harness 时报告 `SKIP: no isolated harness`，可以补充静态合同检查，但不能声称行为 PASS。
+5. 只有用户明确要求 benchmark 或专门调优 description 时，才运行 with-skill/without-skill 或版本 A/B。可复用用例写入目标 Skill 的 `evals/evals.json`，临时输出不长期保留。
+6. 对实现前 base 到当前 working tree 做一次最终完整 diff review，检查 Spec/Plan 覆盖、越界修改、触发边界、跨文件一致性和 Claude Code 结构。
+7. agent 权限、外部副作用、带副作用 script 或高影响核心控制流程变化时，使用 `dev-stack:skill-file-reviewer` 做独立只读审查；普通 Markdown 变化由主 Session 完成最终审查。
+8. 发现问题时在原 Plan 范围内修复并重跑受影响检查；范围变化则回到 Spec。同一失败重复且无进展时停止并报告。
+9. 报告修改内容、确定性检查、行为评测、独立审查和剩余风险。不要自动提交或改写 Git 历史。
 
-## Phase 3: Plan and Approval
-
-Goal: turn the Spec into executable work.
-
-1. Use the Plan YAML template with exact repo-relative ownership paths only.
-2. For L0/L1, a compact or simplified plan may be embedded in conversation/report if no file-backed recovery is needed.
-3. For L2/L3, write `plan.yaml` and include Task `meta.model`, `meta.file_type`, `meta.requires_execution_check`, `meta.risk_level`, and `meta.review_policy` exactly as supported by scripts/plan_contract.py: risk_level is L2 or L3; review_policy is final-only or task-and-final; L3 requires task-and-final.
-4. Run Plan self-review before approval: Spec coverage, placeholder scan, exact path consistency, ownership uniqueness, risk/review policy consistency, and deterministic validation observability.
-5. L2/L3 require one joint implementation approval Gate covering the formal Spec and YAML Plan. The review summary must include risk, non-goals, acceptance, deterministic checks, escalation conditions, and any irreversible/outward-facing actions.
-6. User changes after approval return to Phase 3, rewrite the Plan, and re-confirm before implementation.
-
-## Phase 4: Implement
-
-### L0 Mechanical
-
-Main Session performs the minimal edit directly, runs targeted deterministic checks, reviews the final diff for ownership/contract drift, and reports results. Dispatch count: 0 agents.
-
-### L1 Routine
-
-Default to Main Session implementation. If a bounded implementation unit is useful, dispatch at most one implementation agent with explicit ownership and report path; otherwise do it directly. Run all relevant deterministic checks and one whole-diff review before reporting. Do not initialize review-state.json.
-
-### L2/L3 File-Backed Controller
-
-Use the canonical protocol in review-state-protocol.md. Summary:
-
-1. Record initial base and run one bounded Pre-Flight Contract Review for contradictions, rubric conflicts, ownership gaps, and eval ownership ambiguity.
-2. Resolve an existing read-only rubric source. Helper `init` creates both `rubric-snapshot.md` and `review-state.json`; Controller does not pre-create them.
-3. Loop: call `next-action`, execute only the returned action, save raw agent JSON/report, call the matching helper `record-*` or `import-review`, then call `next-action` again.
-4. Before reviewer/final-reviewer dispatch, run deterministic schema/static/test checks that are applicable. A deterministic FAIL blocks reviewer dispatch until fixed or reported through the protocol.
-5. Implementation commits are exactly one per Task and use `feat(<scope>): [Task N] <name>`. L2 `final-only` tasks must provide deterministic evidence to `record-implementation`; L2 risk tasks and all L3 tasks use task-and-final review.
-6. Task review uses `task_base..task_head`; final review and validation use `initial_base..current_head` packages generated by helper.
-7. Findings, owner mapping, shared maximum=2 budget, HALT, no-progress, recovery, and completion follow helper state only.
-
-## Phase 5: Validate and Complete
-
-Validation is deterministic-first.
-
-- L0/L1 run the checks relevant to the change and keep whole-diff evidence in the final report.
-- L2/L3 run mandatory final review after Tasks, then structural validation, then the helper `BEHAVIORAL_VALIDATION` gate. Every L2/L3 run records/imports that helper gate before squash approval.
-- Structural validation distinguishes scriptable checks from semantic checks and records base/head evidence for the same applicable commands.
-- Behavioral eval-agent dispatch is conditional: spawn eval only when user-visible behavior, Routing, Gate, Pattern, or Architecture changed. Routing/Gate changes enable one consistency rerun; Pattern/Architecture changes enable baseline comparison. When all behavioral flags are false, the Controller creates/imports a helper-compatible PASS/SKIP observation with all flags false, `spawned=0`, and SKIP evidence, without dispatching eval, then advances by helper to `SQUASH_APPROVAL`. Do not delete the helper gate.
-- LLM reviewers judge contract, semantics, and cross-Task consistency. They do not replace deterministic schema/static/test checks and cannot close findings without helper import.
-- Squash is offered only when helper returns `REQUEST_SQUASH_APPROVAL`; user refusal can still complete as unsquashed.
+默认长期保留的 Skill Forge run 产物只有 `spec.md` 和 `plan.yaml`；跨会话恢复时可额外保留轻量 `state.json`。

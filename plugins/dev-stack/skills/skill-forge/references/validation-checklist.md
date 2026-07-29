@@ -1,147 +1,90 @@
-# Internal Validation Checklist
+# Skill Forge 验证清单
 
-Deterministic-first validation checklist for Skill Forge changes. Run only dimensions relevant to the risk and change, but L2/L3 must preserve whole-change evidence across final/structural/behavioral gates. The canonical L2/L3 ledger, owner mapping, budget, HALT, and transition contract is review-state-protocol.md; this file defines what to check.
+按变更实际影响选择检查，但必须保持“确定性检查优先”。任何未运行项都以 SKIP 和原因报告，不得伪装为 PASS。
 
 ## Contents
 
-- [Validation Order](#validation-order)
-- [Scriptable Checks](#scriptable-checks)
-- [Semantic Checks](#semantic-checks)
-- [Dimension 1: Spec Conformance](#dimension-1-spec-conformance)
-- [Dimension 2: Pattern Consistency](#dimension-2-pattern-consistency)
-- [Dimension 3: Flow Completeness](#dimension-3-flow-completeness)
-- [Dimension 4: Structural Compliance](#dimension-4-structural-compliance)
-- [Dimension 5: Token Efficiency](#dimension-5-token-efficiency)
-- [Dimension 6: Behavioral Correctness](#dimension-6-behavioral-correctness)
-- [Observation and Report Shape](#observation-and-report-shape)
+- [顺序](#顺序)
+- [结构与触发](#结构与触发)
+- [Scripts](#scripts)
+- [Agents 与权限](#agents-与权限)
+- [发布同步](#发布同步)
+- [行为评测](#行为评测)
+- [最终 Diff](#最终-diff)
 
----
+## 顺序
 
-## Validation Order
+1. 校验 Spec hash 与 Plan schema。
+2. 运行每个 Task 的 `checks`。
+3. 运行目标 Skill、script 和 plugin 的适用确定性检查。
+4. 运行条件行为评测。
+5. 完成一次最终完整 diff review。
+6. 只在高影响条件命中时增加独立 reviewer。
 
-1. Determine risk and changed contract surface.
-2. Run scriptable checks first: schema, exact paths, line counts, Contents/anchors, tool boundaries, JSON/YAML validity, command/test checks, and commit/ownership checks.
-3. If any scriptable check FAILs, do not dispatch LLM reviewer first. Fix within scope or report through the L2/L3 protocol.
-4. Run semantic checks only after applicable deterministic checks pass or are explicitly not applicable.
-5. L2/L3 structural and behavioral observations use the same finding schema and shared owner budget described in review-state-protocol.md.
+## 结构与触发
 
----
+- `name` 与目录命名符合 Claude Code Skill 规则。
+- `description` 说明 Skill 做什么以及适用场景。
+- `disable-model-invocation: true` 存在，Skill 只由用户显式调用。
+- 详细步骤与安全边界位于正文，不把核心程序藏在 metadata。
+- `SKILL.md` 保持精简；大段 schema、示例和澄清细节放入一层 `references/`。
+- 每个 supporting file 都从 `SKILL.md` 直接可发现，并说明何时读取或执行。
+- 不存在无引用资源、placeholder、过期路径或同一合同的冲突副本。
+- 用户可见 prose 默认跟随用户当前主要语言。
 
-## Scriptable Checks
+## Scripts
 
-| Area | Example command/check | Applies when |
-|---|---|---|
-| Plugin metadata JSON | `python3 -m json.tool <plugin.json> >/dev/null` | metadata touched or full audit |
-| Plugin strict validation | `claude plugin validate plugins/dev-stack --strict` | dev-stack skill/plugin changes |
-| Plan schema | `python3 plugins/dev-stack/skills/skill-forge/scripts/plan-task-query.py <plan> <task-id> --output <new-brief>` in a disposable run path, or shared Plan validator through helper commands | L2/L3 Plan changes |
-| Ownership path contract | Ensure create/modify/delete entries are exact repo-relative paths, unique, no globs/spaces/absolute/`..` | Plan/template changes |
-| Body line count | Count SKILL.md body after frontmatter; pass if < 500 | SKILL.md touched |
-| Large Markdown Contents | Every Markdown file > 100 lines has `## Contents` and matching anchors | Markdown touched |
-| Reference depth | references are one level deep and references files do not Markdown-link other references files | reference changes |
-| Stale wording | Search for removed legacy phase anchors, non-stable brief defaults, and forced all-task reviewer wording | protocol/template changes |
-| Tool authority | Parse bounded agent frontmatter for forbidden write/delegation tools | agent contract or full audit |
-| Commit contract | Check exactly expected implementation/fix subject and ownership-only diff | L2/L3 helper flow |
-| Tests | Run focused script unit tests or static probes for changed scripts/docs | script or contract changes |
+当 `script_changed=true`：
 
----
+- 使用结构化 parser/API 处理 YAML、JSON 等结构数据。
+- 拒绝不安全路径、重复 key、无效类型和超出限制的输入。
+- 缺少依赖时给出稳定、可操作的错误。
+- 实际运行单元测试、`--help` 和至少一个成功或失败 CLI 示例。
+- Skill 内调用使用 `${CLAUDE_SKILL_DIR}`，不依赖用户项目 CWD。
+- 脚本不静默 commit、改写 Git 历史、访问网络或执行外部副作用。
 
-## Semantic Checks
+## Agents 与权限
 
-LLM or human semantic review covers items that cannot be reduced to a stable local command:
+当 `agent_permissions_changed=true`：
 
-- Spec/Plan acceptance coverage and non-goal preservation.
-- Pattern fit and whether Risk-Adaptive Composite components are combined correctly.
-- Cross-Task consistency, owner boundaries, and user-facing behavior intent.
-- Whether deterministic evidence is sufficient for a `final-only` L2 Task.
-- Whether an audit scope truly covers affected contracts beyond git diff.
-- Whether behavioral eval prompts represent the changed user behavior.
+- plugin agent 位于插件根级 `agents/`，不是 Skill 内部 supporting directory。
+- implementer 只有 Task 所需写工具；reviewer 没有 Edit/Write 权限。
+- agent 不嵌套 delegation、不调用其他 Skill、不创建 worktree、不 commit。
+- dispatch 明确 repo root、Spec、Plan Task、允许路径、checks 和返回格式。
+- Subagent 返回简短结果，不创建 report、observation 或 diff package。
+- 运行一次独立只读审查，确认 tools 边界与正文一致。
 
-Semantic review must cite the contract source and changed path. It must not override a failing deterministic check.
+## 发布同步
 
----
+- 运行 `claude plugin validate <plugin> --strict`。
+- 校验 plugin metadata 和 marketplace JSON。
+- plugin description、marketplace description、README 和 CLAUDE 与实际行为一致。
+- 不保留 L0-L3、review-state、Gate、ledger、fix budget、checkpoint commit 或 squash 的旧描述。
+- 不宣称 Codex、其他宿主或不存在的 agent/eval harness 已受支持。
 
-## Dimension 1: Spec Conformance
+## 行为评测
 
-| Check | Type | Pass Criteria |
-|---|---|---|
-| Contract coverage | Semantic | Every input/output/side effect in Spec is implemented or explicitly non-goal |
-| Success criteria coverage | Semantic | Every success criterion maps to workflow steps and validation evidence |
-| Boundary respect | Scriptable + semantic | Prohibited behaviors are absent by search and by contract reading |
-| Joint approval | Semantic | L2/L3 Spec and Plan receive one implementation approval Gate; L0/L1 do not repeat clearly granted reversible authorization |
-| Upgrade triggers | Semantic | Scope expansion, irreversible/outward-facing action, ownership ambiguity, or unobservable validation stop and upgrade |
+当 `trigger_or_behavior_changed=true`：
 
----
+1. 从 Spec 选择 3-5 个代表性请求。
+2. description 变化至少包含 Should Trigger 和 Should Not Trigger。
+3. Routing/确认点变化验证进入正确路径并在正确位置停止。
+4. 模糊请求验证进入 Focused/Grill 澄清，而不是提前实施。
+5. 每个 case 在 fresh session 中运行，记录是否触发及触发后的关键行为。
+6. 只在用户要求 benchmark 或触发调优时运行 baseline/A-B。
+7. 可复用 case 写入目标 Skill 的 `evals/evals.json`；临时日志和结果不进入长期产物。
 
-## Dimension 2: Pattern Consistency
+若当前环境没有 fresh-session harness，报告 `SKIP: no isolated harness`，再做静态合同检查作为补充，但不要称其为行为 PASS。
 
-| Check | Type | Pass Criteria |
-|---|---|---|
-| Risk-Adaptive Composite | Semantic | Router, Sequential Controller, HITL, Generator-Critic, and Validation Gate are combined according to L0-L3 |
-| No premature Pattern Selection | Semantic | Pattern Selection runs only for CREATE, Pattern/Architecture changes, or real design choices |
-| Sequential writes | Scriptable + semantic | No instruction introduces parallel product writes in the current version |
-| Dispatch counts | Semantic | L0=0 agents; L1≤1 implementation unit plus one whole-diff review; L2=T+R+1+E with R≤T and E∈{0,1}; L3 strict task-and-final |
+## 最终 Diff
 
----
+使用实现前 base 与当前 working tree 形成一次完整审查范围，检查：
 
-## Dimension 3: Flow Completeness
+- Spec 的目标、非目标和每条验收是否被覆盖；
+- Plan 声明路径与实际 diff 是否一致；
+- 未覆盖的用户已有改动是否被误改；
+- supporting files、脚本调用、agent tools、字段名和发布说明是否同步；
+- trigger、权限和外部副作用是否存在回归；
+- 测试是否足以覆盖真实行为变化。
 
-| Check | Type | Pass Criteria |
-|---|---|---|
-| Routing coverage | Scriptable + semantic | CREATE, MODIFY, CHANGE_AUDIT, FULL_AUDIT, ambiguity, and no-match are covered |
-| AUDIT read-only | Semantic | Audit path cannot Edit/Write/commit and FULL_AUDIT reads complete related surfaces, not only git diff |
-| Deterministic-first | Semantic | Reviewers are blocked behind applicable schema/static/test checks |
-| Helper authority | Scriptable + semantic | L2/L3 state transitions use review-state-helper.py next-action only |
-| Recovery/HALT | Semantic | API failures, hash drift, no-progress, budget exhaustion, owner ambiguity, and contract disputes produce deterministic HALT or recovery evidence |
-
----
-
-## Dimension 4: Structural Compliance
-
-| Check | Type | Pass Criteria |
-|---|---|---|
-| description format | Scriptable/manual | Starts with `Use when`, third person, ≤1024 chars |
-| name format | Scriptable/manual | ≤64 chars, letters/numbers/hyphens only |
-| SKILL.md body | Scriptable | <500 lines excluding frontmatter |
-| Large Markdown Contents | Scriptable | Files >100 lines include Contents with anchor links |
-| References one level | Scriptable | No nested reference directories and no Markdown links from one references file to another references file |
-| Stable logic | Semantic | Deterministic logic lives in scripts rather than copied prose when it must be executable |
-| Marketplace sync | Scriptable + semantic | Metadata, README, and CLAUDE guidance are checked when touched or full-audited |
-
----
-
-## Dimension 5: Token Efficiency
-
-| Check | Type | Pass Criteria |
-|---|---|---|
-| No conflicting duplicates | Scriptable + semantic | Detailed L2/L3 lifecycle/schema/budget appears only in review-state-protocol.md |
-| Summaries only elsewhere | Semantic | SKILL.md, templates.md, and this checklist keep only role-specific summaries |
-| Inline length | Scriptable | Long examples and templates live in references, not SKILL.md body |
-| Anchor clarity | Scriptable + semantic | Contents anchors are stable and headings are specific |
-
----
-
-## Dimension 6: Behavioral Correctness
-
-Run behavioral validation only when user behavior, Routing, Gate, Pattern, or Architecture changed. Otherwise produce SKIP evidence.
-
-| Check | Type | Pass Criteria |
-|---|---|---|
-| Routing behavior | Behavioral/semantic | CREATE/MODIFY/CHANGE_AUDIT/FULL_AUDIT prompts route as expected |
-| Gate behavior | Behavioral/semantic | Required confirmations pause; already authorized L0/L1 reversible work is not re-asked |
-| Risk escalation | Behavioral/semantic | Ambiguity raises risk; runtime scope/ownership/validation problems stop and upgrade |
-| Consistency rerun | Behavioral | Only Routing/Gate changes set `run_consistency=true`, with at most one extra run per selected prompt |
-| Baseline comparison | Behavioral | Only Pattern/Architecture changes set `run_baseline=true`; otherwise SKIP |
-| Eval ownership | Semantic | Every eval case maps to the Task that owns the contract; ambiguity is resolved before L2/L3 init |
-
----
-
-## Observation and Report Shape
-
-For L2/L3 validation failures:
-
-1. Save a schema v1 observation with command, exit code, output, base/head evidence, contract/rubric reference, origin, severity, and exact required_fix_paths.
-2. Import through helper; do not directly edit product files after final review or validation failure.
-3. Helper performs owner mapping and budget handling. Same Gate/same owner findings are one fixer dispatch; multi-owner or no-owner findings HALT for user decision.
-4. BASELINE, MINOR, suggestion, OUT_OF_CONTRACT, invalid observation, and API/transport failure do not consume budget.
-
-Report validation by listing command/check, exit code or PASS/FAIL/SKIP, output summary, evidence path when applicable, and any residual risk. Do not state that reviewer Gate passed unless helper state says so.
+发现问题后只在原 Plan 范围修复并重跑受影响检查。新增路径、依赖、权限、副作用或合同变化必须回到 Spec。

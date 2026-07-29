@@ -22,12 +22,12 @@ The core hierarchy is:
 2. `/plugins/<plugin-name>/.claude-plugin/plugin.json`: The metadata entry point for an individual plugin.
 3. `/plugins/<plugin-name>/skills/<skill-name>/SKILL.md`: The skill definition, using frontmatter plus the prompt body.
 
-Some plugins may also include shared references and helper scripts. The Nuclio v2 plugin uses plugin-level `references/` and `scripts/`. The dev-stack `skill-forge` skill uses skill-local `references/`, `agents/`, and `scripts/`, plus plugin-level bounded agents.
+Some plugins may also include shared references and helper scripts. The Nuclio v2 plugin uses plugin-level `references/` and `scripts/`. The dev-stack `skill-forge` skill uses skill-local `references/` and `scripts/`, plus plugin-level bounded agents.
 
 当前 marketplace 注册三个插件：
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator`。
-- `dev-stack`：提供 `/skill-forge` 和 `/commit`；`/skill-forge` 是 risk-adaptive skill 创建、修改、审查与验证入口，覆盖 L0-L3、deterministic-first、单 Controller 顺序执行、L2/L3 file-backed 状态、conditional review/eval 和 L3 strict 路径。
+- `dev-stack`：提供显式调用的 `/skill-forge` 和 `/commit`；`/skill-forge` 通过 Focused/Grill 澄清、第一性原理综合、已确认 Spec、精简 Plan、顺序实施和 deterministic-first 验证创建、修改或只读审查 Claude Code skill。
 - `nuclio`：提供 `/nuclio:init` 和 `/nuclio:work`；`/nuclio:init` 只负责 v2 `.dev-docs` skeleton setup/repair/`legacy/v1` 整体移动，`/nuclio:work` 负责 active 三层 `change.md`（人类可读 Spec 角色）、`plan.yaml` 批准合同、`state.yaml` 当前恢复状态的人本 change 工作流，并在知识优先 finish 后将 archive 收敛为只保留精简 `change.md`；4.0.5 保持 `state.git_branch` 分支锁定（branch drift/detached HEAD fail closed，禁止 Coordinator/subagent 创建、切换、重命名分支或 worktree，禁止 `task4-member-auth-dto-vo` 这类临时 Task 分支）、archive checkpoint commit/recovery、successor `change.md` backlink predecessor、active predecessor relation 写入 `state.superseded_by`、predecessor archive `related_changes` 与 State 校验一致，且不 pre-link frozen predecessor、不新增 link-related/hash refresh/手改 State；同时采用场景化增量审查，普通开发可 final-only，少数风险 Task 可选择性 task review，高风险仍保持 task-and-final；bounded subagent 不得调用 TaskStop/Stop Task、不得停止/接管 Controller/task-tracking 任务，阻塞时只返回 Coordinator。
 
 ## Key Files
@@ -35,9 +35,9 @@ Some plugins may also include shared references and helper scripts. The Nuclio v
 - `.claude-plugin/marketplace.json`: Determines which plugins Claude Code can discover.
 - `plugins/<plugin-name>/.claude-plugin/plugin.json`: Defines the plugin's name, description, version, and author metadata.
 - `plugins/<plugin-name>/skills/<skill-name>/SKILL.md`: Defines skill metadata and the actual prompt.
-- `plugins/<plugin-name>/skills/<skill-name>/references/`: Optional skill-local references. Dev-stack uses this for the skill-forge review-state protocol, templates, and validation checklist.
-- `plugins/<plugin-name>/skills/<skill-name>/agents/`: Optional skill-local agents. Dev-stack uses this for `skills/skill-forge/agents/skill-creator-eval.md`.
-- `plugins/<plugin-name>/skills/<skill-name>/scripts/`: Optional skill-local deterministic helper scripts and tests. Dev-stack uses this for `review-state-helper.py`, `plan_contract.py`, `plan-task-query.py`, and unittest coverage.
+- `plugins/<plugin-name>/skills/<skill-name>/references/`: Optional skill-local references. Dev-stack uses this for the skill-forge clarification protocol, templates, and validation checklist.
+- `plugins/<plugin-name>/skills/<skill-name>/agents/`: Optional skill-local agents. Skill-forge does not currently use this directory.
+- `plugins/<plugin-name>/skills/<skill-name>/scripts/`: Optional skill-local deterministic helper scripts and tests. Dev-stack uses this for `plan_contract.py` and `test_plan_contract.py`.
 - `plugins/<plugin-name>/references/`: Optional plugin-level shared references. Nuclio v2 uses `workflow.md`, `change-format.md`, `knowledge.md`, `context-hygiene.md`, and `eval-prompts.md` as current runtime authority.
 - `plugins/<plugin-name>/scripts/`: Optional plugin-level deterministic helper scripts and tests. Nuclio v2 has exactly one runtime helper, `change.py`, plus `test_change.py` and `test_static_plugin.py`.
 - `plugins/nuclio-plugin/docs/research/contract-workbench-redesign/`: Historical research and design inputs for the earlier Nuclio redesign. These documents preserve design rationale but are not runtime authority.
@@ -113,14 +113,13 @@ Nuclio v2 current behavior:
 - User-visible prose defaults to the user's current primary language; code, commands, paths, field names, and raw output remain literal.
 - The v2 maintenance boundary forbids runtime hooks, daemon behavior, MCP integration, network service, project-local `.claude/` installation, `.nuclio/` runtime state, external Superpowers dependency, persistent process JSON, `changes/index.md`, archive manifest, hidden archive backup, a v1 compatibility converter, a v1/v2 dual stack, content snapshots, full State history, automatic fixer, owner budget, owner routing, DAG scheduler, parallel product write engine, restoring the old three-artifact archive-retention promise, or migrating existing archives.
 
-Dev-stack skill 的通用同步原则：修改任一 skill 时，保持对应 `plugins/dev-stack/skills/<skill-name>/SKILL.md`、一层 `references/`、插件元数据、README / CLAUDE 说明与本地校验命令一致。`/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时必须同步这些文件、`plugins/dev-stack/.claude-plugin/plugin.json` 的版本、README / CLAUDE 说明与本地校验命令。`/commit` 必须维持自包含执行边界：不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，不使用 skill-forge 的 file-backed review-state、bounded agents、scripts 或 review-state helper，也不新增 runtime hook、daemon 或本地状态机制。最终 Conventional Commit 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未进入最终 staged diff 的内容不得影响最终消息。内部行为变更不得误写成 marketplace source、plugin name 或外部依赖变化。
+Dev-stack skill 的通用同步原则：修改任一 skill 时，保持对应 `plugins/dev-stack/skills/<skill-name>/SKILL.md`、一层 `references/`、插件元数据、README / CLAUDE 说明与本地校验命令一致。`/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时必须同步这些文件、`plugins/dev-stack/.claude-plugin/plugin.json` 的版本、README / CLAUDE 说明与本地校验命令。`/commit` 必须维持自包含执行边界：不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，不使用 skill-forge 的 bounded agents 或 scripts，也不新增 runtime hook、daemon 或本地状态机制。最终 Conventional Commit 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未进入最终 staged diff 的内容不得影响最终消息。内部行为变更不得误写成 marketplace source、plugin name 或外部依赖变化。
 
 Dev-stack `skill-forge` 变更还需要保持以下专用文件同步：
 
 - `plugins/dev-stack/skills/skill-forge/SKILL.md`
 - `plugins/dev-stack/skills/skill-forge/references/*.md`
 - `plugins/dev-stack/agents/*.md`
-- `plugins/dev-stack/skills/skill-forge/agents/skill-creator-eval.md`
 - `plugins/dev-stack/skills/skill-forge/scripts/*.py`
 - `plugins/dev-stack/.claude-plugin/plugin.json`
 - `.claude-plugin/marketplace.json`
@@ -129,17 +128,15 @@ Dev-stack `skill-forge` 变更还需要保持以下专用文件同步：
 
 维护 dev-stack `skill-forge` 时保持以下不变量：
 
-- L0/L1/L2/L3 语义必须与 `plugins/dev-stack/skills/skill-forge/SKILL.md` 和 `references/review-state-protocol.md` 一致：L0 机械直改、L1 常规有界、L2 structural file-backed、L3 high-risk strict。
-- `plan_contract.py` 是 L2/L3 Plan meta 的确定性合同校验入口；`risk_level` 仅接受 `L2`/`L3`，`review_policy` 仅接受 `final-only`/`task-and-final`，L3 必须 `task-and-final`，含任一 L3 Task 的 run 中每个 Task 都必须 `task-and-final`。
+- `/skill-forge` 使用 `disable-model-invocation: true`，只在用户显式调用时运行；只面向 Claude Code，不声明其他宿主兼容。
+- CREATE 和 MODIFY 先通过 Focused 或 Grill 澄清真实问题；`grill me` 保留一次一问、建议优先的苏格拉底式追问，First Principles Synthesis 进入 `spec.md`。
+- 用户确认 Spec 后才生成 Plan；只有 Plan 新增删除、依赖、权限、外部副作用或用户选择时才追加一次确认。
+- `plan_contract.py` 是唯一 Plan validator，负责重复 YAML key、Spec hash、精确 repo-relative path、跨 Task ownership、文件前置条件、placeholder、字段类型和空 checks；不负责风险分类或状态推进。
 - deterministic-first 是强制维护原则：JSON/YAML/schema/static/test/plugin validation 等可本地运行的检查必须先于 LLM reviewer/eval；LLM review 不能替代失败的确定性校验。
-- 主 Session 是唯一 Controller；bounded agents 不得修改 state、Gate、rubric、review-state.json、helper ledgers 或 Controller resolutions。
-- L2/L3 中 `plugins/dev-stack/skills/skill-forge/scripts/review-state-helper.py` 是 file-backed `review-state.json` 的唯一写入者，`next-action` 是状态跳转唯一权威；`plan-task-query.py` 负责生成 stable task brief。
-- Bounded implementer 和 fixer agents 仅限 `Read, Edit, Write, Grep, Glob, Bash`；bounded reviewer 和 final-reviewer agents 仅限 `Read, Grep, Glob, Bash`；skill-local eval agent 保持 simulation-only 且由 flag gate 控制。
-- L2/L3 保留 checkpoint commits、cumulative review package、恢复语义、helper ledger、共享 owner-level fix budget、final review、structural validation 和适用 behavioral validation。
-- conditional review/eval 必须按风险和 `risk/review policy` 触发：L2 可 `final-only` 或 `task-and-final`，E 为 0 或 1；L3 strict 保证每个 Task 都有 task-and-final review、mandatory final review、structural validation 和适用 behavioral validation。
-- L2/L3 Spec 与 Plan 使用一次联合实施批准；用户修改、scope 扩张、ownership 不清、验证不可观察、不可逆或外向动作出现时必须停止并升级或回到 Phase 3 重新确认。
-- 第一版不并行执行产品写入，不新增 DAG scheduler、外部 orchestration、MCP、network service、daemon、runtime hook、worktree 强依赖或新的项目外状态体系。
-- Squash/reset/rebase/history rewrite 不得进入 bounded agent prompt；只有验证完成后由主 Session 在当前用户明确同意下执行，用户拒绝 squash 仍可合法完成为 unsquashed。
+- 主 Session 是唯一 Controller，产品写入按 Task 顺序执行；bounded implementer 只能修改一个 Task 的精确 paths，bounded reviewer 必须保持只读，二者都不写 report、不 delegation、不 commit。
+- AUDIT 始终只读且不创建 run；默认 run 只有 `spec.md` 和 `plan.yaml`，仅跨会话多 Task 恢复可增加轻量 `state.json`。
+- 行为评测仅在 trigger/core behavior 变化时运行 3-5 个 fresh-session cases；独立 reviewer 仅用于权限、外部副作用、带副作用 script 或高影响核心控制流程。
+- 不恢复风险等级、review-state、Gate、ledger、fix budget、checkpoint commit、自动 squash 或 Git 历史改写，也不新增 DAG scheduler、并行产品写入、外部 orchestration、MCP、network service、daemon、runtime hook 或 worktree 依赖。
 
 ## Common Commands
 
@@ -196,9 +193,9 @@ claude --version
 
 - The repository currently has no application code, package manager manifest, or build scripts; do not assume any npm / pnpm / bun workflow exists.
 - This is a marketplace/plugin repository. Preserve the hierarchy “marketplace manifest → plugin metadata → skill directory,” with optional references and scripts when a plugin needs them.
-- Dev-stack skill-forge review state is file-backed only under ignored `.skill-forge/<run>/` directories. It is not a daemon, runtime service, background worker, external orchestration layer, MCP integration, runtime hook, DAG scheduler, parallel write engine, or external state store.
-- Dev-stack skill-forge first-version product writes are sequential; do not add parallel implementation dispatch or cross-owner auto-selection without a new confirmed contract.
-- Dev-stack skill-forge L2/L3 state, ledger, budget, hash drift, recovery, completion, risk/review policy, and transition behavior are maintained by `review-state-helper.py`, `plan_contract.py`, `plan-task-query.py`, and the canonical review-state protocol.
+- Dev-stack skill-forge default run artifacts are only ignored `.skill-forge/<run>/spec.md` and `plan.yaml`; optional `state.json` is a lightweight cross-session cursor, never a workflow state machine.
+- Dev-stack skill-forge product writes are sequential; do not add parallel implementation dispatch or cross-owner auto-selection without a new confirmed Spec and Plan.
+- Dev-stack skill-forge has exactly one runtime helper, `plan_contract.py`, plus its unit test. Do not reintroduce risk classifiers, review-state helpers, task-brief generators, Gate/ledger protocols, automatic commits, or fixer pipelines.
 - Nuclio v2 source of truth is the native plugin runtime under `plugins/nuclio-plugin/skills/{init,work}/`, `plugins/nuclio-plugin/references/{workflow,change-format,knowledge,context-hygiene,eval-prompts}.md`, and `plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}`.
 - Nuclio v2 runtime helper is exactly `plugins/nuclio-plugin/scripts/change.py`; do not add `workflow.py`, a second State writer, subprocess status protocol, runtime schema service, daemon, hook, MCP server, network service, or hidden state directory.
 - Nuclio v2 depends on PyYAML and no other third-party runtime dependency. Keep YAML safety checks, duplicate-key rejection, explicit schema/type validation, safe dump, and stable missing-dependency behavior intact.

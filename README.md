@@ -11,7 +11,7 @@
 当前仓库包含：
 
 - `openclaw-plugin`：提供 `/openclaw-skill-creator` 技能，用于帮助用户起草 OpenClaw skill。
-- `dev-stack`：提供 `/skill-forge` 与 `/commit` 技能；`/skill-forge` 用于创建、设计、修改、审查和验证 Claude Code skill，采用 L0-L3 风险自适应路径、deterministic-first 校验、单 Controller 顺序执行、L2/L3 file-backed 状态、conditional review/eval 和 L3 strict 高风险治理；`/commit` 用于自包含分析当前 Git 变更、生成单个 Conventional Commit，并在安全门禁下选择性暂存和提交。`/commit` 不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务；最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff。
+- `dev-stack`：提供显式调用的 `/skill-forge` 与 `/commit` 技能；`/skill-forge` 用于通过 Focused/Grill 澄清、第一性原理综合、已确认 Spec、精简 Plan 和 deterministic-first 验证创建、修改或只读审查 Claude Code skill；`/commit` 用于自包含分析当前 Git 变更、生成单个 Conventional Commit，并在安全门禁下选择性暂存和提交。`/commit` 不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务；最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff。
 - `nuclio`：提供 Nuclio v2 4.0.5：`/nuclio:init` 只负责 v2 `.dev-docs` skeleton setup、repair 和整个旧目录移动到 `legacy/v1`；`/nuclio:work` 是日常入口，active change 只有 `change.md`（人类可读 Spec 角色）、`plan.yaml` 批准合同、`state.yaml` 当前恢复状态三层 artifact，结合 file-first approval、单一 PyYAML `change.py` helper、`state.git_branch` 分支锁定（branch drift 或 detached HEAD fail closed，Coordinator/subagent 不创建、切换、重命名分支或 worktree，也不使用 `task4-member-auth-dto-vo` 这类临时 Task 分支）、每 Task checkpoint commit、change-level `allowed_paths`、场景化增量审查（普通开发可保持 final-only，少数风险 Task 可选择性 task review，高风险仍保持 task-and-final）、bounded subagent 不得调用 TaskStop/Stop Task 或停止/接管 Controller/task-tracking 任务且阻塞时只返回 Coordinator、successor/predecessor fail-closed supersede 收口（successor `change.md` backlink predecessor；active predecessor relation 写入 `state.superseded_by`；predecessor archive `related_changes` 与 State 校验一致；不 pre-link frozen predecessor、不新增 link-related/hash refresh/手改 State）、验证、知识优先 finish，以及只保留精简 `change.md` 的轻量 archive；成功 archive 会创建一个 helper 验证的 archive checkpoint commit，changed paths 完整覆盖 active `change.md`/`plan.yaml`/`state.yaml` 与 archive `change.md`，pending-state 写失败回滚 active，同命令在 frozen branch 上可恢复；不声称迁移 petgo 或已有 archive。
 
 ## 仓库结构
@@ -19,9 +19,9 @@
 - `.claude-plugin/marketplace.json`：市场清单，声明当前 marketplace 暴露的插件。
 - `plugins/<plugin-name>/.claude-plugin/plugin.json`：插件元数据。
 - `plugins/<plugin-name>/skills/<skill-name>/SKILL.md`：技能定义。
-- `plugins/<plugin-name>/skills/<skill-name>/references/`：skill 级协议、设计约束或参考资料（如 dev-stack/skill-forge 的 review-state 协议、模板和校验清单；`plugins/dev-stack/skills/commit/references/` 存放 `/commit` 的变更分析和提交策略）。
-- `plugins/<plugin-name>/skills/<skill-name>/agents/`：skill 级 agent 定义（如 dev-stack/skill-forge 的 `skill-creator-eval.md`，仅在明确 flag gate 下做 simulation-only eval）。
-- `plugins/<plugin-name>/skills/<skill-name>/scripts/`：skill 级确定性辅助脚本与测试（如 dev-stack/skill-forge 的 `review-state-helper.py`、`plan_contract.py`、`plan-task-query.py` 与 unittest；`/commit` 自包含执行，不使用 skill-forge agents、scripts 或 review-state helper，也不新增 runtime hook、daemon、MCP 或本地状态机制）。
+- `plugins/<plugin-name>/skills/<skill-name>/references/`：skill 级协议、设计约束或参考资料（如 dev-stack/skill-forge 的澄清协议、模板和验证清单；`plugins/dev-stack/skills/commit/references/` 存放 `/commit` 的变更分析和提交策略）。
+- `plugins/<plugin-name>/skills/<skill-name>/agents/`：可选的 skill 级 agent 定义；当前 skill-forge 不使用该目录。
+- `plugins/<plugin-name>/skills/<skill-name>/scripts/`：skill 级确定性辅助脚本与测试（如 dev-stack/skill-forge 的 `plan_contract.py` 与 `test_plan_contract.py`；`/commit` 保持自包含执行，不绑定 skill-forge 的 agents 或 scripts）。
 - `plugins/<plugin-name>/references/`：插件级共享参考资料。Nuclio v2 的当前运行时权威位于 `plugins/nuclio-plugin/references/`，包括 `workflow.md`、`change-format.md`、`knowledge.md`、`context-hygiene.md` 和 `eval-prompts.md`。
 - `plugins/<plugin-name>/scripts/`：插件级确定性辅助脚本与测试。Nuclio v2 只有一个 runtime helper：`plugins/nuclio-plugin/scripts/change.py`；`test_change.py` 和 `test_static_plugin.py` 覆盖三层 artifact、YAML safety、allowed_paths、checkpoint/repair、禁止机制和静态语义。
 - `plugins/nuclio-plugin/docs/research/contract-workbench-redesign/`：Nuclio 早期重构的历史研究与设计材料；用于追溯设计依据，不是 runtime authority。
@@ -41,30 +41,27 @@
 plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 ```
 
-Dev-stack 的 `/skill-forge` 是风险自适应 skill 创建与维护入口：
+Dev-stack 的 `/skill-forge` 是显式调用、spec-first 的 Claude Code skill 创建与维护入口：
 
-- L0 Mechanical：主 Session 直接做可逆、局部、机械变更，运行目标确定性检查，不派发 agent。
-- L1 Routine：默认主 Session 实施；需要时最多使用一个有界 implementation unit，并做相关确定性检查和一次 whole-diff review。
-- L2 Structural：使用 file-backed helper flow；Plan 中的 `risk_level` / `review_policy` 由 `plan_contract.py` 校验，可采用 `final-only` 或 `task-and-final`，只对风险任务进行 task review，并保留 mandatory final review 与至多一次行为 eval。
-- L3 High Risk：使用 strict file-backed path；所有 Task 都必须 `task-and-final`，保留 per-task review、mandatory final review、structural validation 和适用的 behavioral validation。
-- 所有级别都遵循 deterministic-first：能本地运行的 JSON/schema/static/test 检查必须先于 LLM review；失败时先修复或按协议报告，而不是用 reviewer 代替确定性校验。
-- 主 Session 是唯一 Controller，产品写入在第一版仍顺序执行；L2/L3 中 `review-state-helper.py` 是 `review-state.json` 唯一写入者，`next-action` 是状态跳转唯一权威。
-- Review/eval 是 conditional review/eval：L0 不派发，L1 只做 whole-diff review，L2 按 `review_policy` 和风险选择 task review/final review/eval，L3 走严格 task-and-final；行为 eval 只在用户行为、Routing、Gate、Pattern 或 Architecture 改动时运行。
-- 用户会在实施前遇到确认：L2/L3 对正式 Spec 与 YAML Plan 做一次联合批准；L0/L1 若用户已明确授权可逆有界变更且没有待选项，不重复确认，但不可逆、外向、扩范围或需用户选择的动作必须先确认。
-- 第一版不实现并行产品写入、DAG scheduler、外部 orchestration、MCP、daemon、runtime hook 或新的项目外状态体系。
+- CREATE 和 MODIFY 在写入目标 Skill 前完成 Focused 或 Grill 澄清；`grill me` 使用一次一问、建议优先的苏格拉底式追问，并把第一性原理综合写入待确认的 `spec.md`。
+- 用户先确认 Spec，再生成并校验精简 `plan.yaml`。Plan 只在新增删除、依赖、权限、外部副作用或用户选择时再次确认。
+- `plan_contract.py` 拒绝重复 YAML key、Spec hash 漂移、非法路径、Task ownership 重叠、文件前置条件错误、placeholder 和空 checks。
+- 主 Session 是唯一 Controller，按 Task 顺序实施；小型单 Task 可直接执行，多 Task 可按需使用 bounded implementer，但不自动 commit 或改写 Git 历史。
+- AUDIT 始终只读且不创建 run 产物。行为评测只在触发或核心行为变化时运行；独立只读 reviewer 只用于权限、外部副作用、带副作用脚本或高影响核心流程变化。
+- 默认 run 只保留 `spec.md` 与 `plan.yaml`；仅跨会话多 Task 恢复时可增加轻量 `state.json`。不使用风险等级、review-state、Gate、ledger、fix budget、checkpoint commit 或自动 squash。
+- 所有路径都遵循 deterministic-first；不实现并行产品写入、DAG scheduler、外部 orchestration、MCP、daemon、runtime hook 或项目外状态体系。
 
 修改 `/skill-forge` 时需要保持以下内容同步：
 
 - `plugins/dev-stack/skills/skill-forge/SKILL.md`
 - `plugins/dev-stack/skills/skill-forge/references/*.md`
 - `plugins/dev-stack/agents/*.md`
-- `plugins/dev-stack/skills/skill-forge/agents/skill-creator-eval.md`
 - `plugins/dev-stack/skills/skill-forge/scripts/*.py`
 - `plugins/dev-stack/.claude-plugin/plugin.json`
 - `.claude-plugin/marketplace.json`
 - `README.md` 与 `CLAUDE.md`
 
-Dev-stack 的 `/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时需同步这些文件、`plugins/dev-stack/.claude-plugin/plugin.json` 的版本、README / CLAUDE 说明与本地校验命令。`/commit` 必须维持自包含执行边界：不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，不绑定 skill-forge 的 agents、scripts 或 review-state helper，也不新增 runtime hook、daemon 或本地状态机制。最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未进入最终 staged diff 的内容不得影响最终消息。内部协议更新不应误写成 marketplace source、plugin name 或外部依赖变化。
+Dev-stack 的 `/commit` 由 `plugins/dev-stack/skills/commit/SKILL.md` 定义主流程，并由 `plugins/dev-stack/skills/commit/references/change-analysis.md` 与 `plugins/dev-stack/skills/commit/references/commit-policy.md` 维护变更分析和提交策略；修改 `/commit` 时需同步这些文件、`plugins/dev-stack/.claude-plugin/plugin.json` 的版本、README / CLAUDE 说明与本地校验命令。`/commit` 必须维持自包含执行边界：不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，不绑定 skill-forge 的 agents 或 scripts，也不新增 runtime hook、daemon 或本地状态机制。最终 commit message 的 type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未进入最终 staged diff 的内容不得影响最终消息。内部协议更新不应误写成 marketplace source、plugin name 或外部依赖变化。
 
 Nuclio v2 的当前运行时只暴露 `/nuclio:init` 与 `/nuclio:work`，并且 4.0.5 保留 active 三层工作流、知识优先 finish、破坏性的单文件 archive retention、`state.git_branch` 分支锁定、禁止临时 Task 分支/worktree、archive checkpoint commit 与恢复语义、successor 成功归档后对 predecessor 的显式 supersede 收口、bounded subagent 不得停止/接管任务且阻塞时返回 Coordinator 的生命周期边界，并采用场景化增量审查：普通开发可走 mandatory final review 的 final-only，少数失败后果、耦合或验证强度需要额外关注的风险 Task 可选择性加入 task review，高风险 change 仍必须 task-and-final：
 
