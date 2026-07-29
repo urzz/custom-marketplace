@@ -18,8 +18,10 @@
 - 唯一 runtime helper 是 `plugins/nuclio-plugin/scripts/change.py`；它不调用模型、不修改产品文件、不替用户批准。
 - 产品 mutation 和 `init-state` 前必须先把完整 Spec/Plan 写入文件、运行 `validate-plan`，并获得用户自然语言批准。
 - Nuclio runtime Plan 使用 change-level `allowed_paths`；不使用 per-Task files ownership、owner mapping 或 finding owner routing。
-- 每个实施 Task 和每个 approved in-scope repair 恰好一个 selective-stage 本地 checkpoint commit。
-- State 只保存当前恢复事实；Git checkpoint commits 保存实际历史，不把 transcript、完整 diff、完整日志或 State history 复制进 State。
+- `init-state` 冻结当前 attached `git_branch`；所有 State 驱动命令在 branch drift 或 detached HEAD 时 fail closed。
+- Coordinator 与 bounded subagent 都不得创建、切换或重命名分支，不得创建 worktree 执行分支，不得使用类似 `task4-member-auth-dto-vo` 的临时 task 分支。
+- 每个实施 Task 和每个 approved in-scope repair 恰好一个 selective-stage 本地 checkpoint commit；archive 创建恰好一个 helper 验证的 archive commit。
+- State 只保存当前恢复事实；Git checkpoint commits 和 archive commit 保存实际历史，不把 transcript、完整 diff、完整日志或 State history 复制进 State。
 - 小型、边界清晰的单 Task 可由主会话直做；大型、多 Task、跨模块或上下文压力明显的 change 默认委派有界 generic subagent 单元。
 - bounded subagent 不得调用 TaskStop/Stop Task，不得创建、更新、停止或接管 Controller/task-tracking 任务，不得尝试停止自身、父任务、兄弟任务或后台任务；完成、阻塞、超时或需要决策时只能返回 compact result 给主会话。
 - 产品写入按 Task/repair 顺序执行；只读探索或审查才可按需并发。
@@ -27,7 +29,7 @@
 - 验证、风险审查、in-scope repair、mandatory knowledge-candidate analysis、confirmed knowledge maintenance、complete 和 archive 都在 `work` 生命周期内完成。
 - 长期知识只在产品结果验证后、有合格候选且用户确认时写入；无合格候选时记录 `NO_OP`；拒绝知识不影响产品完成或 archive，但精简历史记录必须说明拒绝结果。
 - File-first implementation Gate 必须披露 retention policy：成功 archive 只保留精简 `change.md`，active `plan.yaml`/`state.yaml` 不进入长期 archive。
-- Archive 和 legacy 默认不读；只有当前目标需要时才按路径读取。未来成功 archive 是 one-file archive，历史读取不依赖 archived Plan/State。
+- Archive 和 legacy 默认不读；只有当前目标需要时才按路径读取。未来成功 archive 是 one-file archive，历史读取不依赖 archived Plan/State；archive 自动 commit 的 changed paths 是 active `change.md`/`plan.yaml`/`state.yaml` 与 archive `change.md`，subject 为 `archive(<id>): retain distilled change record`。
 - 当范围扩大需要 successor 接管 predecessor 时，successor `change.md.related_changes` 必须引用 predecessor；active predecessor→successor relation 在 successor 成功归档后由 `supersede` 写入 `state.superseded_by`，再蒸馏 predecessor `change.md` 写入与 State 一致的 archive `related_changes`、superseded Outcome/Validation，并 archive。不得 pre-link frozen predecessor、不得新增 link-related、不得手改 State 或 hash refresh/rebaseline，不得按 `-v2` 名称猜测 successor，不得把 predecessor 旧 acceptance 伪装为成功，失败必须报告残留 active predecessor 路径。
 
 ## 固定字段
@@ -99,11 +101,11 @@
 
 ### 6. session recovery 使用 status 与 next-action
 
-- `User Prompt`: “继续上次那个导出性能优化”，存在唯一 active change，已有 `state.yaml` 和部分 checkpoint commits。
-- `Expected Route`: `work` 读取必要 Spec/Plan 摘要，先运行 `change.py status` 与 `change.py next-action`，再检查 Git HEAD/status/diff 和 checkpoint subjects，执行最小下一步。
+- `User Prompt`: “继续上次那个导出性能优化”，存在唯一 active change，已有 `state.yaml` 和部分 checkpoint commits；另一次演练在别的 branch 或 detached HEAD 上恢复。
+- `Expected Route`: `work` 读取必要 Spec/Plan 摘要，先运行 `change.py status` 与 `change.py next-action`，再检查 frozen branch、Git HEAD/status/diff 和 checkpoint subjects，执行最小下一步；branch drift 或 detached HEAD 直接 fail closed。
 - `Allowed Writes`: 根据当前 `next_action` 允许的三层 artifact 摘要更新、批准范围内产品路径、验证后 archive。
-- `Forbidden Writes`: 重放 transcript 作为事实、读取 agent claim 直接推进、手写 `state.yaml`、默认读取全部 archive/legacy。
-- `Key Assertions`: 恢复依赖 `state.yaml` 当前状态、Git 和确定性证据；若 Spec/Plan hash、revision、HEAD 或 checkpoint drift，fail closed。
+- `Forbidden Writes`: 重放 transcript 作为事实、读取 agent claim 直接推进、手写 `state.yaml`、默认读取全部 archive/legacy、自动切回分支、创建/切换/重命名分支或创建 worktree。
+- `Key Assertions`: 恢复依赖 `state.yaml` 当前状态、frozen branch、Git 和确定性证据；若 branch drift、detached HEAD、Spec/Plan hash、revision、HEAD 或 checkpoint drift，fail closed。
 
 ### 7. 非空 index 与预存 allowed-path 修改
 
@@ -123,11 +125,11 @@
 
 ### 9. checkpoint parent/subject/count/range mismatch
 
-- `User Prompt`: Task 后存在两个 commits、commit parent 不是 task base、subject 与 Plan 不一致，或 commit range 为空。
-- `Expected Route`: `work` 调用 `record-task` 时 helper 拒绝，返回具体 checkpoint mismatch，并要求人工处理。
+- `User Prompt`: Task 后存在两个 commits、commit parent 不是 task base、subject 与 Plan 不一致，commit range 为空，或实施者尝试先切到 `task4-member-auth-dto-vo` 这类临时 task 分支。
+- `Expected Route`: `work` 调用 `record-task` 时 helper 拒绝 checkpoint mismatch；若执行不在 frozen branch 上，State 命令返回 branch drift 并要求人工处理。
 - `Allowed Writes`: none；只有用户明确决定后才可按普通 Git 操作处理。
-- `Forbidden Writes`: 自动 squash/reset/rebase/stash、接受错误 subject、把多个 commits 当一个 Task checkpoint、记录空 checkpoint。
-- `Key Assertions`: 每个实施 Task 恰好一个 selective-stage 本地 checkpoint commit；parent、subject、count、range、index 和 validation 必须全部匹配。
+- `Forbidden Writes`: 自动 squash/reset/rebase/stash、接受错误 subject、把多个 commits 当一个 Task checkpoint、记录空 checkpoint、创建/切换/重命名分支、创建 worktree 执行分支、使用临时 task 分支。
+- `Key Assertions`: 每个实施 Task 恰好一个 selective-stage 本地 checkpoint commit；parent、subject、count、range、index 和 validation 必须全部匹配，frozen branch 也必须匹配。
 
 ### 10. 超出 allowed_paths
 
@@ -187,11 +189,11 @@
 
 ### 17. complete 与 archive
 
-- `User Prompt`: “验证和审查都通过了，完成并归档这个 change”。
-- `Expected Route`: `work` 先报告产品结果、changed paths、commands/exit codes 和关键输出摘要；完成 mandatory knowledge-candidate analysis 并记录写入、拒绝或 `NO_OP`；调用 `complete` 后把 `change.md` 蒸馏为含 frontmatter、Goal、Outcome、Validation、Knowledge Updates 的精简历史记录，再调用 fail-closed `archive`。
-- `Allowed Writes`: active `change.md` 精简 Outcome/Validation/Knowledge Updates、helper 写终态 `state.yaml`、`.dev-docs/changes/archive/<id>/change.md`。
-- `Forbidden Writes`: 未满足 Tasks/reviews/validation 就 complete、archive 前未披露 retention policy、archive 前未蒸馏 `change.md`、复制完整日志、把 Plan/State 长期保留到 archive 或隐藏备份、自动 squash/reset/rebase/stash。
-- `Key Assertions`: complete 要求 Tasks、必要 task/final review、whole-change validation、HEAD/State/Spec/Plan identity 和 blocker 条件全部满足；archive 前验证 completed State、identity、精简历史形态和 exact artifact set；成功 archive 只保留精简 `change.md`，unexpected artifact 或 undistilled record fail closed。
+- `User Prompt`: “验证和审查都通过了，完成并归档这个 change”；附加演练覆盖 archive 自动 commit、commit 前中断恢复和在 wrong branch 上重跑。
+- `Expected Route`: `work` 先报告产品结果、changed paths、commands/exit codes 和关键输出摘要；完成 mandatory knowledge-candidate analysis 并记录写入、拒绝或 `NO_OP`；调用 `complete` 后把 `change.md` 蒸馏为含 frontmatter、Goal、Outcome、Validation、Knowledge Updates 的精简历史记录，再在 frozen branch 调用 fail-closed `archive`，成功时记录 archive commit SHA。
+- `Allowed Writes`: active `change.md` 精简 Outcome/Validation/Knowledge Updates、helper 写终态 `state.yaml`、`.dev-docs/changes/archive/<id>/change.md`、由 helper 创建的一个 archive commit。
+- `Forbidden Writes`: 未满足 Tasks/reviews/validation 就 complete、archive 前未披露 retention policy、archive 前未蒸馏 `change.md`、复制完整日志、把 Plan/State 长期保留到 archive 或隐藏备份、自动 squash/reset/rebase/stash、push、删除分支、切换回原分支、在 wrong branch 重跑 archive。
+- `Key Assertions`: complete 要求 Tasks、必要 task/final review、whole-change validation、HEAD/State/Spec/Plan identity 和 blocker 条件全部满足；archive 前验证 completed State、frozen branch、identity、精简历史形态和 exact artifact set；成功 archive 只保留精简 `change.md`，并创建恰好一个 subject 为 `archive(<id>): retain distilled change record` 的 archive commit，changed paths 为 active change.md/plan.yaml/state.yaml 与 archive change.md；pending state 写失败回滚 active 且 HEAD 不变，commit 前 moved/pruned staging/commit 中断恢复通过同一 archive 命令在 frozen branch 重跑；archive commit 已成功后的 final state prune/final prune 失败要求 manual recovery/人工检查，不指导直接 rerun；wrong branch 或 detached HEAD fail closed；unexpected artifact 或 undistilled record fail closed。
 
 ### 18. 多个 active change 与 legacy 边界
 
@@ -213,8 +215,11 @@
 - 固定 token、哈希、approval JSON 和身份短语都不是 v2 日常批准要求。
 - Plan 使用 change-level `allowed_paths`，不创建 per-Task files ownership、owner mapping 或 finding owner routing。
 - 每个实施 Task 和每个 approved repair 恰好一个 selective-stage checkpoint commit。
+- Archive 成功必须创建恰好一个 helper 验证的 archive commit，subject、parent、changed paths、HEAD 和空 index 全部匹配；成功后 archive 只保留 `change.md`。
+- pending state 写失败回滚 active 且 HEAD 不变；移动/剪裁后、archive commit 成功前的 staging/commit 中断按 recovery action 在 frozen branch 重跑；archive commit 已成功后的 final state prune/final prune 失败要求 manual recovery/人工检查，不指导直接 rerun；commit 验证失败要求 manual inspection。
 - State 只保存当前恢复事实，不保存完整 transition history、diff、测试日志、agent transcript 或文件内容 snapshot。
-- 恢复先使用 `change.py status` 与 `change.py next-action`，再结合 Git 和确定性证据。
+- 恢复先使用 `change.py status` 与 `change.py next-action`，再结合 frozen branch、Git 和确定性证据；branch drift 或 detached HEAD fail closed。
+- Coordinator 与 bounded subagent 都不得创建、切换或重命名分支，不得创建 worktree 执行分支，不得使用类似 `task4-member-auth-dto-vo` 的临时 task 分支。
 - 不创建 `.dev-docs/changes/index.md`。
 - 不创建持久过程 JSON、隐藏运行时目录、MCP、daemon、runtime hook、项目级 `.claude/` 或 `.nuclio/`。
 - 小型单 Task 可主会话直做；大型、多 Task 或跨模块 change 默认委派有界 generic subagent 单元。
@@ -228,8 +233,8 @@
 - File-first implementation Gate 必须披露 successful archive 只保留精简 `change.md`，active `plan.yaml`/`state.yaml` 不进入长期 archive。
 - `complete` 后、`archive` 前必须把 `change.md` 蒸馏为含 completed frontmatter、Goal、Outcome、Validation、Knowledge Updates 的精简历史记录。
 - Archive 成功后只保留 `.dev-docs/changes/archive/<id>/change.md`；不得长期保留 archived `plan.yaml`/`state.yaml`、隐藏备份或 archive manifest。
-- Archive 必须在 destructive pruning 前验证 completed 或 superseded State、Plan/HEAD identity、精简历史形态、superseded successor takeover 语义、archive `related_changes` 与 `state.superseded_by` 一致和 exact artifact set；失败 fail closed 或报告 precise remaining artifacts。
-- successor 成功归档后必须收口 predecessor：successor `change.md` backlink、`supersede` 写入 `state.superseded_by`、`ARCHIVE_SUPERSEDED`、与 State 一致的 predecessor archive `related_changes`、superseded Outcome/Validation 和 one-file archive 都必须成立。
+- Archive 必须在 destructive pruning 前验证 completed 或 superseded State、frozen branch、Plan/HEAD identity、精简历史形态、superseded successor takeover 语义、archive `related_changes` 与 `state.superseded_by` 一致和 exact artifact set；失败 fail closed 或报告 precise remaining artifacts。
+- successor 成功归档后必须收口 predecessor：successor `change.md` backlink、`supersede` 写入 `state.superseded_by`、`ARCHIVE_SUPERSEDED`、与 State 一致的 predecessor archive `related_changes`、superseded Outcome/Validation、archive 自动 commit 和 one-file archive 都必须成立。
 - 不得按 `-v2` 名称、recency、聊天 transcript 或 predecessor 单向关联猜测 successor，不得 pre-link frozen predecessor、link-related、hash refresh/rebaseline 或手写 State，不得无 successor 强制归档，不得把 predecessor 旧 acceptance 伪装为成功。
 - predecessor 收口失败必须报告残留 active predecessor 路径，不得宣称完全收口。
 - Archive 和 legacy 默认不读；legacy 只能整体移动，不保留双栈。

@@ -313,6 +313,216 @@ class ChangeHelperTests(unittest.TestCase):
         )
         return change
 
+    def git_head(self):
+        return git(self.root, "rev-parse", "HEAD").stdout.strip()
+
+    def git_branch(self):
+        return git(self.root, "branch", "--show-current").stdout.strip()
+
+    def assert_archive_commit(self, before_head, *, change_id="alpha-change", superseded=False):
+        head = self.git_head()
+        self.assertNotEqual(head, before_head)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD^").stdout.strip(), before_head)
+        self.assertEqual(git(self.root, "log", "-1", "--format=%s").stdout.rstrip("\n"), f"archive({change_id}): retain distilled change record")
+        changed = sorted(git(self.root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").stdout.splitlines())
+        expected_paths = {
+            f".dev-docs/changes/{change_id}/change.md",
+            f".dev-docs/changes/{change_id}/plan.yaml",
+            f".dev-docs/changes/{change_id}/state.yaml",
+            f".dev-docs/changes/archive/{change_id}/change.md",
+        }
+        self.assertEqual(set(changed), expected_paths, changed)
+        self.assertEqual(git(self.root, "diff", "--cached", "--name-only").stdout, "")
+        self.assertNotIn(f".dev-docs/changes/archive/{change_id}/state.yaml", git(self.root, "status", "--porcelain=v1").stdout)
+        return head
+
+    def test_init_state_freezes_attached_branch_and_rejects_detached_head(self):
+        change_dir = self.prepare_plan_state_repo()
+        state = load_change_module().read_yaml_file(change_dir / "state.yaml")
+        self.assertEqual(state["git_branch"], self.git_branch())
+
+        self.init_git()
+        change_dir = self.create_change()
+        self.write_plan()
+        git(self.root, "add", ".dev-docs/changes/alpha-change/change.md", ".dev-docs/changes/alpha-change/plan.yaml")
+        git(self.root, "commit", "-m", "docs: approve alpha plan")
+        git(self.root, "checkout", "--detach", "HEAD")
+        result = run_change(self.root, "init-state", "--id", "alpha-change")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(stderr_json(result)["code"], "DETACHED_HEAD")
+        self.assertFalse((change_dir / "state.yaml").exists())
+
+    def test_state_commands_fail_closed_on_branch_drift_and_detached_head(self):
+        change_dir = self.prepare_plan_state_repo()
+        before = (change_dir / "state.yaml").read_text(encoding="utf-8")
+        frozen_branch = self.git_branch()
+        git(self.root, "checkout", "-b", "drift-branch")
+        drift = run_change(self.root, "status", "--id", "alpha-change")
+        self.assertNotEqual(drift.returncode, 0)
+        self.assertEqual(stderr_json(drift)["code"], "BRANCH_DRIFT")
+        show_state = run_change(self.root, "show", "--id", "alpha-change", "--artifact", "state")
+        self.assertNotEqual(show_state.returncode, 0)
+        self.assertEqual(stderr_json(show_state)["code"], "BRANCH_DRIFT")
+        list_changes = run_change(self.root, "list")
+        self.assertNotEqual(list_changes.returncode, 0)
+        self.assertEqual(stderr_json(list_changes)["code"], "BRANCH_DRIFT")
+        self.assertEqual((change_dir / "state.yaml").read_text(encoding="utf-8"), before)
+        git(self.root, "checkout", frozen_branch)
+        git(self.root, "checkout", "--detach", "HEAD")
+        detached = run_change(self.root, "next-action", "--id", "alpha-change")
+        self.assertNotEqual(detached.returncode, 0)
+        self.assertEqual(stderr_json(detached)["code"], "DETACHED_HEAD")
+        self.assertEqual((change_dir / "state.yaml").read_text(encoding="utf-8"), before)
+
+    def test_archive_creates_single_checkpoint_commit_and_leaves_unrelated_dirty_unstaged(self):
+        change_dir = self.complete_alpha_change()
+        original_change = self.write_distilled_alpha_record()
+        original_text = original_change.read_text(encoding="utf-8")
+        (self.root / "notes.txt").write_text("unrelated dirty\n", encoding="utf-8")
+        before_head = self.git_head()
+
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+
+        self.assertEqual(archive.returncode, 0, archive.stderr)
+        payload = stdout_json(archive)
+        self.assertEqual(payload["archive_commit"], self.git_head())
+        self.assertEqual(payload["archive_subject"], "archive(alpha-change): retain distilled change record")
+        self.assertEqual(payload["retained_artifacts"], ["change.md"])
+        self.assert_archive_commit(before_head)
+        archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
+        self.assertFalse(change_dir.exists())
+        self.assertEqual((archived_dir / "change.md").read_text(encoding="utf-8"), original_text)
+        self.assertEqual([path.name for path in archived_dir.iterdir()], ["change.md"])
+        self.assertIn("?? notes.txt", git(self.root, "status", "--porcelain=v1").stdout)
+
+    def test_archive_commit_recovery_after_move_and_prune_uses_same_command_once(self):
+        change_dir = self.complete_alpha_change()
+        self.write_distilled_alpha_record()
+        change_module = load_change_module()
+        real_commit = change_module.git
+
+        def fail_commit(paths, *args, **kwargs):
+            if args and args[0] == "commit":
+                raise change_module.NuclioError("SIMULATED_COMMIT_INTERRUPT", "simulated commit interruption")
+            return real_commit(paths, *args, **kwargs)
+
+        before_head = self.git_head()
+        stderr = io.StringIO()
+        with mock.patch.object(change_module, "git", fail_commit):
+            with contextlib.redirect_stderr(stderr):
+                result = change_module.main(["--project-root", str(self.root), "archive", "--id", "alpha-change"])
+        self.assertNotEqual(result, 0)
+        payload = json.loads(stderr.getvalue())
+        self.assertEqual(payload["code"], "ARCHIVE_COMMIT_FAILED")
+        self.assertEqual(payload["details"]["archive_path"], ".dev-docs/changes/archive/alpha-change")
+        self.assertEqual(payload["details"]["remaining_artifacts"], ["change.md", "state.yaml"])
+        self.assertEqual(payload["details"]["recovery_action"], "rerun archive --id alpha-change on the frozen branch")
+        self.assertFalse(change_dir.exists())
+        self.assertEqual(self.git_head(), before_head)
+
+        recovered = run_change(self.root, "archive", "--id", "alpha-change")
+
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assert_archive_commit(before_head)
+        self.assertEqual(git(self.root, "rev-list", "--count", f"{before_head}..HEAD").stdout.strip(), "1")
+        archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
+        self.assertEqual([path.name for path in archived_dir.iterdir()], ["change.md"])
+
+    def test_archive_pending_state_write_failure_restores_active_and_rerun_commits_once(self):
+        change_dir = self.complete_alpha_change()
+        self.write_distilled_alpha_record()
+        change_module = load_change_module()
+        real_dump = change_module.dump_yaml_atomic
+        target_state = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change" / "state.yaml"
+
+        def fail_pending_state(path, data):
+            if path == target_state:
+                raise change_module.NuclioError("SIMULATED_PENDING_STATE_WRITE", "simulated pending state write failure")
+            return real_dump(path, data)
+
+        before_head = self.git_head()
+        stderr = io.StringIO()
+        with mock.patch.object(change_module, "dump_yaml_atomic", fail_pending_state):
+            with contextlib.redirect_stderr(stderr):
+                result = change_module.main(["--project-root", str(self.root), "archive", "--id", "alpha-change"])
+        self.assertNotEqual(result, 0)
+        payload = json.loads(stderr.getvalue())
+        self.assertEqual(payload["code"], "ARCHIVE_PENDING_STATE_FAILED")
+        self.assertEqual(payload["details"]["active_path"], ".dev-docs/changes/alpha-change")
+        self.assertTrue(change_dir.exists())
+        self.assertFalse((self.root / ".dev-docs" / "changes" / "archive" / "alpha-change").exists())
+        self.assertEqual(sorted(path.name for path in change_dir.iterdir()), ["change.md", "plan.yaml", "state.yaml"])
+        self.assertEqual(self.git_head(), before_head)
+
+        recovered = run_change(self.root, "archive", "--id", "alpha-change")
+
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assert_archive_commit(before_head)
+        self.assertEqual(git(self.root, "rev-list", "--count", f"{before_head}..HEAD").stdout.strip(), "1")
+        archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
+        self.assertEqual([path.name for path in archived_dir.iterdir()], ["change.md"])
+
+    def test_superseded_archive_creates_commit_with_same_safety_constraints(self):
+        change_dir = self.prepare_supersede_fixture(successor_archived=True)
+        self.assertEqual(run_change(self.root, "supersede", "--id", "alpha-change", "--successor-id", "beta-change").returncode, 0)
+        self.write_distilled_alpha_record(
+            outcome="Alpha was superseded and taken over by beta-change; unfinished scope remains with successor.",
+            validation="Not a full alpha acceptance PASS; only supersession facts were verified.",
+            related_changes=["beta-change"],
+        )
+        before_head = self.git_head()
+
+        archive = run_change(self.root, "archive", "--id", "alpha-change")
+
+        self.assertEqual(archive.returncode, 0, archive.stderr)
+        self.assert_archive_commit(before_head, superseded=True)
+        self.assertFalse(change_dir.exists())
+        archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
+        self.assertEqual([path.name for path in archived_dir.iterdir()], ["change.md"])
+
+    def test_archive_recovery_fails_closed_on_branch_drift_after_move(self):
+        self.complete_alpha_change()
+        self.write_distilled_alpha_record()
+        change_module = load_change_module()
+        real_commit = change_module.git
+
+        def fail_commit(paths, *args, **kwargs):
+            if args and args[0] == "commit":
+                raise change_module.NuclioError("SIMULATED_COMMIT_INTERRUPT", "simulated commit interruption")
+            return real_commit(paths, *args, **kwargs)
+
+        with mock.patch.object(change_module, "git", fail_commit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                result = change_module.main(["--project-root", str(self.root), "archive", "--id", "alpha-change"])
+        self.assertNotEqual(result, 0)
+        git(self.root, "checkout", "-b", "drift-branch")
+        drift = run_change(self.root, "archive", "--id", "alpha-change")
+        self.assertNotEqual(drift.returncode, 0)
+        self.assertEqual(stderr_json(drift)["code"], "BRANCH_DRIFT")
+        archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
+        self.assertEqual(sorted(path.name for path in archived_dir.iterdir()), ["change.md", "state.yaml"])
+
+    def test_archive_commit_verification_failures_report_recovery_details(self):
+        self.complete_alpha_change()
+        self.write_distilled_alpha_record()
+        change_module = load_change_module()
+        real_commit_parent = change_module.commit_parent
+
+        def wrong_parent(paths, commit="HEAD"):
+            if commit == "HEAD":
+                return "0" * 40
+            return real_commit_parent(paths, commit)
+
+        stderr = io.StringIO()
+        with mock.patch.object(change_module, "commit_parent", wrong_parent):
+            with contextlib.redirect_stderr(stderr):
+                result = change_module.main(["--project-root", str(self.root), "archive", "--id", "alpha-change"])
+        self.assertNotEqual(result, 0)
+        payload = json.loads(stderr.getvalue())
+        self.assertEqual(payload["code"], "ARCHIVE_COMMIT_PARENT_MISMATCH")
+        self.assertEqual(payload["details"]["archive_path"], ".dev-docs/changes/archive/alpha-change")
+        self.assertEqual(payload["details"]["recovery_action"], "manual inspection required; do not rerun until index/HEAD are corrected")
+
     def test_main_and_subcommand_help_expose_plan_state_commands_and_no_set_status(self):
         main = subprocess.run(
             [sys.executable, str(SCRIPT), "--help"],
@@ -1004,7 +1214,7 @@ class ChangeHelperTests(unittest.TestCase):
         real_unlink = change_module.Path.unlink
 
         def fail_state_unlink(path, *args, **kwargs):
-            if path == self.root / ".dev-docs" / "changes" / "archive" / "alpha-change" / "state.yaml":
+            if path == self.root / ".dev-docs" / "changes" / "archive" / "alpha-change" / "plan.yaml":
                 raise OSError("simulated prune failure")
             return real_unlink(path, *args, **kwargs)
 
@@ -1017,11 +1227,11 @@ class ChangeHelperTests(unittest.TestCase):
         payload = json.loads(stderr.getvalue())
         self.assertEqual(payload["code"], "ARCHIVE_PRUNE_FAILED")
         self.assertEqual(payload["details"]["archive_path"], ".dev-docs/changes/archive/alpha-change")
-        self.assertEqual(payload["details"]["remaining_artifacts"], ["change.md", "state.yaml"])
+        self.assertEqual(payload["details"]["remaining_artifacts"], ["change.md", "plan.yaml", "state.yaml"])
         self.assertFalse(change_dir.exists())
         archived_dir = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
         self.assertTrue((archived_dir / "change.md").exists())
-        self.assertFalse((archived_dir / "plan.yaml").exists())
+        self.assertTrue((archived_dir / "plan.yaml").exists())
         self.assertTrue((archived_dir / "state.yaml").exists())
 
     def test_validation_fail_requests_repair_decision(self):

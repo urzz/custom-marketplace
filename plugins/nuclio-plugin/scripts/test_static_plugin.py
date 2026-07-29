@@ -357,6 +357,17 @@ def stdlib_names() -> set[str]:
     return names
 
 
+def python_function_source(text: str, function_name: str) -> str:
+    tree = ast.parse(text)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            source = ast.get_source_segment(text, node)
+            if source is None:
+                break
+            return source
+    raise AssertionError(f"missing function {function_name}")
+
+
 # Structure tests
 
 class StaticPluginStructureTests(unittest.TestCase):
@@ -579,6 +590,76 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
                 text = text.replace("cannot claim full closure", "")
                 path.write_text(text, encoding="utf-8")
 
+        def remove_state_branch_identity_helper_contract(plugin: Path) -> None:
+            change = plugin / "scripts" / "change.py"
+            text = change.read_text(encoding="utf-8")
+            text = re.sub(r"(?ms)^def git_branch\(.*?\n(?=def require_frozen_branch)", "", text)
+            text = re.sub(r"(?ms)^def require_frozen_branch\(.*?\n(?=def git_commit)", "def require_frozen_branch(paths: Paths, state: dict[str, Any]) -> str:\n    return 'main'\n\n\n", text)
+            text = text.replace('"git_branch": branch,', '"branch_note": branch,')
+            text = text.replace("branch = git_branch(paths)\n    head = git_head(paths)", "head = git_head(paths)")
+            change.write_text(text, encoding="utf-8")
+
+        def remove_runtime_branch_worktree_prohibitions(plugin: Path) -> None:
+            for rel in [
+                "skills/work/SKILL.md",
+                "references/workflow.md",
+                "references/change-format.md",
+                "references/context-hygiene.md",
+                "references/eval-prompts.md",
+            ]:
+                path = plugin / rel
+                text = path.read_text(encoding="utf-8")
+                text = text.replace("git_branch", "frozen git marker")
+                text = text.replace("branch identity", "git identity")
+                text = text.replace("BRANCH_DRIFT", "GIT_DRIFT")
+                text = text.replace("DETACHED_HEAD", "UNATTACHED_HEAD")
+                text = text.replace("task4-member-auth-dto-vo", "task temp branch")
+                text = re.sub(r"(?m)^.*(?:不得创建、切换或重命名分支|不得创建 worktree|must not create, switch, or rename branches|must not create a worktree|创建/切换/重命名分支|worktree 执行分支|temporary task branch|临时 task 分支).*$\n?", "", text)
+                path.write_text(text, encoding="utf-8")
+
+        def remove_archive_commit_and_recovery_contract(plugin: Path) -> None:
+            for rel in [
+                "skills/work/SKILL.md",
+                "references/workflow.md",
+                "references/change-format.md",
+                "references/eval-prompts.md",
+            ]:
+                path = plugin / rel
+                text = path.read_text(encoding="utf-8")
+                replacements = {
+                    "archive commit": "archive record",
+                    "archive 自动 commit": "archive record",
+                    "active `change.md`、active `plan.yaml`、active `state.yaml` and archive `change.md`": "archive `change.md`",
+                    "active change.md/plan.yaml/state.yaml 与 archive change.md": "archive change.md",
+                    "pending state 写失败": "archive interruption",
+                    "pending-state": "archive interruption",
+                    "同一 archive 命令": "archive recovery step",
+                    "same archive command": "archive recovery step",
+                    "同命令": "recovery step",
+                    "one-file archive": "archive record",
+                    "只保留精简 `change.md`": "保留精简记录",
+                    "只保留 `.dev-docs/changes/archive/<id>/change.md`": "保留 archive record",
+                    "retained change.md": "retained archive record",
+                }
+                for old, new in replacements.items():
+                    text = text.replace(old, new)
+                path.write_text(text, encoding="utf-8")
+
+        def weaken_archive_helper_changed_path_guard(plugin: Path) -> None:
+            change = plugin / "scripts" / "change.py"
+            text = change.read_text(encoding="utf-8")
+            text = text.replace("return archive_active_pathspecs(change_id) + archive_target_pathspecs(change_id)", "return archive_target_pathspecs(change_id)")
+            text = text.replace("return set(archive_active_pathspecs(change_id) + archive_target_pathspecs(change_id))", "return set(archive_target_pathspecs(change_id))")
+            text = text.replace("missing = sorted(allowed_paths - set(changed_paths))", "missing = []")
+            change.write_text(text, encoding="utf-8")
+
+        def weaken_archive_pending_state_rollback(plugin: Path) -> None:
+            change = plugin / "scripts" / "change.py"
+            text = change.read_text(encoding="utf-8")
+            text = text.replace("target.rename(source)", "pass  # rollback disabled", 1)
+            text = text.replace("active change restored", "active change not restored")
+            change.write_text(text, encoding="utf-8")
+
         def size_based_full_reread_default(plugin: Path) -> None:
             append_text(
                 plugin / "references" / "eval-prompts.md",
@@ -612,6 +693,11 @@ class StaticPluginMutantEvidenceTests(unittest.TestCase):
             "remove successor backlink guidance": remove_successor_backlink_guidance,
             "restore link-related/hash refresh guidance": restore_hash_refresh_guidance,
             "remove residual active reporting": remove_archived_residual_active_reporting,
+            "remove State branch identity helper contract": remove_state_branch_identity_helper_contract,
+            "remove runtime branch/worktree prohibitions": remove_runtime_branch_worktree_prohibitions,
+            "remove archive commit and recovery contract": remove_archive_commit_and_recovery_contract,
+            "weaken archive helper changed-path guard": weaken_archive_helper_changed_path_guard,
+            "weaken archive pending-state rollback": weaken_archive_pending_state_rollback,
             "size-based mandatory full reread default": size_based_full_reread_default,
             "unconditional final line-by-line reread": unconditional_final_line_by_line_reread,
         }.items():
@@ -919,6 +1005,46 @@ class RuntimeHelperTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIn(command, text)
 
+    def test_change_py_state_branch_identity_guard_is_mechanical(self):
+        change_module = load_change_module()
+        self.assertIn("git_branch", read_text(CHANGE))
+        self.assertIn("BRANCH_DRIFT", read_text(CHANGE))
+        self.assertIn("DETACHED_HEAD", read_text(CHANGE))
+        self.assertEqual(tuple(change_module.ARCHIVE_ACTIVE_ARTIFACTS), ("change.md", "plan.yaml", "state.yaml"))
+
+        init_source = python_function_source(read_text(CHANGE), "cmd_init_state")
+        verified_source = python_function_source(read_text(CHANGE), "load_verified_state_and_plan")
+        archive_verified_source = python_function_source(read_text(CHANGE), "load_archive_verified_state_and_plan")
+        status_source = python_function_source(read_text(CHANGE), "cmd_show") + python_function_source(read_text(CHANGE), "cmd_list")
+        start_task_source = python_function_source(read_text(CHANGE), "cmd_start_task")
+        record_task_source = python_function_source(read_text(CHANGE), "cmd_record_task")
+        archive_commit_source = python_function_source(read_text(CHANGE), "validate_archive_commit") + python_function_source(read_text(CHANGE), "complete_archive_commit")
+
+        for required in [
+            "branch = git_branch(paths)",
+            '"git_branch": branch',
+            'raise NuclioError("DETACHED_HEAD"',
+        ]:
+            with self.subTest(init_required=required):
+                self.assertIn(required, init_source + python_function_source(read_text(CHANGE), "git_branch"))
+        self.assertIn('frozen = state.get("git_branch")', python_function_source(read_text(CHANGE), "require_frozen_branch"))
+        self.assertIn('raise NuclioError("BRANCH_IDENTITY_MISSING"', python_function_source(read_text(CHANGE), "require_frozen_branch"))
+        self.assertIn('raise NuclioError("BRANCH_DRIFT"', python_function_source(read_text(CHANGE), "require_frozen_branch"))
+        for source_name, source in {
+            "verified state": verified_source,
+            "archive verified state": archive_verified_source,
+            "show/list state reads": status_source,
+            "archive commit/recovery": archive_commit_source,
+        }.items():
+            with self.subTest(source=source_name):
+                self.assertIn("require_frozen_branch(paths, state)", source)
+        for source_name, source in {
+            "start-task": start_task_source,
+            "record-task": record_task_source,
+        }.items():
+            with self.subTest(source=source_name):
+                self.assertIn("load_verified_state_and_plan(paths", source)
+
     def test_change_py_plan_schema_rejects_owner_routing_and_second_state_model(self):
         change_module = load_change_module()
         self.assertEqual(set(change_module.COMMANDS), EXPECTED_CHANGE_COMMANDS)
@@ -948,6 +1074,58 @@ class RuntimeHelperTests(unittest.TestCase):
         self.assertEqual(set(change_module.DELEGATES), {"main", "subagent", "auto"})
         self.assertEqual(set(change_module.REVIEW_POLICIES), {"self", "final", "task-and-final"})
         self.assertIn("in-scope", read_text(CHANGE))
+
+    def test_runtime_docs_forbid_branch_and_worktree_operations(self):
+        corpus_paths = [
+            SKILLS / "work" / "SKILL.md",
+            REFERENCES / "workflow.md",
+            REFERENCES / "change-format.md",
+            REFERENCES / "context-hygiene.md",
+            REFERENCES / "eval-prompts.md",
+        ]
+        corpus_by_path = {path: read_text(path) for path in corpus_paths}
+        corpus = "\n".join(corpus_by_path.values())
+        semantic_groups = {
+            "State git_branch branch identity": ["git_branch", "frozen branch", "BRANCH_DRIFT", "DETACHED_HEAD"],
+            "Coordinator branch/worktree prohibition": ["Coordinator", "不得创建、切换或重命名分支", "不得创建 worktree"],
+            "subagent branch/worktree prohibition": ["bounded subagent", "创建/切换/重命名分支", "创建 worktree"],
+            "task temporary branch example": ["task4-member-auth-dto-vo", "临时 task 分支"],
+            "same frozen branch execution": ["state.git_branch", "frozen attached branch"],
+        }
+        for group, needles in semantic_groups.items():
+            with self.subTest(group=group):
+                missing = [needle for needle in needles if needle not in corpus]
+                self.assertFalse(missing, f"missing branch/worktree contract anchors for {group}: {missing}")
+        self.assertRegex(corpus, r"(?s)init-state.*?git_branch.*?(?:BRANCH_DRIFT|DETACHED_HEAD)")
+        self.assertRegex(corpus, r"(?s)(?:Coordinator|主会话).*?(?:subagent|bounded subagent).*?(?:不得|must not).*?(?:创建|create).*?(?:分支|branch).*?(?:worktree|工作树)")
+        self.assertRegex(corpus, r"(?s)(?:task4-member-auth-dto-vo).*?(?:临时 task 分支|temporary task branch)")
+        for path, text in corpus_by_path.items():
+            with self.subTest(path=path.relative_to(ROOT).as_posix()):
+                self.assertNotRegex(text, r"(?i)(?:create|switch|rename|checkout|创建|切换|重命名).{0,60}(?:task branch|临时 task 分支).{0,60}(?:allowed|允许|可)")
+
+    def test_runtime_docs_cover_archive_commit_recovery_and_one_file_retention(self):
+        corpus_paths = [
+            SKILLS / "work" / "SKILL.md",
+            REFERENCES / "workflow.md",
+            REFERENCES / "change-format.md",
+            REFERENCES / "eval-prompts.md",
+        ]
+        corpus = "\n".join(read_text(path) for path in corpus_paths)
+        semantic_groups = {
+            "automatic archive checkpoint commit": ["archive commit", "archive(<id>): retain distilled change record", "helper 验证"],
+            "complete changed paths": ["active `change.md`", "active `plan.yaml`", "active `state.yaml`", "archive `change.md`"],
+            "pending-state rollback": ["pending state 写失败", "回滚 active", "active 三件套"],
+            "same-command recovery": ["同一 archive 命令", "frozen branch", "rerun archive"],
+            "one-file retention": ["one-file archive", "只保留", ".dev-docs/changes/archive/<id>/change.md"],
+            "wrong branch fail-closed": ["wrong branch", "BRANCH_DRIFT", "DETACHED_HEAD"],
+        }
+        for group, needles in semantic_groups.items():
+            with self.subTest(group=group):
+                missing = [needle for needle in needles if needle not in corpus]
+                self.assertFalse(missing, f"missing archive contract anchors for {group}: {missing}")
+        self.assertRegex(corpus, r"(?s)Archive.*?commit.*?changed paths.*?active.*?change\.md.*?plan\.yaml.*?state\.yaml.*?archive.*?change\.md")
+        self.assertRegex(corpus, r"(?s)pending state 写失败.*?(?:回滚|恢复).*?active.*?(?:同一 archive 命令|same archive command|rerun archive)")
+        self.assertRegex(corpus, r"(?s)(?:Archive 成功|Successful archive).*?(?:只保留|keeps only).*?change\.md")
 
     def test_archive_hash_transition_contract_is_two_phase(self):
         workflow_archive = markdown_section(read_text(REFERENCES / "workflow.md"), "完成与 archive")
@@ -985,6 +1163,56 @@ class RuntimeHelperTests(unittest.TestCase):
         self.assertIn("require_distilled_change_record(paths, change_id)", archive_helper)
         self.assertNotIn("spec_path_for", archive_helper)
         self.assertNotIn("state.get(\"spec_sha256\") != sha256_file(spec_path)", archive_helper)
+
+    def test_change_py_archive_helper_enforces_commit_paths_and_recovery_contract(self):
+        text = read_text(CHANGE)
+        active_source = python_function_source(text, "archive_active_pathspecs")
+        stage_source = python_function_source(text, "archive_stage_pathspecs")
+        allowed_source = python_function_source(text, "archive_allowed_commit_paths")
+        validate_source = python_function_source(text, "validate_archive_commit")
+        archive_source = python_function_source(text, "cmd_archive")
+        pending_source = python_function_source(text, "write_archive_pending_state")
+        recovery_source = python_function_source(text, "load_archive_recovery_state")
+
+        for required in [
+            'f".dev-docs/changes/{change_id}/{name}"',
+            "ARCHIVE_ACTIVE_ARTIFACTS",
+        ]:
+            with self.subTest(active_pathspec_required=required):
+                self.assertIn(required, active_source)
+        self.assertIn("archive_active_pathspecs(change_id) + archive_target_pathspecs(change_id)", stage_source)
+        self.assertIn("archive_active_pathspecs(change_id) + archive_target_pathspecs(change_id)", allowed_source)
+        for required in [
+            "missing = sorted(allowed_paths - set(changed_paths))",
+            'raise_archive_recoverable("ARCHIVE_COMMIT_PATH_MISMATCH"',
+            "require_frozen_branch(paths, state)",
+            "if not index_is_clean(paths):",
+        ]:
+            with self.subTest(validate_required=required):
+                self.assertIn(required, validate_source)
+        for required in [
+            '"status": "COMMIT_PENDING"',
+            '"archive_base": archive_base',
+            '"retained_artifacts": list(ARCHIVE_RETAINED_ARTIFACTS)',
+            'ARCHIVE_RECOVERY_ACTION.format(change_id=change_id)',
+        ]:
+            with self.subTest(pending_required=required):
+                self.assertIn(required, pending_source)
+        for required in [
+            "target.rename(source)",
+            '"ARCHIVE_PENDING_STATE_FAILED"',
+            "active change restored",
+            "complete_archive_commit(paths, change_id, target, state",
+        ]:
+            with self.subTest(archive_recovery_required=required):
+                self.assertIn(required, archive_source)
+        for required in [
+            'archive.get("status") != "COMMIT_PENDING"',
+            "require_frozen_branch(paths, state)",
+            'archive_artifacts(target) != ["change.md", "state.yaml"]',
+        ]:
+            with self.subTest(recovery_required=required):
+                self.assertIn(required, recovery_source)
 
     def test_change_py_archive_is_fail_closed_one_file_retention(self):
         change_module = load_change_module()

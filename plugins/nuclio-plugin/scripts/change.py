@@ -69,6 +69,9 @@ PLAN_TOP_KEYS = {
 }
 TASK_KEYS = {"id", "name", "steps", "acceptance", "validation", "delegate", "review", "checkpoint_subject"}
 ARCHIVE_ACTIVE_ARTIFACTS = ("change.md", "plan.yaml", "state.yaml")
+ARCHIVE_RETAINED_ARTIFACTS = ("change.md",)
+ARCHIVE_RECOVERY_ACTION = "rerun archive --id {change_id} on the frozen branch"
+ARCHIVE_MANUAL_RECOVERY_ACTION = "manual inspection required; do not rerun until index/HEAD are corrected"
 ARCHIVE_REQUIRED_HEADINGS = ("Goal", "Outcome", "Validation", "Knowledge Updates")
 SUPERSEDED_VALIDATION_CONTEXT_RE = re.compile(r"\bacceptance\b|\bcriteria\b|\bvalidation\b|\bpass(?:ed)?\b|\bsuccess(?:ful|fully)?\b|验收|验证|通过|成功", flags=re.I)
 SUPERSEDED_VALIDATION_NON_SUCCESS_RE = re.compile(
@@ -594,6 +597,61 @@ def git_head(paths: Paths) -> str:
     return git(paths, "rev-parse", "HEAD").stdout.strip()
 
 
+def git_branch(paths: Paths) -> str:
+    result = git(paths, "symbolic-ref", "--quiet", "--short", "HEAD", allow_fail=True)
+    if result.returncode != 0:
+        raise NuclioError("DETACHED_HEAD", "git HEAD must be attached to a branch")
+    branch = result.stdout.strip()
+    if not branch:
+        raise NuclioError("DETACHED_HEAD", "git HEAD must be attached to a branch")
+    return branch
+
+
+def require_frozen_branch(paths: Paths, state: dict[str, Any]) -> str:
+    frozen = state.get("git_branch")
+    if not isinstance(frozen, str) or not frozen.strip():
+        raise NuclioError("BRANCH_IDENTITY_MISSING", "state git_branch is missing")
+    current = git_branch(paths)
+    if current != frozen:
+        raise NuclioError("BRANCH_DRIFT", "current git branch differs from frozen state branch", expected=frozen, actual=current)
+    return current
+
+
+def git_commit(paths: Paths, subject: str) -> str:
+    git(paths, "commit", "-m", subject)
+    return git_head(paths)
+
+
+def init_state_subject(change_id: str) -> str:
+    return f"state({change_id}): initialize approved change state"
+
+
+def git_commit_initial_state(paths: Paths, change_id: str) -> str:
+    pathspec = f".dev-docs/changes/{change_id}/state.yaml"
+    require_clean_index(paths)
+    git(paths, "add", "--", pathspec)
+    try:
+        return git_commit(paths, init_state_subject(change_id))
+    except Exception:
+        git_unstage_exact(paths, [pathspec])
+        raise
+
+
+def git_unstage_exact(paths: Paths, pathspecs: list[str]) -> None:
+    if pathspecs:
+        git(paths, "restore", "--staged", "--", *pathspecs, allow_fail=True)
+
+
+def index_changed_paths(paths: Paths) -> list[str]:
+    output = git(paths, "diff", "--cached", "--name-only").stdout
+    return [line for line in output.splitlines() if line]
+
+
+def worktree_changes_for_paths(paths: Paths, pathspecs: list[str]) -> list[str]:
+    output = git(paths, "status", "--porcelain=v1", "--", *pathspecs).stdout
+    return [line for line in output.splitlines() if line]
+
+
 def index_is_clean(paths: Paths) -> bool:
     return git(paths, "diff", "--cached", "--quiet", allow_fail=True).returncode == 0
 
@@ -666,6 +724,7 @@ def load_verified_state_and_plan(paths: Paths, change_id: str, *, allow_head_dri
     plan = validate_plan_file(plan_path)
     if state.get("schema_version") != 1 or state.get("change_id") != change_id:
         raise NuclioError("INVALID_STATE", "state identity mismatch")
+    require_frozen_branch(paths, state)
     if state.get("plan_revision") != plan["revision"]:
         raise NuclioError("IDENTITY_DRIFT", "plan revision drift", state_revision=state.get("plan_revision"), plan_revision=plan["revision"])
     if state.get("plan_sha256") != sha256_file(plan_path):
@@ -861,13 +920,13 @@ def cmd_list(args: argparse.Namespace, paths: Paths) -> int:
         entry = {"change_id": item.name, "title": h1_title_from_text(text), "path": rel(change, paths.root)}
         state_path = item / "state.yaml"
         if state_path.is_file():
-            try:
-                state = read_yaml_file(state_path)
-                if isinstance(state, dict):
-                    entry["status"] = state.get("status", "unknown")
-                    entry["phase"] = state.get("phase", "unknown")
-                    entry["next_action"] = state.get("next_action", "unknown")
-            except NuclioError:
+            state = read_yaml_file(state_path)
+            if isinstance(state, dict):
+                require_frozen_branch(paths, state)
+                entry["status"] = state.get("status", "unknown")
+                entry["phase"] = state.get("phase", "unknown")
+                entry["next_action"] = state.get("next_action", "unknown")
+            else:
                 entry["status"] = "unknown"
         entries.append(entry)
     return emit_ok({"ok": True, "changes": entries})
@@ -878,6 +937,11 @@ def cmd_show(args: argparse.Namespace, paths: Paths) -> int:
     artifact = change_artifact_path(directory, args.artifact)
     if not artifact.is_file():
         raise NuclioError("MISSING_ARTIFACT", f"missing artifact: {artifact}")
+    if args.artifact == "state":
+        state = read_yaml_file(artifact)
+        if not isinstance(state, dict):
+            raise NuclioError("INVALID_STATE", "state.yaml must be a mapping")
+        require_frozen_branch(paths, state)
     return emit_ok({"ok": True, "change_id": args.id, "artifact": args.artifact, "path": rel(artifact, paths.root), "content": artifact.read_text(encoding="utf-8")})
 
 
@@ -915,6 +979,7 @@ def cmd_init_state(args: argparse.Namespace, paths: Paths) -> int:
     plan = validate_plan_file(plan_path)
     if plan["change_id"] != change_id:
         raise NuclioError("IDENTITY_DRIFT", "plan change_id does not match requested change")
+    branch = git_branch(paths)
     head = git_head(paths)
     state = {
         "schema_version": 1,
@@ -923,6 +988,7 @@ def cmd_init_state(args: argparse.Namespace, paths: Paths) -> int:
         "plan_sha256": sha256_file(plan_path),
         "spec_sha256": sha256_file(spec_path),
         "repo_root": str(paths.root),
+        "git_branch": branch,
         "initial_head": head,
         "current_head": head,
         "status": "ACTIVE",
@@ -936,7 +1002,10 @@ def cmd_init_state(args: argparse.Namespace, paths: Paths) -> int:
         "blocker": None,
     }
     dump_yaml_atomic(state_path, state)
-    return emit_ok({"ok": True, "change_id": change_id, "path": rel(state_path, paths.root), "next_action": NEXT_DISPATCH_TASK, "head": head})
+    state_head = git_commit_initial_state(paths, change_id)
+    state["current_head"] = state_head
+    dump_yaml_atomic(state_path, state)
+    return emit_ok({"ok": True, "change_id": change_id, "path": rel(state_path, paths.root), "next_action": NEXT_DISPATCH_TASK, "head": state_head})
 
 
 def load_status_state_and_plan(paths: Paths, change_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1422,6 +1491,7 @@ def load_archive_verified_state_and_plan(paths: Paths, change_id: str) -> tuple[
     plan = validate_plan_file(plan_path)
     if state.get("schema_version") != 1 or state.get("change_id") != change_id:
         raise NuclioError("INVALID_STATE", "state identity mismatch")
+    require_frozen_branch(paths, state)
     if state.get("plan_revision") != plan["revision"]:
         raise NuclioError("IDENTITY_DRIFT", "plan revision drift", state_revision=state.get("plan_revision"), plan_revision=plan["revision"])
     if state.get("plan_sha256") != sha256_file(plan_path):
@@ -1447,33 +1517,221 @@ def load_archive_verified_state_and_plan(paths: Paths, change_id: str) -> tuple[
     return state, plan
 
 
-def prune_archive_execution_artifacts(target: Path, paths: Paths) -> list[str]:
+def archive_subject(change_id: str) -> str:
+    return f"archive({change_id}): retain distilled change record"
+
+
+def archive_active_pathspecs(change_id: str) -> list[str]:
+    return [f".dev-docs/changes/{change_id}/{name}" for name in ARCHIVE_ACTIVE_ARTIFACTS]
+
+
+def archive_target_pathspecs(change_id: str) -> list[str]:
+    return [f".dev-docs/changes/archive/{change_id}/change.md"]
+
+
+def archive_stage_pathspecs(change_id: str) -> list[str]:
+    return archive_active_pathspecs(change_id) + archive_target_pathspecs(change_id)
+
+
+def archive_allowed_commit_paths(change_id: str) -> set[str]:
+    return set(archive_active_pathspecs(change_id) + archive_target_pathspecs(change_id))
+
+
+def git_stage_archive_change(paths: Paths, change_id: str) -> None:
+    git(paths, "rm", "-q", "-f", "--ignore-unmatch", "--", *archive_active_pathspecs(change_id))
+    git(paths, "add", "--", *archive_target_pathspecs(change_id))
+
+
+def archive_error_details(paths: Paths, target: Path, change_id: str, *, manual: bool = False) -> dict[str, Any]:
+    remaining: list[str]
     try:
-        for name in ("plan.yaml", "state.yaml"):
+        remaining = archive_artifacts(target)
+    except NuclioError:
+        remaining = []
+    return {
+        "archive_path": rel(target, paths.root),
+        "remaining_artifacts": remaining,
+        "recovery_action": ARCHIVE_MANUAL_RECOVERY_ACTION if manual else ARCHIVE_RECOVERY_ACTION.format(change_id=change_id),
+    }
+
+
+def raise_archive_recoverable(code: str, message: str, paths: Paths, target: Path, change_id: str, *, manual: bool = False, **extra: Any) -> None:
+    details = archive_error_details(paths, target, change_id, manual=manual)
+    details.update(extra)
+    raise NuclioError(code, message, **details)
+
+
+def write_archive_pending_state(paths: Paths, target: Path, change_id: str, state: dict[str, Any], archive_base: str, subject: str) -> None:
+    state["archive"] = {
+        "status": "COMMIT_PENDING",
+        "archive_base": archive_base,
+        "archive_subject": subject,
+        "archive_path": rel(target, paths.root),
+        "retained_artifacts": list(ARCHIVE_RETAINED_ARTIFACTS),
+        "recovery_action": ARCHIVE_RECOVERY_ACTION.format(change_id=change_id),
+    }
+    dump_yaml_atomic(target / "state.yaml", state)
+
+
+def prune_archive_execution_artifacts(target: Path, paths: Paths, *, keep_state: bool = False) -> list[str]:
+    names = ("plan.yaml",) if keep_state else ("plan.yaml", "state.yaml")
+    try:
+        for name in names:
             artifact = target / name
             if artifact.exists():
                 artifact.unlink()
     except OSError as exc:
         remaining = archive_artifacts(target)
-        raise NuclioError("ARCHIVE_PRUNE_FAILED", "archive pruning failed", archive_path=rel(target, paths.root), remaining_artifacts=remaining) from exc
+        raise NuclioError(
+            "ARCHIVE_PRUNE_FAILED",
+            "archive pruning failed",
+            archive_path=rel(target, paths.root),
+            remaining_artifacts=remaining,
+            recovery_action=ARCHIVE_RECOVERY_ACTION.format(change_id=target.name),
+        ) from exc
     remaining = archive_artifacts(target)
-    if remaining != ["change.md"]:
-        raise NuclioError("ARCHIVE_PRUNE_FAILED", "archive pruning left unexpected artifacts", archive_path=rel(target, paths.root), remaining_artifacts=remaining)
+    expected = ["change.md", "state.yaml"] if keep_state else ["change.md"]
+    if remaining != expected:
+        raise NuclioError(
+            "ARCHIVE_PRUNE_FAILED",
+            "archive pruning left unexpected artifacts",
+            archive_path=rel(target, paths.root),
+            remaining_artifacts=remaining,
+            recovery_action=ARCHIVE_RECOVERY_ACTION.format(change_id=target.name),
+        )
     return remaining
+
+
+def load_archive_recovery_state(paths: Paths, change_id: str, target: Path) -> dict[str, Any]:
+    if not (target / "state.yaml").is_file():
+        raise NuclioError("ARCHIVE_EXISTS", f"archive target already exists: {target}")
+    state = read_yaml_file(target / "state.yaml")
+    if not isinstance(state, dict):
+        raise NuclioError("INVALID_STATE", "archive recovery state.yaml must be a mapping")
+    if state.get("schema_version") != 1 or state.get("change_id") != change_id:
+        raise NuclioError("INVALID_STATE", "archive recovery state identity mismatch")
+    require_frozen_branch(paths, state)
+    archive = state.get("archive")
+    if not isinstance(archive, dict) or archive.get("status") != "COMMIT_PENDING":
+        raise NuclioError("ARCHIVE_EXISTS", f"archive target already exists: {target}")
+    if archive.get("archive_path") != rel(target, paths.root):
+        raise NuclioError("INVALID_STATE", "archive recovery path mismatch", expected=rel(target, paths.root), actual=archive.get("archive_path"))
+    if archive_artifacts(target) != ["change.md", "state.yaml"]:
+        raise_archive_recoverable("ARCHIVE_RECOVERY_ARTIFACTS", "archive recovery requires change.md and state.yaml", paths, target, change_id, manual=True)
+    return state
+
+
+def validate_archive_commit(paths: Paths, change_id: str, target: Path, state: dict[str, Any], *, expected_parent: str, expected_subject: str, commit_sha: str) -> list[str]:
+    if git_head(paths) != commit_sha:
+        raise_archive_recoverable("ARCHIVE_COMMIT_HEAD_MISMATCH", "archive commit is not current HEAD", paths, target, change_id, manual=True, expected=commit_sha, actual=git_head(paths))
+    if commit_parent(paths, "HEAD") != expected_parent:
+        raise_archive_recoverable("ARCHIVE_COMMIT_PARENT_MISMATCH", "archive commit parent mismatch", paths, target, change_id, manual=True, expected=expected_parent, actual=commit_parent(paths, "HEAD"))
+    subject = commit_subject(paths, "HEAD")
+    if subject != expected_subject:
+        raise_archive_recoverable("ARCHIVE_COMMIT_SUBJECT_MISMATCH", "archive commit subject mismatch", paths, target, change_id, manual=True, expected=expected_subject, actual=subject)
+    changed_paths = commit_changed_paths(paths, "HEAD")
+    allowed_paths = archive_allowed_commit_paths(change_id)
+    outside = [path for path in changed_paths if path not in allowed_paths]
+    if outside:
+        raise_archive_recoverable("ARCHIVE_COMMIT_PATH_MISMATCH", "archive commit changed paths outside this change archive", paths, target, change_id, manual=True, outside_paths=outside)
+    if not changed_paths:
+        raise_archive_recoverable("ARCHIVE_COMMIT_EMPTY", "archive commit changed no files", paths, target, change_id, manual=True)
+    missing = sorted(allowed_paths - set(changed_paths))
+    if missing:
+        raise_archive_recoverable("ARCHIVE_COMMIT_PATH_MISMATCH", "archive commit is missing required active-to-archive paths", paths, target, change_id, manual=True, missing_paths=missing)
+    if not index_is_clean(paths):
+        raise_archive_recoverable("ARCHIVE_INDEX_DIRTY", "archive commit left staged changes", paths, target, change_id, manual=True, index_paths=index_changed_paths(paths))
+    require_frozen_branch(paths, state)
+    return changed_paths
+
+
+def complete_archive_commit(paths: Paths, change_id: str, target: Path, state: dict[str, Any], *, archive_base: str, subject: str) -> dict[str, Any]:
+    require_frozen_branch(paths, state)
+    if git_head(paths) != archive_base:
+        raise_archive_recoverable("ARCHIVE_HEAD_DRIFT", "archive recovery requires HEAD to equal archive_base", paths, target, change_id, manual=True, expected=archive_base, actual=git_head(paths))
+    pathspecs = archive_stage_pathspecs(change_id)
+    git_unstage_exact(paths, pathspecs)
+    git_stage_archive_change(paths, change_id)
+    indexed = index_changed_paths(paths)
+    outside = [path for path in indexed if path not in archive_allowed_commit_paths(change_id)]
+    if outside:
+        git_unstage_exact(paths, pathspecs)
+        raise_archive_recoverable("ARCHIVE_INDEX_PATH_MISMATCH", "archive staged paths outside this change archive", paths, target, change_id, manual=True, outside_paths=outside)
+    if not indexed:
+        git_unstage_exact(paths, pathspecs)
+        raise_archive_recoverable("ARCHIVE_EMPTY", "archive has no staged changes", paths, target, change_id, manual=True)
+    try:
+        commit_sha = git_commit(paths, subject)
+    except Exception as exc:
+        git_unstage_exact(paths, pathspecs)
+        if isinstance(exc, NuclioError):
+            try:
+                raise_archive_recoverable("ARCHIVE_COMMIT_FAILED", "archive commit failed", paths, target, change_id, stderr=exc.details.get("stderr", exc.message))
+            except NuclioError as wrapped:
+                raise wrapped from exc
+        raise
+    changed_paths = validate_archive_commit(paths, change_id, target, state, expected_parent=archive_base, expected_subject=subject, commit_sha=commit_sha)
+    try:
+        (target / "state.yaml").unlink()
+    except OSError as exc:
+        try:
+            raise_archive_recoverable("ARCHIVE_FINAL_PRUNE_FAILED", "archive final state pruning failed", paths, target, change_id, manual=True)
+        except NuclioError as wrapped:
+            raise wrapped from exc
+    retained = archive_artifacts(target)
+    if retained != ["change.md"]:
+        raise_archive_recoverable("ARCHIVE_FINAL_PRUNE_FAILED", "archive final pruning left unexpected artifacts", paths, target, change_id, manual=True)
+    if worktree_changes_for_paths(paths, pathspecs):
+        raise_archive_recoverable("ARCHIVE_WORKTREE_DIRTY", "archive paths remain dirty after commit", paths, target, change_id, manual=True, dirty=worktree_changes_for_paths(paths, pathspecs))
+    return {"archive_commit": commit_sha, "changed_paths": changed_paths, "retained_artifacts": retained}
 
 
 def cmd_archive(args: argparse.Namespace, paths: Paths) -> int:
     change_id = validate_id(args.id)
     source = active_change_dir(paths, change_id)
     target = archive_change_dir(paths, change_id)
+    subject = archive_subject(change_id)
     if target.exists():
-        raise NuclioError("ARCHIVE_EXISTS", f"archive target already exists: {target}")
+        state = load_archive_recovery_state(paths, change_id, target)
+        archive = state["archive"]
+        result = complete_archive_commit(paths, change_id, target, state, archive_base=archive["archive_base"], subject=archive["archive_subject"])
+        return emit_ok({"ok": True, "change_id": change_id, "path": rel(target, paths.root), "archive_subject": archive["archive_subject"], **result})
     require_exact_archive_artifacts(source)
-    load_archive_verified_state_and_plan(paths, change_id)
+    state, _plan = load_archive_verified_state_and_plan(paths, change_id)
+    archive_base = git_head(paths)
     target.parent.mkdir(parents=True, exist_ok=True)
     source.rename(target)
-    retained = prune_archive_execution_artifacts(target, paths)
-    return emit_ok({"ok": True, "change_id": change_id, "path": rel(target, paths.root), "retained_artifacts": retained})
+    try:
+        write_archive_pending_state(paths, target, change_id, state, archive_base, subject)
+    except NuclioError as exc:
+        if target.exists() and not source.exists():
+            try:
+                target.rename(source)
+            except OSError as rollback_exc:
+                details = archive_error_details(paths, target, change_id, manual=True)
+                details.update(exc.details)
+                raise NuclioError("ARCHIVE_PENDING_STATE_FAILED", "archive pending state write failed and active change could not be restored", **details) from rollback_exc
+        raise NuclioError(
+            "ARCHIVE_PENDING_STATE_FAILED",
+            "archive pending state write failed before recovery marker; active change restored",
+            active_path=rel(source, paths.root),
+            recovery_action=ARCHIVE_RECOVERY_ACTION.format(change_id=change_id),
+            stderr=exc.details.get("stderr", exc.message),
+        ) from exc
+    try:
+        prune_archive_execution_artifacts(target, paths, keep_state=True)
+        result = complete_archive_commit(paths, change_id, target, state, archive_base=archive_base, subject=subject)
+    except NuclioError as exc:
+        if exc.code in {"ARCHIVE_PRUNE_FAILED"}:
+            raise
+        if target.exists():
+            details = archive_error_details(paths, target, change_id, manual=exc.details.get("recovery_action") == ARCHIVE_MANUAL_RECOVERY_ACTION)
+            details.update(exc.details)
+            if exc.code.startswith("ARCHIVE_"):
+                raise NuclioError(exc.code, exc.message, **details) from exc
+            raise NuclioError("ARCHIVE_COMMIT_FAILED", "archive commit failed after move", **details) from exc
+        raise
+    return emit_ok({"ok": True, "change_id": change_id, "path": rel(target, paths.root), "archive_subject": subject, **result})
 
 
 # Legacy move

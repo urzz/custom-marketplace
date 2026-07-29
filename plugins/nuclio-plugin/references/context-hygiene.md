@@ -64,10 +64,10 @@ Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可
 
 - Locate/resume：列出 change id、title、路径、State status/phase/next_action；每个候选 1 行。
 - Spec/Plan approval：只给 `change.md`/`plan.yaml` 路径、1–3 行摘要、risk/review/repair policy、Task count、`allowed_paths` 摘要、`validate-plan` exit code 和批准提示。
-- Task dispatch/checkpoint：给 Task id/name、executor、task base、expected checkpoint subject、validation command 摘要和后续 helper command；不贴长 prompt。
+- Task dispatch/checkpoint：给 Task id/name、executor、task base、frozen branch、expected checkpoint subject、validation command 摘要和后续 helper command；不贴长 prompt。
 - Review/validation：给 command、exit code、PASS/FAIL、关键失败片段或路径；长日志按用户要求显示。
 - Repair decision：给 source gate、违反合同、路径、证据摘要、是否仍在 `allowed_paths` 和建议决策。
-- Completion/archive：给产品结果、changed paths、validation summary、mandatory knowledge analysis 结果（写入、拒绝或 `NO_OP`）、retention disclosure、archive path 和最终 artifact set。
+- Completion/archive：给产品结果、changed paths、validation summary、mandatory knowledge analysis 结果（写入、拒绝或 `NO_OP`）、retention disclosure、archive path、archive commit SHA、archive recovery action（失败时）和最终 artifact set。
 
 默认不回显完整 `change.md`、完整 `plan.yaml`、完整 `state.yaml`、完整 diff、transcript、agent 原文或长日志。用户明确要求时显示指定 section。
 
@@ -79,9 +79,9 @@ Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可
 - change-level `allowed_paths` 和本 Task 实施意图。
 - 必要 read paths/headings，避免一层 references 以外的阅读链。
 - Acceptance 与 validation commands。
-- `task_base` 与 expected `checkpoint_subject`。
+- `task_base`、expected `checkpoint_subject` 与 frozen branch `state.git_branch`。
 - selective staging/commit 合同。
-- 禁止编辑 `change.md`、`plan.yaml`、`state.yaml`，禁止递归委派、扩范围、自动 fixer routing、reset/rebase/squash/stash/history rewrite。
+- 禁止编辑 `change.md`、`plan.yaml`、`state.yaml`，禁止递归委派、扩范围、自动 fixer routing、创建/切换/重命名分支、创建 worktree 执行分支、reset/rebase/squash/stash/history rewrite。
 - 禁止调用 TaskStop/Stop Task；禁止创建、更新、停止或接管 Controller/task-tracking 任务；禁止尝试停止自身、父任务、兄弟任务或后台任务。
 - compact return 格式。
 
@@ -93,6 +93,7 @@ Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可
 
 - status：完成、阻塞或需要主会话决策。
 - checkpoint SHA；没有 commit 时写 none 并说明原因。
+- archive commit SHA（仅完成 archive 时）；archive 失败时给 archive path、remaining artifacts 和 recovery action。
 - changed paths。
 - commands、exit codes 和短输出摘要。
 - 风险、blocker、超出 `allowed_paths` 或合同变化迹象。
@@ -134,10 +135,10 @@ Final review 默认先读取：Spec/Plan 摘要、checkpoint map、各 Task diff
 恢复步骤：
 
 1. 定位唯一 active change；多候选时让用户选择。
-2. 运行 `status` 和 `next-action`，记录 change id、plan revision、phase、current_task_id、next_action、blocker 摘要。
-3. 检查 Git status，确认 index、allowed-path dirty 状态和 HEAD 是否与 State 一致。
-4. 根据 `next_action` 执行最小下一步：dispatch Task、run review、run validation、request repair decision、complete、或 halt。
-5. 若出现 Spec/Plan hash、revision、HEAD、checkpoint parent/subject/range、allowed-path 边界或 validation evidence drift，停止并向用户报告具体冲突。
+2. 运行 `status` 和 `next-action`，记录 change id、plan revision、phase、current_task_id、next_action、frozen branch `git_branch` 和 blocker 摘要。
+3. 检查 Git status，确认当前 branch attached 且等于 frozen branch，index、allowed-path dirty 状态和 HEAD 是否与 State 一致。
+4. 根据 `next_action` 执行最小下一步：dispatch Task、run review、run validation、request repair decision、complete、archive recovery、或 halt。
+5. 若出现 `BRANCH_DRIFT`、`DETACHED_HEAD`、Spec/Plan hash、revision、HEAD、checkpoint parent/subject/range、allowed-path 边界或 validation evidence drift，停止并向用户报告具体冲突；不要创建/切换/重命名分支或 worktree 来“修复”恢复。
 
 不要重放 transcript、读取 agent claim 作为完成事实、把 `change.md` frontmatter `status` 当动态状态、或猜测最新聊天必然覆盖文件合同。
 

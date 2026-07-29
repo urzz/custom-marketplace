@@ -288,7 +288,7 @@ Plan 禁止 placeholder、重复 key、错误类型、不安全 YAML tag、动�
 
 - `schema_version`、`change_id`
 - `plan_revision`、`plan_sha256`、`spec_sha256`
-- `repo_root`、`initial_head`、`current_head`
+- `repo_root`、`git_branch`、`initial_head`、`current_head`
 - `status`、`phase`、`current_task_id`、`next_action`
 - 每个 Task 的 `status`、`task_base`、`task_head`、`checkpoint_commit`、`executor` 和验证摘要
 - 当前 task/final review 状态
@@ -313,7 +313,7 @@ ARCHIVE_SUPERSEDED
 
 `SUPERSEDED` 是 explicit successor takeover 终态，不是普通完成。对应 State 形态：`status: SUPERSEDED`、`phase: SUPERSEDED`、`next_action: ARCHIVE_SUPERSEDED`，并包含轻量 `superseded_by` mapping：`successor_id`、`successor_location`、`successor_path`、`decision`，以及仅在 helper 验证到唯一未记录 checkpoint 例外时出现的 `unrecorded_checkpoint`。`state.superseded_by` 是 active predecessor→successor relation 的唯一动态表达；它不复制 successor `change.md`/`plan.yaml`、完整历史、日志或文件内容。进入该状态后恢复动作是蒸馏 predecessor 历史记录并 archive。
 
-恢复时先运行 `status` 和 `next-action`，再结合 Git HEAD、diff/status、checkpoint commits 和验证证据判断下一步。不要依据 transcript 或 agent claim 推进。
+`git_branch` 由 `init-state` 在当前 attached branch 上冻结；detached HEAD 初始化返回 `DETACHED_HEAD`。恢复时先运行 `status` 和 `next-action`，再结合 frozen branch identity、Git HEAD、diff/status、checkpoint commits 和验证证据判断下一步；当前 branch 不等于 `state.git_branch` 时返回 `BRANCH_DRIFT`，detached HEAD 返回 `DETACHED_HEAD`，不得自动切回、创建或重命名分支。不要依据 transcript 或 agent claim 推进。
 
 ## superseded change 收口
 
@@ -338,14 +338,14 @@ Archive 后 predecessor active 目录必须消失且 archive 中仅保留 `chang
 
 每个实施 Task 恰好一个 selective-stage 本地 checkpoint commit。流程为：
 
-1. `start-task` 冻结 `task_base=HEAD`、executor 和 Plan 中的 checkpoint subject。
+1. `start-task` 冻结 `task_base=HEAD`、executor 和 Plan 中的 checkpoint subject，并要求当前分支仍等于 `state.git_branch`。
 2. 实施者只修改 allowed paths 内与 Task 有关的产品文件。
 3. 实施者运行 Task validation。
 4. 实施者只 selective stage 本 Task changed paths。
-5. 实施者创建恰好一个 commit，subject 精确等于 `checkpoint_subject`。
-6. `record-task` 校验 `task_base` 是 `HEAD` 的直接父提交、subject 精确匹配、changed paths 非空且全部在 allowed paths 内、index 为空、validation 为 PASS。
+5. 实施者在 frozen branch 上创建恰好一个 commit，subject 精确等于 `checkpoint_subject`。
+6. `record-task` 校验 `task_base` 是 `HEAD` 的直接父提交、subject 精确匹配、changed paths 非空且全部在 allowed paths 内、index 为空、branch identity 未漂移、validation 为 PASS。
 
-Helper 不自动 reset、rebase、squash、stash 或改写历史。完成后保留 checkpoint commits 作为可审阅、可回滚的普通 Git 历史。
+Coordinator 和 subagent 都不得创建、切换或重命名分支，不得创建 worktree 执行分支，不得使用类似 `task4-member-auth-dto-vo` 的 Task 临时分支。Helper 不自动 reset、rebase、squash、stash、切换分支或改写历史。完成后保留 checkpoint commits 作为可审阅、可回滚的普通 Git 历史。
 
 ## review、validation 与 repair
 
@@ -428,7 +428,7 @@ related_changes: []
 python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> archive --id <change-id>
 ```
 
-helper 直接读取终态 State，并先验证 completed 或 superseded State identity、approved Plan revision/hash、normal completed path 的 current HEAD、frozen pre-complete `spec_sha256` presence、distilled record id/status/headings、superseded path 的 successor takeover Outcome、archive `related_changes` 与 `state.superseded_by.successor_id` 一致、以及 exact artifact set；不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`。active 目录必须恰好只有：
+helper 直接读取终态 State，并先验证 completed 或 superseded State identity、approved Plan revision/hash、frozen branch `state.git_branch`、normal completed path 的 current HEAD、frozen pre-complete `spec_sha256` presence、distilled record id/status/headings、superseded path 的 successor takeover Outcome、archive `related_changes` 与 `state.superseded_by.successor_id` 一致、以及 exact artifact set；不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`。active 目录必须恰好只有：
 
 ```text
 .dev-docs/changes/<change-id>/change.md
@@ -442,15 +442,15 @@ helper 直接读取终态 State，并先验证 completed 或 superseded State id
 .dev-docs/changes/archive/<change-id>/
 ```
 
-然后 pruning active execution artifacts。Archive 成功后 archive 目录只保留：
+然后写入 recovery marker、pruning active execution artifacts，并在 frozen branch 上创建恰好一个 helper 验证的 archive commit，subject 为 `archive(<change-id>): retain distilled change record`。commit parent 必须是 archive 前 HEAD，index 必须为空，changed paths 必须完整包含 active `change.md`、active `plan.yaml`、active `state.yaml` and archive `change.md`，且不得包含其他路径。Archive 成功后 archive 目录只保留：
 
 ```text
 .dev-docs/changes/archive/<change-id>/change.md
 ```
 
-`plan.yaml` 和 `state.yaml` 是 active 执行/恢复 artifact，不进入长期 archive，也不得复制到隐藏备份、manifest 或第二状态位置。Git checkpoint commits 保留实际实施历史；不自动 squash、reset、rebase、stash 或改写历史。
+`plan.yaml` 和 `state.yaml` 是 active 执行/恢复 artifact，不进入长期 archive，也不得复制到隐藏备份、manifest 或第二状态位置。Git checkpoint commits 与 archive commit 保留实际实施和归档历史；不自动 push、删除分支、切换回原分支、squash、reset、rebase、stash 或改写历史。
 
-Archive failure 必须 fail closed：undistilled record、unexpected artifact、completed State/Plan/HEAD identity drift、superseded State/Plan/successor takeover identity drift、缺少 frozen pre-complete `spec_sha256` 或 target conflict 在移动/pruning 前失败并保持源目录不变；但当前 distilled record 与 pre-complete Spec hash 不相等不是 archive failure。若移动后 pruning 失败，返回稳定 error，包含 archive path 和 remaining artifacts；不得报告成功。现有 archive 不迁移，新 retention policy 只应用于未来成功的 archive 调用。相关回归或扩展创建新 active change，并通过 `related_changes` 指向 archive 中的历史 change。
+Archive failure 必须 fail closed：undistilled record、unexpected artifact、completed State/Plan/HEAD identity drift、superseded State/Plan/successor takeover identity drift、`BRANCH_DRIFT`、`DETACHED_HEAD`、缺少 frozen pre-complete `spec_sha256` 或 target conflict 在移动/pruning 前失败并保持源目录不变；但当前 distilled record 与 pre-complete Spec hash 不相等不是 archive failure。pending state 写失败发生在 move 后但 recovery marker 写入前，helper 必须回滚 active 三件套、保持 HEAD 不变，后续 `archive --id <change-id>` 可重试并只产生一个 archive commit；写入 recovery marker 后但 archive commit 成功前的 moved/pruned pre-commit staging 或 commit 中断时返回稳定 error，包含 archive path、remaining artifacts 和 `rerun archive --id <change-id> on the frozen branch`；archive commit 已成功后的 final state prune/final prune 失败返回 manual inspection recovery，不指导直接 rerun，因为保存的 archive_base 已不再等于当前 HEAD，rerun 会 fail closed；archive commit parent/subject/path/index/HEAD 校验失败同样要求 manual inspection。不得报告成功。现有 archive 不迁移，新 retention policy 只应用于未来成功的 archive 调用。相关回归或扩展创建新 active change，并通过 `related_changes` 指向 archive 中的历史 change。
 
 ## Legacy 整体移动
 

@@ -23,7 +23,7 @@ Nuclio v2 是轻量三层 docs-as-code 工作流。每个 active change 只有�
 
 主会话是 Coordinator/Controller：它维护用户目标、文件化 Spec/Plan、上下文预算、Git checkpoint、验证证据、review/repair 决策和最终汇报。主会话不是细粒度持久状态机，也不把 agent claim 当作完成事实。
 
-`change.py` 是唯一 runtime helper。它创建 change、校验 Plan、初始化和推进 `state.yaml`、返回 `status`/`next-action`、记录 Task/checkpoint/review/repair/validation、完成和归档。它不调用模型、不修改产品文件、不替用户批准。
+`change.py` 是唯一 runtime helper。它创建 change、校验 Plan、初始化和推进 `state.yaml`、返回 `status`/`next-action`、记录 Task/checkpoint/review/repair/validation、完成和归档。`init-state` 冻结当前 attached `git_branch`；后续 State 驱动命令在当前分支不同或 detached HEAD 时 fail closed。它不调用模型、不修改产品文件、不替用户批准。
 
 通用 subagent 只能作为有界执行或只读探索/审查单元。Nuclio 不新增专用 agent 流水线、自动 fixer、owner routing 或递归委派机制。
 
@@ -59,8 +59,8 @@ Nuclio v2 的日常入口是 `work`。标准顺序如下：
 6. 写入或更新承担 Spec 角色的完整 `change.md` 与 `plan.yaml` Plan。
 7. 运行 `change.py validate-plan`，修复合同问题直到通过。
 8. file-first 展示路径、短摘要、风险/review policy、关键 exit code、archive retention disclosure 和批准提示；等待用户自然语言批准。
-9. 批准后才运行 `change.py init-state`。
-10. 通过 `change.py status` 与 `change.py next-action` 顺序执行 Task、checkpoint、task review、final review、validation、repair decision、complete。
+9. 批准后才运行 `change.py init-state`；helper 同时提交初始 State 并在 `state.git_branch` 冻结当前 attached branch。
+10. 通过 `change.py status` 与 `change.py next-action` 在 frozen branch 上顺序执行 Task、checkpoint、task review、final review、validation、repair decision、complete；`BRANCH_DRIFT` 或 `DETACHED_HEAD` 必须停止。
 11. 先报告产品结果与证据。
 12. 始终分析长期知识候选；无合格候选时记录 `NO_OP` 且不显示第二 Gate。
 13. 有合格候选时展示唯一目标与证据，等待自然语言确认，并记录实际写入、部分接受、修改或拒绝结果。
@@ -116,7 +116,7 @@ python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> validate-p
 python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> init-state --id <change-id>
 ```
 
-`init-state` 冻结 Spec hash、Plan hash、revision 和 HEAD，并创建 `state.yaml`。已有 State 不被覆盖。
+`init-state` 冻结 Spec hash、Plan hash、revision、HEAD 和当前 attached `git_branch`，创建 `state.yaml`，并创建一次 subject 为 `state(<change-id>): initialize approved change state` 的初始 State commit。已有 State 不被覆盖；detached HEAD 返回 `DETACHED_HEAD` 且不写 State。
 
 恢复或继续工作时先运行：
 
@@ -140,7 +140,7 @@ ARCHIVE_SUPERSEDED
 
 `ARCHIVE_SUPERSEDED` 只来自 predecessor 的 `SUPERSEDED` State：Coordinator 必须先把 predecessor `change.md` 蒸馏为 superseded 历史记录，再调用 `archive`。该状态表示 predecessor 被 successor 接管，不表示 predecessor 旧 acceptance 已完成或验证成功。
 
-恢复判断还必须结合 Git HEAD、`git status`/diff、checkpoint commits 和验证证据。不要重放 transcript，不以 agent claim 推进，也不要把 `change.md` frontmatter `status` 当动态执行状态。
+恢复判断还必须结合 frozen branch identity、Git HEAD、`git status`/diff、checkpoint commits 和验证证据。所有读取或推进 State 的命令都调用 branch guard：当前分支必须等于 `state.git_branch`，否则返回 `BRANCH_DRIFT`；detached HEAD 返回 `DETACHED_HEAD`。不要重放 transcript，不以 agent claim 推进，也不要把 `change.md` frontmatter `status` 当动态执行状态。
 
 State 只保存当前恢复状态。它不保存完整 transition history、完整 diff、完整日志、agent 消息、文件内容 snapshot 或重复 Git 历史。
 
@@ -148,16 +148,16 @@ State 只保存当前恢复状态。它不保存完整 transition history、完�
 
 实施 Task 的标准顺序：
 
-1. 在 `next_action=DISPATCH_TASK` 时运行 `start-task`，冻结 `task_base`、executor 和 Plan 中的 `checkpoint_subject`。
+1. 在 `next_action=DISPATCH_TASK` 时运行 `start-task`，冻结 `task_base`、executor 和 Plan 中的 `checkpoint_subject`；该命令也要求当前分支仍是 `state.git_branch`。
 2. 实施者只修改 change-level `allowed_paths` 内与当前 Task 有关的产品文件。
 3. 运行该 Task 的 validation 命令。
 4. selective stage 本 Task changed paths。
-5. 创建恰好一个本地 checkpoint commit，subject 精确等于批准的 `checkpoint_subject`。
-6. 运行 `record-task`，让 helper 校验 parent、subject、changed paths、空 index 和 PASS validation。
+5. 在 frozen branch 上创建恰好一个本地 checkpoint commit，subject 精确等于批准的 `checkpoint_subject`。
+6. 运行 `record-task`，让 helper 校验 parent、subject、changed paths、空 index、branch identity 和 PASS validation。
 
-每个实施 Task 和每个 repair 单元恰好一个 checkpoint commit。Helper 不自动 reset、rebase、squash、stash 或改写历史；完成后保留 checkpoint commits 作为普通 Git 历史。
+每个实施 Task 和每个 repair 单元恰好一个 checkpoint commit。Helper 不自动 reset、rebase、squash、stash 或改写历史；也不自动切换分支。完成后保留 checkpoint commits 作为普通 Git 历史。
 
-产品写入按 Task/repair 顺序执行。不得新增 DAG scheduler 或并行产品写入引擎。只有无写入冲突的只读探索或审查可按需并发。
+产品写入按 Task/repair 顺序执行。Coordinator 和 bounded subagent 都不得创建、切换或重命名 Git 分支，不得创建 worktree 执行分支，不得把执行移到类似 `task4-member-auth-dto-vo` 的 Task 临时分支；必须停留在 `state.git_branch` 指定的 frozen attached branch。不得新增 DAG scheduler 或并行产品写入引擎。只有无写入冲突的只读探索或审查可按需并发。
 
 ## 有界委派
 
@@ -169,9 +169,9 @@ State 只保存当前恢复状态。它不保存完整 transition history、完�
 - change-level `allowed_paths` 与本 Task 实施意图；
 - 必要 read paths 或 headings；
 - acceptance 与 validation commands；
-- `task_base` 与 expected `checkpoint_subject`；
+- `task_base`、expected `checkpoint_subject` 与 frozen branch `state.git_branch`；
 - selective staging/commit 合同；
-- 禁止编辑 `change.md`、`plan.yaml`、`state.yaml`，禁止递归委派、扩范围、reset/rebase/squash/stash/history rewrite；
+- 禁止编辑 `change.md`、`plan.yaml`、`state.yaml`，禁止递归委派、扩范围、创建/切换/重命名分支、创建 worktree 执行分支、reset/rebase/squash/stash/history rewrite；
 - 明确工具与任务生命周期边界：bounded subagent 不得调用 TaskStop/Stop Task，不得创建、更新、停止或接管 Controller/task-tracking 任务，不得尝试停止自身、父任务、兄弟任务或后台任务；
 - compact return：checkpoint SHA、changed paths、commands/exit codes、风险和 blocker。
 
@@ -248,7 +248,7 @@ python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> complete -
 ## Knowledge Updates
 ```
 
-精简历史记录只保留可追溯结论：目标、产品结果、关键 changed paths、验证命令/exit code 摘要、剩余风险、知识写入或 `NO_OP`/拒绝结果，以及必要 Git checkpoint SHA。不得复制 Plan、State、完整 diff、transcript、agent 消息或长日志。
+精简历史记录只保留可追溯结论：目标、产品结果、关键 changed paths、验证命令/exit code 摘要、剩余风险、知识写入或 `NO_OP`/拒绝结果，以及必要 Git checkpoint SHA；archive 成功后还可追溯 helper 返回的 archive commit SHA。不得复制 Plan、State、完整 diff、transcript、agent 消息或长日志。
 
 再运行：
 
@@ -256,11 +256,11 @@ python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> complete -
 python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> archive --id <change-id>
 ```
 
-Archive 成功后 `.dev-docs/changes/archive/<change-id>/` 只保留精简 `change.md`；active `plan.yaml` 和 `state.yaml` 会被 pruning，不进入长期 archive。Git checkpoint commits 保留实际实施历史，后续相关问题创建带关联的新 active change，并通过 archive 的 Outcome/Validation/Knowledge Updates 与 Git history 追溯。
+Archive 成功后 `.dev-docs/changes/archive/<change-id>/` 只保留精简 `change.md`；active `plan.yaml` 和 `state.yaml` 会被 pruning，不进入长期 archive。helper 创建恰好一个 archive commit，subject 为 `archive(<change-id>): retain distilled change record`，parent 为 archive 前 HEAD，changed paths 必须完整等于 active `change.md`、active `plan.yaml`、active `state.yaml` and archive `change.md`，且 index 为空；normal 和 superseded archive 使用同一 commit/path 验证。Git checkpoint commits 与 archive commit 保留实际实施和归档历史，后续相关问题创建带关联的新 active change，并通过 archive 的 Outcome/Validation/Knowledge Updates 与 Git history 追溯。
 
 Superseded archive 使用同一个 one-file retention，但入口不同：predecessor 先由 `supersede` 进入 `status: SUPERSEDED`、`phase: SUPERSEDED`、`next_action: ARCHIVE_SUPERSEDED`，并写入轻量 `superseded_by`（successor id、successor location/path、decision，以及可选未记录 checkpoint 事实）。Coordinator 随后把 predecessor `change.md` 蒸馏为 `status: completed` 的 archive-compatible 历史记录；frontmatter `related_changes` 必须包含 `state.superseded_by.successor_id`，`Outcome` 必须明确由该 successor 接管、保留真实 checkpoint 引用并说明未完成范围，`Validation` 必须说明这不是 predecessor 旧 acceptance 的 PASS。蒸馏后才可 archive。若 `supersede`、distill、archive 或 pruning 任一步失败，必须报告错误、archive path/remaining artifacts（如有）和残留 active predecessor 路径，不得宣称 successor/predecessor 已完全收口。
 
-Archive 是 fail-closed 的不可逆 retention 操作：执行前必须验证 completed 或 superseded State identity、approved Plan revision/hash、current HEAD（仅 completed normal path）、frozen pre-complete `spec_sha256` presence、distilled record id/status/headings、superseded record 的 successor takeover 语义、archive `related_changes` 与 `state.superseded_by` 一致，以及 exact artifact set（active 目录只能含 regular non-symlink `change.md`、`plan.yaml`、`state.yaml`）。Archive 不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`；这个字段只证明 active Spec identity 已在 complete/supersede 前被冻结且未丢失。undistilled record、unexpected artifact 或 identity drift 必须在移动/pruning 前失败且保持 active 目录不变；若移动后 pruning 失败，必须报告 archive path 与 remaining artifacts，不得报告成功。现有 archive 不迁移；新 retention policy 只适用于未来成功的 archive 调用。
+Archive 是 fail-closed 的不可逆 retention 操作：执行前必须验证 completed 或 superseded State identity、approved Plan revision/hash、frozen branch `state.git_branch`、current HEAD（仅 completed normal path）、frozen pre-complete `spec_sha256` presence、distilled record id/status/headings、superseded record 的 successor takeover 语义、archive `related_changes` 与 `state.superseded_by` 一致，以及 exact artifact set（active 目录只能含 regular non-symlink `change.md`、`plan.yaml`、`state.yaml`）。Archive 不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`；这个字段只证明 active Spec identity 已在 complete/supersede 前被冻结且未丢失。undistilled record、unexpected artifact、target conflict、branch drift、detached HEAD 或 identity drift 必须在移动/pruning 前失败且保持 active 目录不变；pending state 写失败发生在 move 后但 recovery marker 写入前，helper 必须回滚恢复 active 三件套、保持 HEAD 不变，并让后续同命令可重试；写入 recovery marker 后但 archive commit 成功前的 moved/pruned pre-commit staging 或 commit 中断，报告 archive path、remaining artifacts 和 recovery action：`rerun archive --id <change-id> on the frozen branch`。archive commit 已成功后的 final state prune/final prune 失败必须报告 archive path、remaining artifacts 和 manual inspection recovery；不得指导直接 rerun，因为保存的 `archive_base` 已不再等于当前 HEAD，rerun 会 fail closed。若 parent/subject/path/index/HEAD 校验失败也必须报告 manual inspection recovery。不得报告成功。现有 archive 不迁移；新 retention policy 只适用于未来成功的 archive 调用。
 
 ## 禁止恢复的 v1 与重型模式
 
