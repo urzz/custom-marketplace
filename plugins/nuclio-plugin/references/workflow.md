@@ -1,131 +1,116 @@
 # Nuclio v2 Workflow
 
-Nuclio v2 是轻量三层 docs-as-code 工作流。每个 active change 只有三个 runtime artifact：`change.md` 作为人类可读 Spec 角色、`plan.yaml` 作为用户批准的执行合同、`state.yaml` 作为当前恢复状态；唯一 runtime helper 是 `plugins/nuclio-plugin/scripts/change.py`。主会话仍是唯一 Coordinator，用户自然语言批准仍是产品 mutation 前的强制 Gate。4.0.3 起，批准范围扩大且 frozen predecessor 无法安全继续时，successor create/revision 阶段由 successor `change.md.related_changes` 引用 predecessor；不要 pre-link frozen predecessor、不要运行 link-related 或通用 hash refresh/手改 State 流程。successor 成功 archive 后，Coordinator 必须顺序运行 `supersede`，由 predecessor `state.superseded_by` 表达 active relation，再蒸馏 predecessor `change.md` 写入 archive `related_changes` 并 archive；失败时报告残留 active predecessor 路径，不得宣称完全收口。
+Nuclio v2 4.1.0 是 file-first、Git-backed 的三层 change 工作流。`change.md` 保存用户意图和完成叙述，`plan.yaml` 保存批准合同，`state.yaml` 保存当前恢复 cursor 与紧凑证据。主会话是唯一 Coordinator，`change.py` 是唯一 State writer。
 
-## Contents
+本文件是生命周期、状态迁移、repair、finish、archive 和 supersede 的权威；精确 schema 见 `change-format.md`。
 
-- [角色模型](#角色模型)
-- [三层 authority](#三层-authority)
-- [生命周期总览](#生命周期总览)
-- [Locate/Create/Resume](#locatecreateresume)
-- [澄清方式](#澄清方式)
-- [file-first 计划批准](#file-first-计划批准)
-- [State 初始化与恢复](#state-初始化与恢复)
-- [实施、checkpoint 与顺序写入](#实施checkpoint-与顺序写入)
-- [有界委派](#有界委派)
-- [Bug、repair 与新 change 边界](#bugrepair-与新-change-边界)
-- [风险驱动验证与审查](#风险驱动验证与审查)
-- [知识候选](#知识候选)
-- [完成与 archive](#完成与-archive)
-- [禁止恢复的 v1 与重型模式](#禁止恢复的-v1-与重型模式)
-
-## 角色模型
-
-主会话是 Coordinator/Controller：它维护用户目标、文件化 Spec/Plan、上下文预算、Git checkpoint、验证证据、review/repair 决策和最终汇报。主会话不是细粒度持久状态机，也不把 agent claim 当作完成事实。
-
-`change.py` 是唯一 runtime helper。它创建 change、校验 Plan、初始化和推进 `state.yaml`、返回 `status`/`next-action`、记录 Task/checkpoint/review/repair/validation、完成和归档。`init-state` 冻结当前 attached `git_branch`；后续 State 驱动命令在当前分支不同或 detached HEAD 时 fail closed。它不调用模型、不修改产品文件、不替用户批准。
-
-通用 subagent 只能作为有界执行或只读探索/审查单元。Nuclio 不新增专用 agent 流水线、自动 fixer、owner routing 或递归委派机制。
-
-## 三层 authority
-
-每个 active change 位于：
+## Lifecycle
 
 ```text
-.dev-docs/changes/<change-id>/
-├── change.md
-├── plan.yaml
-└── state.yaml
+locate/create
+  -> complete Spec + canonical Plan
+  -> validate-plan
+  -> natural-language approval
+  -> init-state / approval checkpoint
+  -> ordered Tasks / checkpoint evidence
+  -> required reviews
+  -> whole-change validation
+  -> knowledge analysis and decision
+  -> complete / next_action: ARCHIVE
+  -> append completion sections
+  -> archive complete directory
 ```
 
-职责固定：
+核心命令顺序：
 
-- `change.md`：人类可读 Spec 角色与权威，表达 Goal、Context、Constraints、Non-goals、Acceptance Criteria、重要 Decisions 和最终 Outcome；Spec 不是第四个或独立文件；不保存动态 Task checklist、完整 transcript、完整 diff、长测试日志或 agent 消息。
-- `plan.yaml`：批准合同权威，表达 revision、`risk_level`、`review_policy`、`repair_policy`、change-level `allowed_paths`、有序 Tasks、validation、delegate 意图和 `checkpoint_subject`。
-- `state.yaml`：唯一动态恢复状态权威，只由 `change.py` 原子写入，保存当前 phase、Task、review、validation、repair、blocker 和 `next_action`。
-- Git commits、working tree、代码、配置、测试和 CI：产品执行事实；每个 Task/repair checkpoint commit 保存实际增量历史。
+1. `create`、`list`、`show` 定位或创建 change。
+2. `validate-plan --id <id>` 同时验证 Spec、Plan 与 identity。
+3. 用户批准后，`init-state --id <id>` 创建 approval checkpoint。
+4. 每个 Task 调用 `start-task`，完成 checkpoint 后调用 `record-task`。
+5. 按 `next-action` 调用 `record-review`、`record-validation`，失败时执行 repair decision 与 `start-repair`/`record-repair`。
+6. 产品结果报告后分析 knowledge，调用带显式 knowledge result 的 `complete`。
+7. 补全完成文档并调用 `archive`。
 
-冲突处理 fail closed。Spec hash、Plan hash、revision、HEAD、checkpoint parent、checkpoint subject、commit range 或 allowed-path 边界不匹配时，不自动猜测、同步或继续推进。
+## Locate, Create, Resume
 
-## 生命周期总览
+默认只扫描 `.dev-docs/changes/<id>/`，排除 `archive/` 与 `legacy/`。多个 active change 可能匹配时必须让用户选择，不能按新旧、名字或聊天上下文猜测。
 
-Nuclio v2 的日常入口是 `work`。标准顺序如下：
+`create` 只创建草稿 Spec。Coordinator 必须补全 `Goal`、`Context`、`Constraints`、`Non-goals`、`Acceptance Criteria`，并写入 canonical Plan。`validate-plan --id` 通过以前，不得把草稿视为可批准合同。
 
-1. 定位项目根与 `.dev-docs`。
-2. 确保 v2 skeleton 存在；必要时用 `change.py legacy-move` 整体移动清晰 legacy 树。
-3. 定位、恢复或创建一个 active change。
-4. 按需读取知识、源码、配置、测试、`change.md`、`plan.yaml` 和 `state.yaml` 摘要。
-5. 澄清 Goal、Constraints、Non-goals、Acceptance、`allowed_paths`、validation、risk 和 review policy。
-6. 写入或更新承担 Spec 角色的完整 `change.md` 与 `plan.yaml` Plan。
-7. 运行 `change.py validate-plan`，修复合同问题直到通过。
-8. file-first 展示路径、短摘要、风险/review policy、关键 exit code、archive retention disclosure 和批准提示；等待用户自然语言批准。
-9. 批准后才运行 `change.py init-state`；helper 同时提交初始 State 并在 `state.git_branch` 冻结当前 attached branch。
-10. 通过 `change.py status` 与 `change.py next-action` 在 frozen branch 上顺序执行 Task、checkpoint、task review、final review、validation、repair decision、complete；`BRANCH_DRIFT` 或 `DETACHED_HEAD` 必须停止。
-11. 先报告产品结果与证据。
-12. 始终分析长期知识候选；无合格候选时记录 `NO_OP` 且不显示第二 Gate。
-13. 有合格候选时展示唯一目标与证据，等待自然语言确认，并记录实际写入、部分接受、修改或拒绝结果。
-14. 调用 `complete`，将 `change.md` 蒸馏为精简历史记录，再调用 `archive`；成功 archive 只保留该精简 `change.md`。
-15. 若刚归档的 change 是明确接管 predecessor 的 successor，逐个 predecessor 运行 `supersede`，由 helper 写入 predecessor `state.superseded_by`；随后蒸馏 predecessor `change.md` 为含 successor `related_changes` 的 superseded 历史记录并 `archive`；任一步失败都报告错误和残留 active predecessor 路径，不能报告完全收口。
-
-该顺序既是用户体验流程，也是恢复语义：动态推进以 helper 的当前 `next_action`、Git 和确定性证据为准，不依赖聊天 transcript。
-
-## Locate/Create/Resume
-
-先确认项目根。若 `.dev-docs` 不存在，可创建最小 v2 skeleton；若清晰 legacy 树存在，使用 `change.py legacy-move` 整体移动；若分类不确定，停止并报告冲突路径。
-
-扫描 active change 时，只看 `.dev-docs/changes/*/change.md` 及同目录 `plan.yaml`/`state.yaml` 是否存在，默认排除 `.dev-docs/changes/archive/**` 和 `.dev-docs/legacy/**`。若用户请求与唯一 active change 明确匹配，则恢复该 change。若多个候选可能匹配，必须让用户选择。若没有匹配项，则用 `change.py create` 创建新的 change。
-
-创建新 change 时给出人类可读 title 和 goal。归档后出现相关回归或后续扩展时创建新 change，并在 `related_changes` 中引用已归档 change。
-
-当已批准 change 因范围扩大、风险提高、`allowed_paths` 不足、State/HEAD 事实无法在原合同中安全推进而需要 successor 时，必须创建或修订 successor 的 `change.md`，让 successor frontmatter `related_changes` 包含 predecessor change id，并重新完成 file-first approval。不要预先修改 frozen predecessor `change.md` 来建立 active relation，也不要通过 link-related、hash refresh/rebaseline 或手改 `state.yaml` 绕过冻结 identity；active predecessor relation 只在 successor 成功 archive 后由 `supersede` 写入 predecessor `state.superseded_by`。不得按目录名、`-v2` 后缀、最新时间、聊天 transcript 或单向 predecessor 关联推断接管关系；没有可验证 successor backlink 时不得强制 supersede 或 archive predecessor。
-
-## 澄清方式
-
-澄清采用 recommendation-first：先给出当前建议，再问一个会改变合同的问题。不要把用户拖入问卷。简单安全任务可零问。
-
-每次只问一个问题。问题必须影响 Goal、Constraints、Non-goals、Acceptance、`allowed_paths`、Task 拆分、验证方法、风险判断、review policy 或 repair 判断。若问题不改变执行合同，直接继续。
-
-## file-first 计划批准
-
-产品 mutation 前必须把完整 Spec 和完整 Plan 写入文件，并运行：
+恢复先执行：
 
 ```bash
-python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> validate-plan --id <change-id>
+python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> status --id <id>
+python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> next-action --id <id>
 ```
 
-终端默认只展示：
+随后核对 attached branch、HEAD、index、working tree、Plan/Spec identity 和 helper 返回的最小动作。`BRANCH_DRIFT`、`DETACHED_HEAD`、hash/revision drift 或不合法 checkpoint 都必须停止并请求人工判断。
 
-- `change.md` 与 `plan.yaml` 路径；
-- 1–3 行 Goal/Constraints/Non-goals/Acceptance 摘要；
-- `risk_level`、`review_policy`、`repair_policy`、Task count 和 `allowed_paths` 摘要；
-- `validate-plan` exit code 与短结果；
-- retention disclosure：成功 archive 只保留精简 `change.md`，active `plan.yaml`/`state.yaml` 不进入长期 archive；
-- 请求用户批准、修订、拒绝或指定查看某 section 的提示。
+## File-First Gate
 
-默认不回显完整 `change.md`、完整 `plan.yaml`、完整 `state.yaml`、完整 diff、transcript 或长日志。用户明确要求时，只显示指定 artifact 或 heading/section。
+产品 mutation 与 `init-state` 前必须把完整 Spec/Plan 写到文件并通过 `validate-plan`。终端默认只展示：
 
-用户可以用自然语言批准、拒绝或修正。禁止要求 fixed token、哈希、approval JSON、身份短语或精确别名。批准只授权该 revision 的 Spec/Plan 合同。Goal、Constraints、Non-goals、Acceptance、`allowed_paths`、Task 合同、validation、risk、review policy 或 repair policy 变化时，必须提高 `revision`、重新 `validate-plan` 并重新获得批准。
+- `change.md`、`plan.yaml` 路径；
+- Goal、Constraints、Non-goals、Acceptance 的 1-3 行摘要；
+- risk、review policy、Task 数与 `allowed_paths` 摘要；
+- 验证命令 exit code 与短结果；
+- 成功 archive 会完整保留 `change.md`、`plan.yaml`、`state.yaml`；
+- 批准、修订、拒绝或查看指定 section 的自然语言提示。
 
-候选 Spec/Plan 写入属于准备阶段；`init-state` 和产品 mutation 必须等用户批准后发生。
+用户不需要固定 token、hash、JSON 或身份短语。合同字段变化必须提升 revision、重新验证和重新批准。
 
-## State 初始化与恢复
+## Approval Checkpoint
 
-批准后运行：
+`init-state` 在 attached branch 和空 index 上运行。它再次验证 Spec/Plan，写初始 State，selective stage 三件套，并创建：
 
-```bash
-python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> init-state --id <change-id>
+```text
+state(<change-id>): initialize approved change state
 ```
 
-`init-state` 冻结 Spec hash、Plan hash、revision、HEAD 和当前 attached `git_branch`，创建 `state.yaml`，并创建一次 subject 为 `state(<change-id>): initialize approved change state` 的初始 State commit。已有 State 不被覆盖；detached HEAD 返回 `DETACHED_HEAD` 且不写 State。
+helper 验证 parent、subject、commit tree 中三件套、Spec/Plan bytes 和空 index。State 区分 approval checkpoint 前的 `initial_head`、批准提交 `approval_checkpoint` 与当前已接受 checkpoint `current_head`。正常 `create` 路径无需用户提前提交 Spec/Plan。
 
-恢复或继续工作时先运行：
+批准 checkpoint 失败不得留下可推进的部分 State，也不得吸收用户无关 staged change。
 
-```bash
-python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> status --id <change-id>
-python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> next-action --id <change-id>
-```
+## Task Execution
 
-核心 `next_action`：
+Task 按 Plan 顺序执行：
+
+1. `start-task --id <id> --task-id <n> --executor <label>` 冻结 `task_base`，并返回 helper 派生的 `checkpoint_subject`。
+2. 只在 change-level `allowed_paths` 内实施，保持 index 可控。
+3. 精确执行 Task `validation` 中的全部命令并保存 exit code 与短摘要。
+4. selective stage Task 路径并创建恰好一个 checkpoint commit。
+5. `record-task` 传入每个 validation command/exit code。helper 验证直接 parent、subject、非空 changed paths、allowed-path 边界、空 index和 branch identity，再自动绑定 checkpoint SHA。
+
+Task validation command 的顺序与内容必须和 Plan 精确一致；PASS 的 exit codes 必须全为 `0`。agent claim、只写“测试通过”或没有 checkpoint 的工作均不能推进 State。
+
+## Review And Validation
+
+review policy 由失败后果、耦合、变更性质和验证强度决定：
+
+- `self`：低风险可由主会话自检，仍必须运行 deterministic validation。
+- `final`：所有 Task 后执行 whole-change review；个别 Task 可用 `review: task-and-final` 提前审查。
+- `task-and-final`：每个 Task checkpoint 后审查，所有 Task 后再做 final review；`high` 风险必须使用此策略。
+
+Task review 的 range 由 helper 固定为 `task_base..task checkpoint`；final review 固定为 `approval_checkpoint..current_head`。`record-review` 记录 PASS/FAIL、summary、evidence，FAIL 还应记录 violated contract 与 paths。调用者不能覆盖 base/head。
+
+`record-validation` 至少包含一个非空 command 及对应 exit code，绑定当前 HEAD。PASS 要求所有 exit code 为 `0`；FAIL 记录失败命令、非零 code、摘要和必要路径/证据。review PASS 不能覆盖 validation FAIL。
+
+## In-Scope Repair
+
+review 或 validation FAIL 后，State 进入 `REQUEST_REPAIR_DECISION`。只有以下条件全部成立，Coordinator 才能建议并在用户同意后直接 repair：
+
+- 修复仍满足批准的 Goal、Constraints、Non-goals 与 Acceptance；
+- 所有写路径在 `allowed_paths` 内；
+- 不增加 dependency、public API、migration、不可逆或外向动作；
+- risk 不上升，Plan 合同无需变化。
+
+获批后调用 `start-repair`，实施并运行 closure validation，创建一个 repair checkpoint，再用命令和 exit code调用 `record-repair`。越界修复必须回到 Plan revision 和 file-first Gate。
+
+repair 改变 HEAD 后，旧 whole-change validation 必定失效。Task review repair 返回该 Task review；final review repair 重新要求 final review 和 validation；validation repair 在需要 final review 时先返回 final review，否则返回 validation。不要复用与新 HEAD 不一致的 final evidence。
+
+## Next Actions
+
+State 对外使用以下主要 action：
 
 ```text
 DISPATCH_TASK
@@ -134,138 +119,79 @@ RUN_FINAL_REVIEW
 RUN_VALIDATION
 REQUEST_REPAIR_DECISION
 COMPLETE
-HALT
+ARCHIVE
 ARCHIVE_SUPERSEDED
+HALT
 ```
 
-`ARCHIVE_SUPERSEDED` 只来自 predecessor 的 `SUPERSEDED` State：Coordinator 必须先把 predecessor `change.md` 蒸馏为 superseded 历史记录，再调用 `archive`。该状态表示 predecessor 被 successor 接管，不表示 predecessor 旧 acceptance 已完成或验证成功。
+始终按 `next-action` 执行最小一步。不要通过手改 `state.yaml` 跳转 phase。
 
-恢复判断还必须结合 frozen branch identity、Git HEAD、`git status`/diff、checkpoint commits 和验证证据。所有读取或推进 State 的命令都调用 branch guard：当前分支必须等于 `state.git_branch`，否则返回 `BRANCH_DRIFT`；detached HEAD 返回 `DETACHED_HEAD`。不要重放 transcript，不以 agent claim 推进，也不要把 `change.md` frontmatter `status` 当动态执行状态。
+## Finish And Knowledge
 
-State 只保存当前恢复状态。它不保存完整 transition history、完整 diff、完整日志、agent 消息、文件内容 snapshot 或重复 Git 历史。
+所有 Task、必要 review 和 whole-change validation 通过后，先向用户报告产品结果、changed paths、命令、exit codes 与关键摘要。随后始终执行知识候选五问；具体准入与 freshness 见 `knowledge.md`。
 
-## 实施、checkpoint 与顺序写入
+结果映射：
 
-实施 Task 的标准顺序：
+- 无合格候选：`NO_OP`，不增加第二 Gate。
+- 用户接受并全部写入：`APPLIED`。
+- 仅部分写入或按用户修改写入：`PARTIAL`。
+- 候选存在但用户拒绝：`REJECTED`。
 
-1. 在 `next_action=DISPATCH_TASK` 时运行 `start-task`，冻结 `task_base`、executor 和 Plan 中的 `checkpoint_subject`；该命令也要求当前分支仍是 `state.git_branch`。
-2. 实施者只修改 change-level `allowed_paths` 内与当前 Task 有关的产品文件。
-3. 运行该 Task 的 validation 命令。
-4. selective stage 本 Task changed paths。
-5. 在 frozen branch 上创建恰好一个本地 checkpoint commit，subject 精确等于批准的 `checkpoint_subject`。
-6. 运行 `record-task`，让 helper 校验 parent、subject、changed paths、空 index、branch identity 和 PASS validation。
-
-每个实施 Task 和每个 repair 单元恰好一个 checkpoint commit。Helper 不自动 reset、rebase、squash、stash 或改写历史；也不自动切换分支。完成后保留 checkpoint commits 作为普通 Git 历史。
-
-产品写入按 Task/repair 顺序执行。Coordinator 和 bounded subagent 都不得创建、切换或重命名 Git 分支，不得创建 worktree 执行分支，不得把执行移到类似 `task4-member-auth-dto-vo` 的 Task 临时分支；必须停留在 `state.git_branch` 指定的 frozen attached branch。不得新增 DAG scheduler 或并行产品写入引擎。只有无写入冲突的只读探索或审查可按需并发。
-
-## 有界委派
-
-小型、边界明确、单 Task 的低风险 change 可由主会话直接实施和自检。以下情况默认委派至少一个 bounded generic subagent 单元，除非委派不可用或降低安全性：跨模块或多子系统、多个有独立验收的 Tasks、广泛探索、较多读写路径、长验证输出、明显上下文压力、或 review policy 要求独立关注。
-
-每个 subagent dispatch 仅包含：
-
-- 当前 Task 的 Goal 与 non-goals；
-- change-level `allowed_paths` 与本 Task 实施意图；
-- 必要 read paths 或 headings；
-- acceptance 与 validation commands；
-- `task_base`、expected `checkpoint_subject` 与 frozen branch `state.git_branch`；
-- selective staging/commit 合同；
-- 禁止编辑 `change.md`、`plan.yaml`、`state.yaml`，禁止递归委派、扩范围、创建/切换/重命名分支、创建 worktree 执行分支、reset/rebase/squash/stash/history rewrite；
-- 明确工具与任务生命周期边界：bounded subagent 不得调用 TaskStop/Stop Task，不得创建、更新、停止或接管 Controller/task-tracking 任务，不得尝试停止自身、父任务、兄弟任务或后台任务；
-- compact return：checkpoint SHA、changed paths、commands/exit codes、风险和 blocker。
-
-bounded subagent 完成、阻塞、超时或需要决策时，只向主会话返回 compact result；不得尝试停止任何任务，也不得调用 TaskStop/Stop Task 转移控制。主会话以实际 commit range、Git diff/status、validation、review findings 和 helper State 为准，不以 subagent claim 推进。
-
-## Bug、repair 与新 change 边界
-
-继续当前 change 的条件：
-
-- 原 Goal 尚未达成。
-- 当前实现引入缺陷或回归。
-- 当前交互验收失败且仍在批准范围内。
-- 审查或 validation 发现同范围问题。
-
-`repair_policy: in-scope` 的 repair 可继续当前批准，只在人工判断同时满足以下条件时执行：修复仍满足原 Goal、Constraints、Non-goals 和 Acceptance；所有 repair paths 在 `allowed_paths` 内；不新增依赖、API、迁移、不可逆或外向动作；不提高风险；不改变 Plan 合同。每次 repair 前 `next_action` 必须是 `REQUEST_REPAIR_DECISION`，不得自动循环。
-
-Review/validation FAIL 只记录违反合同、具体路径、证据和 decision，不做 owner mapping、owner budget、自动 fixer 或 finding owner routing。
-
-创建新 change 或返回 Plan revision 的条件：原 change 已归档、请求与原 Goal 无关、明显扩展范围、改变 public API/架构/依赖/迁移/数据模型/产品语义、提高风险、超出 `allowed_paths`、或形成独立可交付内容。
-
-若决策是创建 successor 而不是继续修订 predecessor，则 successor 的成功不自动抹除 predecessor：successor 成功 archive 后，Coordinator 仍必须按 `supersede --id <predecessor> --successor-id <successor>` 明确收口 predecessor。`supersede` 前 helper 会机械验证 predecessor State/Plan identity、干净 index、allowed-path 内无脏修改、合法 HEAD 或唯一未记录 checkpoint 例外、successor active/archive 有效性，以及 successor `change.md.related_changes` 对 predecessor 的 backlink。helper 随后写入 predecessor `state.superseded_by`；任何失败保持 predecessor active；报告残留 active predecessor 路径。
-
-## 风险驱动验证与审查
-
-Risk guidance: `plan.yaml` 使用 `risk_level` 与 `review_policy` 组合控制审查。review_policy 由场景、失败后果、耦合和验证证据决定，不按编程语言、文件数量或 Task 数量机械决定。
-
-选择矩阵：
-
-| 场景 | 建议 review policy | 说明 |
-| --- | --- | --- |
-| 低风险文档、简单配置、明确单点修复，且 deterministic validation 可直接观察结果 | `self` | 主会话自检可满足 review；仍必须运行适用 deterministic validation。 |
-| 普通语言无关开发、常规多文件或跨模块改动、多个顺序 Tasks，失败影响有限，且有强 deterministic validation 覆盖主要行为 | `final` | 先完成所有 Tasks，再运行 whole-change review 与验证；多文件、跨模块或多 Task 本身不自动升级。 |
-| change-level `final` 中只有少数风险 Task 需要早看 | 顶层 `review_policy: final`，对应 Task 使用 `review: task-and-final` | Task review 只提升少数风险 Task，用于 public seam、难回滚片段、局部耦合热点或验证薄弱 Task，其余增量留给 final review。 |
-| 安全、权限、迁移、public API、数据模型、并发/状态协调、破坏性或外向动作、高失败影响、验证弱、集成风险难观察、用户明确要求，或 `risk_level: high` | `task-and-final` | 每个 Task 独立 review，全部 Tasks 后再 final review；这是严格路径。 |
-
-Task review 读取该 Task 的实际 checkpoint 增量 `task_base..task_head`，结合 Plan Task 合同、changed paths、Task validation evidence 和 checkpoint subject 判断，不默认重读其他 Task 的已稳定增量。若发现 parent/subject/range、allowed paths、validation、或接口假设漂移，review 必须 fail closed。
-
-Final review 是 integration-focused final review：先读批准合同（Spec/Plan 摘要）、checkpoint map、各 Task diff summary、validation evidence、task review 结论和热点路径，再按触发条件深读。它仍覆盖整体集成语义、跨 Task 接口、遗漏路径、风险/非目标和验证充分性；但可以复用未漂移的 Task review 与 validation 证据，不要求无条件重读已审查且未变化的隔离增量。
-
-强制深读触发条件：安全/权限/迁移/数据模型/public API；并发、状态机或恢复语义；破坏性、不可逆或外向动作；高失败影响；validation 缺口或失败后修复；checkpoint range、parent、subject、allowed-path 或 identity drift；Task review 未覆盖、过期或与 final diff summary 不一致；接口/配置/文档合同跨 Task 耦合；用户或 reviewer 指定的热点。
-
-`high` 风险必须使用 `task-and-final`。deterministic validation FAIL、identity drift、checkpoint mismatch、allowed-path violation 或 unresolved blocker 都不能完成。
-
-Review 不能替代失败的确定性校验。Validation 和 review 结果应以命令、exit code、关键输出、路径和具体合同为证据，终端只展示短摘要，长日志按用户要求显示。
-
-## 知识候选
-
-产品验证通过并报告产品结果后，必须始终分析长期知识候选。知识候选必须同时稳定、可复用、非显然、已验证、可归属；不能因为“暂时没想到”而跳过分析。
-
-无合格候选时记录 `NO_OP`，不显示第二个 Gate，直接继续 `complete` 与 `archive`。`NO_OP` 表示没有可长期化的新事实，不能伪造知识条目，也不能制造额外批准要求。
-
-有合格候选时只展示语义结论、唯一目标文件/heading、操作类型、冲突与影响，以及支持证据摘要。用户可自然语言接受全部、部分、修改或拒绝。拒绝知识写入不影响已经验证的产品结果、`complete` 或 `archive`，但精简历史 `change.md` 必须记录候选被拒绝。
-
-知识是 finish 的主要长期价值：只有经确认且可复用的事实进入 `.dev-docs/knowledge/**`。Archive 只是轻量追溯记录，不替代长期知识。知识文件不是动态状态权威；知识写入不创建第四 artifact，不替代 `state.yaml`、Git、代码或测试事实。
-
-## 完成与 archive
-
-完成前先报告产品结果、变更路径、验证命令、退出码和关键输出摘要；随后完成 mandatory knowledge-candidate analysis，并在 `change.md` 中记录实际知识结果：写入、部分写入、修改、拒绝或 `NO_OP`。不要复制完整日志。
-
-complete 前（包括 `complete` 命令本身）的正常 transition 继续使用 current Spec hash equality：当前 active `change.md` 的 SHA-256 必须等于冻结在 `state.spec_sha256` 中的 pre-complete Spec identity，同时 State、Plan revision/hash 与 current HEAD 保持一致；任何漂移都必须 fail closed。
-
-当所有 Tasks、必要 task/final review、whole-change validation、current HEAD、State、current Spec hash、Plan hash、Plan revision 和 blocker 条件都满足时运行：
+调用：
 
 ```bash
-python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> complete --id <change-id>
+python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> complete \
+  --id <id> \
+  --knowledge-result <NO_OP|APPLIED|PARTIAL|REJECTED> \
+  [--knowledge-path <repo-relative-path> ...]
 ```
 
-`complete` 后、`archive` 前，Coordinator 将 `change.md` 蒸馏为精简完成记录。Distillation 会有意改变 `change.md` bytes，使它不再是 active pre-complete Spec。Superseded predecessor 的 archive 入口是 `SUPERSEDED` / `ARCHIVE_SUPERSEDED`，State 包含 `superseded_by`，蒸馏必须让 predecessor archive `change.md.related_changes` 包含 `state.superseded_by.successor_id`，并说明 successor 接管和“不是旧 acceptance 成功”。必备形态为 completed frontmatter 加以下非空 headings：
+helper 检查 Task/review/validation evidence freshness、HEAD 和 knowledge paths 后写入 `knowledge.result`，并设置 `status: COMPLETED`、`phase: COMPLETED`、`next_action: ARCHIVE`。
 
-```markdown
-## Goal
-## Outcome
-## Validation
-## Knowledge Updates
+## Completion Document
+
+`complete` 后允许修改 `change.md` 的终态窗口不是自由重写。Coordinator 必须保留批准 checkpoint 中的 Spec sections，只允许更新完成 frontmatter，并追加或更新非空：
+
+- `Outcome`
+- `Validation`
+- `Knowledge Updates`
+- `Residual Risks`
+
+无残余风险也必须明确说明。archive 从 approval checkpoint 读取已批准 Spec 并结构化比较；不把 Spec snapshot 复制进 State。
+
+## Complete Archive
+
+`archive` 的 normal 前置状态是 `COMPLETED/COMPLETED/ARCHIVE`；superseded 前置状态是 `SUPERSEDED/SUPERSEDED/ARCHIVE_SUPERSEDED`。helper 在 move 前校验 frozen branch、Plan/State identity、HEAD/evidence freshness、完整 completion sections、Spec 历史、knowledge paths 和 active exact artifact set。
+
+成功操作：
+
+1. 将 active `<id>/` 完整移动到 `changes/archive/<id>/`。
+2. selective stage 三个 active 路径的删除、三个 archive 路径的新增，以及 State 声明的 knowledge paths。
+3. 创建 `archive(<id>): retain complete change record`。
+4. 验证 parent、subject、六个 artifact paths、允许的 knowledge paths、HEAD 与空 index。
+5. 返回 archive path、commit SHA 和 retained artifacts。
+
+归档目录完整保留：
+
+```text
+.dev-docs/changes/archive/<id>/
+├── change.md
+├── plan.yaml
+└── state.yaml
 ```
 
-精简历史记录只保留可追溯结论：目标、产品结果、关键 changed paths、验证命令/exit code 摘要、剩余风险、知识写入或 `NO_OP`/拒绝结果，以及必要 Git checkpoint SHA；archive 成功后还可追溯 helper 返回的 archive commit SHA。不得复制 Plan、State、完整 diff、transcript、agent 消息或长日志。
+move 后、commit 前中断时，同一命令可以根据 archived State 恢复。commit 已成功但调用方未收到结果时，重跑会验证现有 commit 并幂等返回。source/target 冲突、artifact 不完整、无关 staged path、wrong branch 或验证失败都 fail closed；不得自动 reset、stash、清理无关 dirty 文件或制造第二份 backup/manifest。
 
-再运行：
+## Successor Closure
 
-```bash
-python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> archive --id <change-id>
-```
+当 scope expansion 无法在 frozen predecessor 合同内安全继续时，创建 successor，并让 successor `change.md.related_changes` backlink predecessor。不要预改 frozen predecessor，也不要手动 refresh hash/State。
 
-Archive 成功后 `.dev-docs/changes/archive/<change-id>/` 只保留精简 `change.md`；active `plan.yaml` 和 `state.yaml` 会被 pruning，不进入长期 archive。helper 创建恰好一个 archive commit，subject 为 `archive(<change-id>): retain distilled change record`，parent 为 archive 前 HEAD，changed paths 必须完整等于 active `change.md`、active `plan.yaml`、active `state.yaml` and archive `change.md`，且 index 为空；normal 和 superseded archive 使用同一 commit/path 验证。Git checkpoint commits 与 archive commit 保留实际实施和归档历史，后续相关问题创建带关联的新 active change，并通过 archive 的 Outcome/Validation/Knowledge Updates 与 Git history 追溯。
+`supersede` 只接受已成功归档、Git tracked/clean、completed 且 backlink 有效的 successor。4.1.0 完整三件套 archive 会额外验证 Plan/State identity、terminal status 与 archive commit；旧 4.0.x 单文件 archive 只按兼容规则验证完成记录。active 或半归档 successor 均被拒绝。
 
-Superseded archive 使用同一个 one-file retention，但入口不同：predecessor 先由 `supersede` 进入 `status: SUPERSEDED`、`phase: SUPERSEDED`、`next_action: ARCHIVE_SUPERSEDED`，并写入轻量 `superseded_by`（successor id、successor location/path、decision，以及可选未记录 checkpoint 事实）。Coordinator 随后把 predecessor `change.md` 蒸馏为 `status: completed` 的 archive-compatible 历史记录；frontmatter `related_changes` 必须包含 `state.superseded_by.successor_id`，`Outcome` 必须明确由该 successor 接管、保留真实 checkpoint 引用并说明未完成范围，`Validation` 必须说明这不是 predecessor 旧 acceptance 的 PASS。蒸馏后才可 archive。若 `supersede`、distill、archive 或 pruning 任一步失败，必须报告错误、archive path/remaining artifacts（如有）和残留 active predecessor 路径，不得宣称 successor/predecessor 已完全收口。
+成功后 predecessor 进入 `SUPERSEDED/ARCHIVE_SUPERSEDED`，`state.superseded_by` 记录 successor id、archive location/path 和 decision。完成文档必须保留旧 Spec，明确 takeover、真实 checkpoints、未完成范围、旧 acceptance 未完全 PASS 和 residual risks，再调用 `archive`。任一步失败都报告残留 active predecessor 路径，不能宣称完全收口。
 
-Archive 是 fail-closed 的不可逆 retention 操作：执行前必须验证 completed 或 superseded State identity、approved Plan revision/hash、frozen branch `state.git_branch`、current HEAD（仅 completed normal path）、frozen pre-complete `spec_sha256` presence、distilled record id/status/headings、superseded record 的 successor takeover 语义、archive `related_changes` 与 `state.superseded_by` 一致，以及 exact artifact set（active 目录只能含 regular non-symlink `change.md`、`plan.yaml`、`state.yaml`）。Archive 不得要求当前蒸馏后的 `change.md` hash 等于冻结的 pre-complete `state.spec_sha256`；这个字段只证明 active Spec identity 已在 complete/supersede 前被冻结且未丢失。undistilled record、unexpected artifact、target conflict、branch drift、detached HEAD 或 identity drift 必须在移动/pruning 前失败且保持 active 目录不变；pending state 写失败发生在 move 后但 recovery marker 写入前，helper 必须回滚恢复 active 三件套、保持 HEAD 不变，并让后续同命令可重试；写入 recovery marker 后但 archive commit 成功前的 moved/pruned pre-commit staging 或 commit 中断，报告 archive path、remaining artifacts 和 recovery action：`rerun archive --id <change-id> on the frozen branch`。archive commit 已成功后的 final state prune/final prune 失败必须报告 archive path、remaining artifacts 和 manual inspection recovery；不得指导直接 rerun，因为保存的 `archive_base` 已不再等于当前 HEAD，rerun 会 fail closed。若 parent/subject/path/index/HEAD 校验失败也必须报告 manual inspection recovery。不得报告成功。现有 archive 不迁移；新 retention policy 只适用于未来成功的 archive 调用。
+## Recovery And Prohibitions
 
-## 禁止恢复的 v1 与重型模式
+Git commits、working tree、代码、配置、测试和 CI 是产品事实；State 只保存当前恢复事实。恢复不得依赖 transcript 或 agent 信心。
 
-Nuclio v2 禁止恢复旧的完成交接、包绑定、证据身份、固定 Nuclio 专用 agent 流水线、持久过程 JSON、旧式状态路由、内容 snapshot、append-only State history、自动 fixer、owner routing、owner budget、第二 helper、`workflow.py`、DAG scheduler 或并行产品写入引擎。
-
-也禁止新增 MCP、network service、daemon、runtime hook、项目级 `.claude/`、`.nuclio/`、`.dev-docs/changes/index.md`、v1 compatibility converter、v1/v2 双栈、自动 squash/reset/rebase/stash/history rewrite，或要求 exact token、哈希、approval JSON 作为日常实施批准。
-
-历史 v1 资料只能在明确 legacy 语境中整体移动或按用户要求只读查看；不得解析、转换或恢复为当前运行时权威。
+Nuclio 不引入第二 helper、`workflow.py`、DAG scheduler、parallel product write、owner routing、automatic fixer、archive manifest、hidden archive backup、runtime hook、daemon、MCP、network service、项目级 `.claude/`、`.nuclio/` 状态或 v1/v2 双栈。产品写入顺序执行，只允许无写冲突的只读探索或审查并发。

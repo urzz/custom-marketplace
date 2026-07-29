@@ -62,17 +62,22 @@ PLAN_TOP_KEYS = {
     "revision",
     "risk_level",
     "review_policy",
-    "repair_policy",
     "summary",
     "allowed_paths",
     "tasks",
 }
-TASK_KEYS = {"id", "name", "steps", "acceptance", "validation", "delegate", "review", "checkpoint_subject"}
+LEGACY_PLAN_TOP_KEYS = PLAN_TOP_KEYS | {"repair_policy"}
+TASK_REQUIRED_KEYS = {"id", "name", "steps", "acceptance", "validation"}
+TASK_OPTIONAL_KEYS = {"review"}
+LEGACY_TASK_KEYS = TASK_REQUIRED_KEYS | {"delegate", "review", "checkpoint_subject"}
 ARCHIVE_ACTIVE_ARTIFACTS = ("change.md", "plan.yaml", "state.yaml")
-ARCHIVE_RETAINED_ARTIFACTS = ("change.md",)
+ARCHIVE_RETAINED_ARTIFACTS = ARCHIVE_ACTIVE_ARTIFACTS
 ARCHIVE_RECOVERY_ACTION = "rerun archive --id {change_id} on the frozen branch"
 ARCHIVE_MANUAL_RECOVERY_ACTION = "manual inspection required; do not rerun until index/HEAD are corrected"
-ARCHIVE_REQUIRED_HEADINGS = ("Goal", "Outcome", "Validation", "Knowledge Updates")
+SPEC_REQUIRED_HEADINGS = ("Goal", "Context", "Constraints", "Non-goals", "Acceptance Criteria")
+ARCHIVE_REQUIRED_HEADINGS = ("Outcome", "Validation", "Knowledge Updates", "Residual Risks")
+LEGACY_ARCHIVE_REQUIRED_HEADINGS = ("Goal", "Outcome", "Validation", "Knowledge Updates")
+SPEC_FRONTMATTER_KEYS = {"id", "title", "status", "created", "updated", "related_changes"}
 SUPERSEDED_VALIDATION_CONTEXT_RE = re.compile(r"\bacceptance\b|\bcriteria\b|\bvalidation\b|\bpass(?:ed)?\b|\bsuccess(?:ful|fully)?\b|验收|验证|通过|成功", flags=re.I)
 SUPERSEDED_VALIDATION_NON_SUCCESS_RE = re.compile(
     r"\bnot\s+(?:a\s+)?full\b|\bnot\s+fully\b|\bnot\s+complete(?:ly|d)?\b|\bnot\s+all\b|"
@@ -93,13 +98,15 @@ SUPERSEDED_NEGATED_FULL_SUCCESS_RE = re.compile(
 )
 RISK_LEVELS = {"low", "medium", "high"}
 REVIEW_POLICIES = {"self", "final", "task-and-final"}
-DELEGATES = {"main", "subagent", "auto"}
+EXECUTORS = {"main", "subagent", "auto"}
+KNOWLEDGE_RESULTS = {"NO_OP", "APPLIED", "PARTIAL", "REJECTED"}
 NEXT_DISPATCH_TASK = "DISPATCH_TASK"
 NEXT_RUN_TASK_REVIEW = "RUN_TASK_REVIEW"
 NEXT_RUN_FINAL_REVIEW = "RUN_FINAL_REVIEW"
 NEXT_RUN_VALIDATION = "RUN_VALIDATION"
 NEXT_REQUEST_REPAIR_DECISION = "REQUEST_REPAIR_DECISION"
 NEXT_COMPLETE = "COMPLETE"
+NEXT_ARCHIVE = "ARCHIVE"
 NEXT_ARCHIVE_SUPERSEDED = "ARCHIVE_SUPERSEDED"
 NEXT_HALT = "HALT"
 TERMINAL_STATUSES = {"COMPLETED", "SUPERSEDED"}
@@ -121,7 +128,7 @@ SKELETON_TEMPLATES = {
         "\n"
         "Active changes live in `.dev-docs/changes/<change-id>/` with `change.md`, `plan.yaml`, and `state.yaml`.\n"
         "\n"
-        "Completed changes move to `.dev-docs/changes/archive/<change-id>/` as a concise one-file `change.md` record; active `plan.yaml` and `state.yaml` are not retained in long-term archive.\n"
+        "Completed changes move to `.dev-docs/changes/archive/<change-id>/` with the complete `change.md`, `plan.yaml`, and terminal `state.yaml` record.\n"
         "\n"
         "Do not create `.dev-docs/changes/index.md`; root index does not enumerate active or archived changes.\n"
         "\n"
@@ -248,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_task = subparsers.add_parser("start-task", help="freeze one Task base")
     start_task.add_argument("--id", required=True)
     start_task.add_argument("--task-id", required=True, type=int)
-    start_task.add_argument("--executor", default="main", choices=tuple(sorted(DELEGATES)))
+    start_task.add_argument("--executor", default="main", choices=tuple(sorted(EXECUTORS)))
     start_task.set_defaults(func=cmd_start_task)
 
     record_task = subparsers.add_parser("record-task", help="record one Task checkpoint commit")
@@ -256,6 +263,8 @@ def build_parser() -> argparse.ArgumentParser:
     record_task.add_argument("--task-id", required=True, type=int)
     record_task.add_argument("--validation-status", required=True, choices=("PASS", "FAIL"))
     record_task.add_argument("--validation-summary", required=True)
+    record_task.add_argument("--validation-command", action="append", required=True)
+    record_task.add_argument("--validation-exit-code", action="append", required=True, type=int)
     record_task.set_defaults(func=cmd_record_task)
 
     record_review = subparsers.add_parser("record-review", help="record task or final review result")
@@ -264,8 +273,9 @@ def build_parser() -> argparse.ArgumentParser:
     record_review.add_argument("--task-id", type=int)
     record_review.add_argument("--status", required=True, choices=("PASS", "FAIL"))
     record_review.add_argument("--contract", default="")
+    record_review.add_argument("--summary", default="")
     record_review.add_argument("--path", action="append", default=[])
-    record_review.add_argument("--evidence", default="")
+    record_review.add_argument("--evidence", action="append", default=[])
     record_review.set_defaults(func=cmd_record_review)
 
     start_repair = subparsers.add_parser("start-repair", help="start approved in-scope repair")
@@ -282,19 +292,24 @@ def build_parser() -> argparse.ArgumentParser:
     record_repair.add_argument("--repair-id", required=True, type=int)
     record_repair.add_argument("--validation-status", required=True, choices=("PASS", "FAIL"))
     record_repair.add_argument("--validation-summary", required=True)
+    record_repair.add_argument("--validation-command", action="append", required=True)
+    record_repair.add_argument("--validation-exit-code", action="append", required=True, type=int)
     record_repair.set_defaults(func=cmd_record_repair)
 
     record_validation = subparsers.add_parser("record-validation", help="record whole-change validation result")
     record_validation.add_argument("--id", required=True)
     record_validation.add_argument("--status", required=True, choices=("PASS", "FAIL"))
     record_validation.add_argument("--summary", required=True)
-    record_validation.add_argument("--command", action="append", default=[])
+    record_validation.add_argument("--command", action="append", required=True)
+    record_validation.add_argument("--exit-code", action="append", required=True, type=int)
     record_validation.add_argument("--path", action="append", default=[])
     record_validation.add_argument("--evidence", default="")
     record_validation.set_defaults(func=cmd_record_validation)
 
     complete = subparsers.add_parser("complete", help="mark state.yaml complete after all gates pass")
     complete.add_argument("--id", required=True)
+    complete.add_argument("--knowledge-result", required=True, choices=tuple(sorted(KNOWLEDGE_RESULTS)))
+    complete.add_argument("--knowledge-path", action="append", default=[])
     complete.set_defaults(func=cmd_complete)
 
     supersede = subparsers.add_parser("supersede", help="mark an active predecessor change as superseded by a verified successor")
@@ -395,6 +410,17 @@ def validate_allowed_path(value: Any) -> str:
 def path_is_allowed(path: str, allowed_paths: list[str]) -> bool:
     normalized = path.strip("/")
     return any(normalized.startswith(allowed) if allowed.endswith("/") else normalized == allowed for allowed in allowed_paths)
+
+
+def validate_knowledge_path(value: Any) -> str:
+    path = validate_allowed_path(value)
+    if path != ".dev-docs/index.md" and not path.startswith(".dev-docs/knowledge/"):
+        raise NuclioError(
+            "INVALID_KNOWLEDGE_PATH",
+            "knowledge paths must be .dev-docs/index.md or live under .dev-docs/knowledge/",
+            path=path,
+        )
+    return path
 
 
 # YAML safety
@@ -513,10 +539,139 @@ def contains_placeholder(value: Any) -> bool:
     return False
 
 
-def validate_plan_data(plan: Any) -> dict[str, Any]:
+def yaml_frontmatter(data: dict[str, Any]) -> str:
+    yaml_module = require_yaml()
+    return yaml_module.safe_dump(data, sort_keys=False, allow_unicode=True).rstrip("\n")
+
+
+def read_utf8_text(path: Path, *, label: str) -> str:
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise NuclioError("MISSING_ARTIFACT", f"missing {label}: {path}") from exc
+    if len(data) > MAX_YAML_BYTES:
+        raise NuclioError("ARTIFACT_TOO_LARGE", f"{label} exceeds {MAX_YAML_BYTES} bytes: {path}")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise NuclioError("INVALID_UTF8", f"{label} must be UTF-8: {path}") from exc
+
+
+def parse_markdown_sections(body: str) -> tuple[dict[str, str], list[str]]:
+    headings = list(re.finditer(r"^##\s+(.+?)\s*$", body, flags=re.M))
+    sections: dict[str, str] = {}
+    order: list[str] = []
+    for index, match in enumerate(headings):
+        name = match.group(1).strip()
+        if name in sections:
+            raise NuclioError("INVALID_SPEC", "change.md contains duplicate level-two headings", heading=name)
+        start = match.end()
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
+        sections[name] = body[start:end].strip()
+        order.append(name)
+    return sections, order
+
+
+def h1_title_from_body(body: str) -> str | None:
+    for line in body.splitlines():
+        if line.startswith("# ") and line[2:].strip():
+            return line[2:].strip()
+    return None
+
+
+def valid_date_value(value: Any) -> bool:
+    if isinstance(value, _dt.date):
+        return True
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        _dt.date.fromisoformat(value.strip())
+    except ValueError:
+        return False
+    return True
+
+
+def contains_spec_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    return bool(
+        re.search(r"<[^>]+>", value)
+        or re.search(r"\b(?:todo|tbd|placeholder)\b", lowered)
+        or "待补充" in value
+        or "待确认" in value
+    )
+
+
+def parse_change_document(path: Path, *, label: str = "change.md") -> tuple[dict[str, Any], str, dict[str, str], list[str]]:
+    text = read_utf8_text(path, label=label)
+    if not text.strip():
+        raise NuclioError("INVALID_SPEC", f"{label} must be non-empty")
+    frontmatter, body = parse_markdown_frontmatter(text)
+    sections, order = parse_markdown_sections(body)
+    return frontmatter, body, sections, order
+
+
+def require_change_frontmatter(frontmatter: dict[str, Any], change_id: str, *, expected_status: str) -> None:
+    assert_exact_keys(frontmatter, SPEC_FRONTMATTER_KEYS, "change.md frontmatter")
+    if frontmatter.get("id") != change_id:
+        raise NuclioError("IDENTITY_DRIFT", "change.md id does not match requested change", expected=change_id, actual=frontmatter.get("id"))
+    title = require_non_empty_string(frontmatter.get("title"), "change.md title")
+    if "\n" in title or "\r" in title:
+        raise NuclioError("INVALID_SPEC", "change.md title must be single-line")
+    if frontmatter.get("status") != expected_status:
+        raise NuclioError("INVALID_SPEC", f"change.md status must be {expected_status}", actual=frontmatter.get("status"))
+    for field in ("created", "updated"):
+        if not valid_date_value(frontmatter.get(field)):
+            raise NuclioError("INVALID_SPEC", f"change.md {field} must be an ISO date")
+    related = frontmatter.get("related_changes")
+    if not isinstance(related, list):
+        raise NuclioError("INVALID_SPEC", "change.md related_changes must be a list")
+    normalized = [validate_id(related_id) for related_id in related]
+    if len(normalized) != len(set(normalized)):
+        raise NuclioError("INVALID_SPEC", "change.md related_changes must not contain duplicates")
+    if change_id in normalized:
+        raise NuclioError("INVALID_SPEC", "change.md related_changes must not contain the change itself")
+
+
+def require_active_change_spec(paths: Paths, change_id: str, plan: dict[str, Any]) -> dict[str, Any]:
+    frontmatter, body, sections, _order = parse_change_document(spec_path_for(paths, change_id))
+    require_change_frontmatter(frontmatter, change_id, expected_status="active")
+    if plan["change_id"] != change_id:
+        raise NuclioError("IDENTITY_DRIFT", "plan change_id does not match requested change")
+    h1 = h1_title_from_body(body)
+    if h1 != frontmatter["title"]:
+        raise NuclioError("INVALID_SPEC", "change.md H1 must match frontmatter title", expected=frontmatter["title"], actual=h1)
+    missing = [heading for heading in SPEC_REQUIRED_HEADINGS if heading not in sections]
+    empty = [heading for heading in SPEC_REQUIRED_HEADINGS if heading in sections and not sections[heading].strip()]
+    placeholders = [heading for heading in SPEC_REQUIRED_HEADINGS if heading in sections and contains_spec_placeholder(sections[heading])]
+    if "Decisions" in sections and not sections["Decisions"].strip():
+        empty.append("Decisions")
+    if missing or empty or placeholders:
+        raise NuclioError(
+            "INVALID_SPEC",
+            "change.md must contain complete approved Spec sections",
+            missing_headings=missing,
+            empty_headings=empty,
+            placeholder_headings=placeholders,
+        )
+    return frontmatter
+
+
+def task_checkpoint_subject(change_id: str, task_id: int) -> str:
+    return f"task({change_id}): complete task {task_id}"
+
+
+def validate_plan_data(plan: Any, *, allow_legacy: bool = False) -> dict[str, Any]:
     if not isinstance(plan, dict):
         raise NuclioError("INVALID_SCHEMA", "plan must be a mapping")
-    assert_exact_keys(plan, PLAN_TOP_KEYS, "plan")
+    keys = set(plan)
+    if keys == PLAN_TOP_KEYS:
+        legacy = False
+    elif allow_legacy and keys == LEGACY_PLAN_TOP_KEYS:
+        legacy = True
+    else:
+        expected = LEGACY_PLAN_TOP_KEYS if allow_legacy and "repair_policy" in keys else PLAN_TOP_KEYS
+        assert_exact_keys(plan, expected, "plan")
+        raise AssertionError("unreachable")
     if plan["schema_version"] != 1:
         raise NuclioError("INVALID_SCHEMA", "schema_version must be 1")
     change_id = validate_id(require_non_empty_string(plan["change_id"], "change_id"))
@@ -528,7 +683,7 @@ def validate_plan_data(plan: Any) -> dict[str, Any]:
         raise NuclioError("INVALID_SCHEMA", "review_policy must be self, final, or task-and-final")
     if plan["risk_level"] == "high" and plan["review_policy"] != "task-and-final":
         raise NuclioError("RISK_REVIEW_MISMATCH", "high risk changes require task-and-final review")
-    if plan["repair_policy"] != "in-scope":
+    if legacy and plan["repair_policy"] != "in-scope":
         raise NuclioError("INVALID_SCHEMA", "repair_policy must be in-scope")
     require_non_empty_string(plan["summary"], "summary")
     if not isinstance(plan["allowed_paths"], list) or not plan["allowed_paths"]:
@@ -540,10 +695,19 @@ def validate_plan_data(plan: Any) -> dict[str, Any]:
         raise NuclioError("INVALID_SCHEMA", "tasks must be a non-empty list")
     seen_ids: set[int] = set()
     previous_id = 0
+    normalized_tasks: list[dict[str, Any]] = []
     for task in plan["tasks"]:
         if not isinstance(task, dict):
             raise NuclioError("INVALID_SCHEMA", "each task must be a mapping")
-        assert_exact_keys(task, TASK_KEYS, "task")
+        if legacy:
+            assert_exact_keys(task, LEGACY_TASK_KEYS, "task")
+        else:
+            task_keys = set(task)
+            frozen_task_keys = frozenset(task_keys)
+            if frozen_task_keys not in {frozenset(TASK_REQUIRED_KEYS), frozenset(TASK_REQUIRED_KEYS | TASK_OPTIONAL_KEYS)}:
+                extra = sorted(task_keys - (TASK_REQUIRED_KEYS | TASK_OPTIONAL_KEYS))
+                missing = sorted(TASK_REQUIRED_KEYS - task_keys)
+                raise NuclioError("INVALID_SCHEMA", "task schema keys mismatch", extra=extra, missing=missing)
         task_id = task["id"]
         if not isinstance(task_id, int) or isinstance(task_id, bool) or task_id <= 0:
             raise NuclioError("INVALID_SCHEMA", "task id must be a positive integer")
@@ -555,20 +719,51 @@ def validate_plan_data(plan: Any) -> dict[str, Any]:
         require_string_list(task["steps"], "task.steps")
         require_string_list(task["acceptance"], "task.acceptance")
         require_string_list(task["validation"], "task.validation")
-        if task["delegate"] not in DELEGATES:
-            raise NuclioError("INVALID_SCHEMA", "task.delegate must be main, subagent, or auto")
-        if task["review"] not in REVIEW_POLICIES:
-            raise NuclioError("INVALID_SCHEMA", "task.review must be self, final, or task-and-final")
-        subject = require_non_empty_string(task["checkpoint_subject"], "task.checkpoint_subject")
-        if "\n" in subject or "\r" in subject:
-            raise NuclioError("INVALID_SCHEMA", "task.checkpoint_subject must be single-line")
+        if legacy:
+            if task["delegate"] not in EXECUTORS:
+                raise NuclioError("INVALID_SCHEMA", "task.delegate must be main, subagent, or auto")
+            if task["review"] not in REVIEW_POLICIES:
+                raise NuclioError("INVALID_SCHEMA", "task.review must be self, final, or task-and-final")
+            subject = require_non_empty_string(task["checkpoint_subject"], "task.checkpoint_subject")
+            if "\n" in subject or "\r" in subject:
+                raise NuclioError("INVALID_SCHEMA", "task.checkpoint_subject must be single-line")
+            review = task["review"]
+        else:
+            review = task.get("review")
+            if review is not None and (plan["review_policy"] != "final" or review != "task-and-final"):
+                raise NuclioError(
+                    "INVALID_SCHEMA",
+                    "task.review is only allowed as task-and-final under change-level final review",
+                )
+            subject = task_checkpoint_subject(change_id, task_id)
+        normalized_tasks.append(
+            {
+                "id": task_id,
+                "name": task["name"],
+                "steps": list(task["steps"]),
+                "acceptance": list(task["acceptance"]),
+                "validation": list(task["validation"]),
+                "review": review,
+                "checkpoint_subject": subject,
+            }
+        )
     if contains_placeholder(plan):
         raise NuclioError("PLACEHOLDER_VALUE", "plan contains placeholder text")
-    return plan
+    return {
+        "schema_version": plan["schema_version"],
+        "change_id": change_id,
+        "revision": plan["revision"],
+        "risk_level": plan["risk_level"],
+        "review_policy": plan["review_policy"],
+        "summary": plan["summary"],
+        "allowed_paths": allowed_paths,
+        "tasks": normalized_tasks,
+        "_legacy": legacy,
+    }
 
 
-def validate_plan_file(path: Path) -> dict[str, Any]:
-    return validate_plan_data(read_yaml_file(path))
+def validate_plan_file(path: Path, *, allow_legacy: bool = False) -> dict[str, Any]:
+    return validate_plan_data(read_yaml_file(path), allow_legacy=allow_legacy)
 
 
 def plan_task(plan: dict[str, Any], task_id: int) -> dict[str, Any]:
@@ -626,15 +821,37 @@ def init_state_subject(change_id: str) -> str:
     return f"state({change_id}): initialize approved change state"
 
 
-def git_commit_initial_state(paths: Paths, change_id: str) -> str:
-    pathspec = f".dev-docs/changes/{change_id}/state.yaml"
+def git_commit_initial_state(paths: Paths, change_id: str, *, spec_sha256: str, plan_sha256: str) -> str:
+    pathspecs = [f".dev-docs/changes/{change_id}/{name}" for name in ARCHIVE_ACTIVE_ARTIFACTS]
+    expected_subject = init_state_subject(change_id)
+    expected_parent = git_head(paths)
     require_clean_index(paths)
-    git(paths, "add", "--", pathspec)
+    git(paths, "add", "--", *pathspecs)
     try:
-        return git_commit(paths, init_state_subject(change_id))
+        commit_sha = git_commit(paths, expected_subject)
     except Exception:
-        git_unstage_exact(paths, [pathspec])
+        git_unstage_exact(paths, pathspecs)
         raise
+    if commit_parent(paths, commit_sha) != expected_parent:
+        raise NuclioError("APPROVAL_COMMIT_PARENT_MISMATCH", "approval checkpoint parent mismatch")
+    if commit_subject(paths, commit_sha) != expected_subject:
+        raise NuclioError("APPROVAL_COMMIT_SUBJECT_MISMATCH", "approval checkpoint subject mismatch")
+    changed_paths = commit_changed_paths(paths, commit_sha)
+    outside = [path for path in changed_paths if path not in set(pathspecs)]
+    if outside:
+        raise NuclioError("APPROVAL_COMMIT_PATH_MISMATCH", "approval checkpoint contains unrelated paths", paths=outside)
+    if not index_is_clean(paths):
+        raise NuclioError("APPROVAL_INDEX_DIRTY", "approval checkpoint left staged changes", paths=index_changed_paths(paths))
+    for pathspec in pathspecs:
+        if git(paths, "cat-file", "-e", f"{commit_sha}:{pathspec}", allow_fail=True).returncode != 0:
+            raise NuclioError("APPROVAL_COMMIT_ARTIFACT_MISSING", "approval checkpoint tree is missing an artifact", path=pathspec)
+    committed_spec = git(paths, "show", f"{commit_sha}:{pathspecs[0]}").stdout.encode("utf-8")
+    committed_plan = git(paths, "show", f"{commit_sha}:{pathspecs[1]}").stdout.encode("utf-8")
+    if hashlib.sha256(committed_spec).hexdigest() != spec_sha256:
+        raise NuclioError("APPROVAL_COMMIT_IDENTITY_DRIFT", "approval checkpoint Spec differs from approved bytes")
+    if hashlib.sha256(committed_plan).hexdigest() != plan_sha256:
+        raise NuclioError("APPROVAL_COMMIT_IDENTITY_DRIFT", "approval checkpoint Plan differs from approved bytes")
+    return commit_sha
 
 
 def git_unstage_exact(paths: Paths, pathspecs: list[str]) -> None:
@@ -643,7 +860,7 @@ def git_unstage_exact(paths: Paths, pathspecs: list[str]) -> None:
 
 
 def index_changed_paths(paths: Paths) -> list[str]:
-    output = git(paths, "diff", "--cached", "--name-only").stdout
+    output = git(paths, "diff", "--cached", "--name-only", "--no-renames").stdout
     return [line for line in output.splitlines() if line]
 
 
@@ -694,7 +911,7 @@ def commit_parent(paths: Paths, commit: str = "HEAD") -> str:
 
 
 def commit_changed_paths(paths: Paths, commit: str = "HEAD") -> list[str]:
-    output = git(paths, "diff-tree", "--no-commit-id", "--name-only", "-r", commit).stdout
+    output = git(paths, "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", commit).stdout
     return [line for line in output.splitlines() if line]
 
 
@@ -721,7 +938,7 @@ def load_verified_state_and_plan(paths: Paths, change_id: str, *, allow_head_dri
     state = load_state(paths, change_id)
     plan_path = plan_path_for(paths, change_id)
     spec_path = spec_path_for(paths, change_id)
-    plan = validate_plan_file(plan_path)
+    plan = validate_plan_file(plan_path, allow_legacy=True)
     if state.get("schema_version") != 1 or state.get("change_id") != change_id:
         raise NuclioError("INVALID_STATE", "state identity mismatch")
     require_frozen_branch(paths, state)
@@ -794,6 +1011,40 @@ def task_review_required(plan: dict[str, Any], task: dict[str, Any]) -> bool:
     return plan["review_policy"] == "task-and-final" or task["review"] == "task-and-final"
 
 
+def approval_checkpoint_for_state(state: dict[str, Any]) -> str:
+    checkpoint = state.get("approval_checkpoint") or state.get("initial_head")
+    if not isinstance(checkpoint, str) or not checkpoint:
+        raise NuclioError("INVALID_STATE", "state approval checkpoint is missing")
+    return checkpoint
+
+
+def validation_evidence(
+    commands: list[str],
+    exit_codes: list[int],
+    summary: str,
+    *,
+    status: str,
+    head: str,
+) -> dict[str, Any]:
+    if not commands or len(commands) != len(exit_codes):
+        raise NuclioError("INVALID_EVIDENCE", "validation commands and exit codes must be non-empty and have equal length")
+    normalized_commands = [require_non_empty_string(command, "validation command") for command in commands]
+    normalized_summary = require_non_empty_string(summary, "validation summary").strip()
+    if status == "PASS" and any(code != 0 for code in exit_codes):
+        raise NuclioError("INVALID_EVIDENCE", "PASS validation requires every exit code to be zero", exit_codes=exit_codes)
+    if status == "FAIL" and all(code == 0 for code in exit_codes):
+        raise NuclioError("INVALID_EVIDENCE", "FAIL validation requires at least one non-zero exit code", exit_codes=exit_codes)
+    return {
+        "status": status,
+        "head": head,
+        "commands": [
+            {"command": command, "exit_code": exit_code}
+            for command, exit_code in zip(normalized_commands, exit_codes, strict=True)
+        ],
+        "summary": normalized_summary,
+    }
+
+
 def pending_task_review_ids(state: dict[str, Any], plan: dict[str, Any]) -> list[int]:
     task_reviews = state["review"].get("task_reviews", {})
     return [
@@ -851,8 +1102,12 @@ def cmd_create(args: argparse.Namespace, paths: Paths) -> int:
     goal = args.goal.strip()
     if not title:
         raise NuclioError("INVALID_INPUT", "title must be non-empty")
+    if "\n" in title or "\r" in title or any(ord(ch) < 32 for ch in title):
+        raise NuclioError("INVALID_INPUT", "title must be a single line without control characters")
     if not goal:
         raise NuclioError("INVALID_INPUT", "goal must be non-empty")
+    if len(args.related_change) != len(set(args.related_change)) or change_id in args.related_change:
+        raise NuclioError("INVALID_INPUT", "related changes must be unique and must not include the change itself")
     today = date_arg(args.date)
     require_v2_skeleton(paths)
     active_dir = active_change_dir(paths, change_id)
@@ -862,16 +1117,20 @@ def cmd_create(args: argparse.Namespace, paths: Paths) -> int:
     if archived_dir.exists():
         raise NuclioError("CHANGE_EXISTS", f"archived change already exists: {archived_dir}")
     active_dir.mkdir(parents=False)
-    related = json.dumps(args.related_change, ensure_ascii=False)
     change = active_dir / "change.md"
+    frontmatter = yaml_frontmatter(
+        {
+            "id": change_id,
+            "title": title,
+            "status": "active",
+            "created": today,
+            "updated": today,
+            "related_changes": args.related_change,
+        }
+    )
     content = (
         "---\n"
-        f"id: {change_id}\n"
-        f"title: {title}\n"
-        "status: active\n"
-        f"created: {today}\n"
-        f"updated: {today}\n"
-        f"related_changes: {related}\n"
+        f"{frontmatter}\n"
         "---\n\n"
         f"# {title}\n\n"
         "## Goal\n\n"
@@ -952,7 +1211,10 @@ def cmd_validate_plan(args: argparse.Namespace, paths: Paths) -> int:
         plan_path = plan_path_for(paths, args.id)
     else:
         raise NuclioError("INVALID_INPUT", "validate-plan requires --id or --plan")
-    plan = validate_plan_file(plan_path)
+    allow_legacy = bool(args.id and state_path_for(paths, args.id).is_file())
+    plan = validate_plan_file(plan_path, allow_legacy=allow_legacy)
+    if args.id:
+        require_active_change_spec(paths, args.id, plan)
     return emit_ok(
         {
             "ok": True,
@@ -979,17 +1241,20 @@ def cmd_init_state(args: argparse.Namespace, paths: Paths) -> int:
     plan = validate_plan_file(plan_path)
     if plan["change_id"] != change_id:
         raise NuclioError("IDENTITY_DRIFT", "plan change_id does not match requested change")
+    require_active_change_spec(paths, change_id, plan)
     branch = git_branch(paths)
     head = git_head(paths)
+    plan_sha256 = sha256_file(plan_path)
+    spec_sha256 = sha256_file(spec_path)
     state = {
         "schema_version": 1,
         "change_id": change_id,
         "plan_revision": plan["revision"],
-        "plan_sha256": sha256_file(plan_path),
-        "spec_sha256": sha256_file(spec_path),
-        "repo_root": str(paths.root),
+        "plan_sha256": plan_sha256,
+        "spec_sha256": spec_sha256,
         "git_branch": branch,
         "initial_head": head,
+        "approval_checkpoint": None,
         "current_head": head,
         "status": "ACTIVE",
         "phase": "READY",
@@ -997,12 +1262,22 @@ def cmd_init_state(args: argparse.Namespace, paths: Paths) -> int:
         "next_action": NEXT_DISPATCH_TASK,
         "tasks": initial_task_states(plan),
         "review": {"task_reviews": {}, "final": {"status": "NOT_REQUIRED" if plan["review_policy"] == "self" else "PENDING"}},
-        "validation": {"status": "PENDING", "commands": [], "summary": None},
+        "validation": {"status": "PENDING", "head": None, "commands": [], "summary": None},
         "repair": None,
         "blocker": None,
     }
-    dump_yaml_atomic(state_path, state)
-    state_head = git_commit_initial_state(paths, change_id)
+    try:
+        dump_yaml_atomic(state_path, state)
+        state_head = git_commit_initial_state(paths, change_id, spec_sha256=spec_sha256, plan_sha256=plan_sha256)
+    except Exception:
+        if git_head(paths) == head:
+            git_unstage_exact(paths, [f".dev-docs/changes/{change_id}/{name}" for name in ARCHIVE_ACTIVE_ARTIFACTS])
+            try:
+                state_path.unlink()
+            except FileNotFoundError:
+                pass
+        raise
+    state["approval_checkpoint"] = state_head
     state["current_head"] = state_head
     dump_yaml_atomic(state_path, state)
     return emit_ok({"ok": True, "change_id": change_id, "path": rel(state_path, paths.root), "next_action": NEXT_DISPATCH_TASK, "head": state_head})
@@ -1010,12 +1285,15 @@ def cmd_init_state(args: argparse.Namespace, paths: Paths) -> int:
 
 def load_status_state_and_plan(paths: Paths, change_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     state = load_state(paths, change_id)
-    allow_superseded_archive_recovery = state.get("status") == "SUPERSEDED" and state.get("next_action") == NEXT_ARCHIVE_SUPERSEDED
+    allow_terminal_archive_recovery = (
+        (state.get("status") == "COMPLETED" and state.get("next_action") == NEXT_ARCHIVE)
+        or (state.get("status") == "SUPERSEDED" and state.get("next_action") == NEXT_ARCHIVE_SUPERSEDED)
+    )
     return load_verified_state_and_plan(
         paths,
         change_id,
-        allow_head_drift=allow_superseded_archive_recovery,
-        allow_spec_drift=allow_superseded_archive_recovery,
+        allow_head_drift=allow_terminal_archive_recovery and state.get("status") == "SUPERSEDED",
+        allow_spec_drift=allow_terminal_archive_recovery,
     )
 
 
@@ -1067,12 +1345,26 @@ def cmd_record_task(args: argparse.Namespace, paths: Paths) -> int:
         raise NuclioError("CHECKPOINT_SUBJECT_MISMATCH", "task checkpoint subject mismatch", expected=task["checkpoint_subject"], actual=subject)
     changed_paths = commit_changed_paths(paths, "HEAD")
     require_all_commit_paths_allowed(changed_paths, plan["allowed_paths"])
+    if args.validation_command != task["validation"]:
+        raise NuclioError(
+            "VALIDATION_COMMAND_MISMATCH",
+            "recorded Task validation commands must match the approved Plan",
+            expected=task["validation"],
+            actual=args.validation_command,
+        )
+    evidence = validation_evidence(
+        args.validation_command,
+        args.validation_exit_code,
+        args.validation_summary,
+        status="PASS",
+        head=head,
+    )
     entry.update(
         {
             "status": "DONE",
             "task_head": head,
             "checkpoint_commit": head,
-            "validation": {"status": "PASS", "summary": args.validation_summary},
+            "validation": evidence,
         }
     )
     if task_review_required(plan, task):
@@ -1106,6 +1398,22 @@ def cmd_record_review(args: argparse.Namespace, paths: Paths) -> int:
         pending_reviews = pending_task_review_ids(state, plan)
         if pending_reviews != [args.task_id]:
             raise NuclioError("INVALID_TRANSITION", "task review does not match the pending task review", expected=pending_reviews[0] if pending_reviews else None, actual=args.task_id)
+        task_entry = state_task(state, args.task_id)
+        review_base = task_entry["task_base"]
+        review_head = task_entry["checkpoint_commit"]
+    else:
+        review_base = approval_checkpoint_for_state(state)
+        review_head = state["current_head"]
+    summary = (args.summary or args.contract).strip()
+    if args.status == "PASS" and not summary and not args.evidence:
+        raise NuclioError("INVALID_EVIDENCE", "PASS review requires a summary or evidence")
+    review_record = {
+        "status": args.status,
+        "base": review_base,
+        "head": review_head,
+        "summary": summary,
+        "evidence": args.evidence,
+    }
     if args.status == "FAIL":
         source_gate = expected_action
         state["blocker"] = {
@@ -1115,16 +1423,18 @@ def cmd_record_review(args: argparse.Namespace, paths: Paths) -> int:
             "evidence": args.evidence,
         }
         if args.scope == "task":
-            state["review"]["task_reviews"][str(args.task_id)] = {"status": "FAIL", "contract": args.contract, "paths": args.path, "evidence": args.evidence}
+            review_record.update({"contract": args.contract, "paths": args.path})
+            state["review"]["task_reviews"][str(args.task_id)] = review_record
         else:
-            state["review"]["final"] = {"status": "FAIL", "contract": args.contract, "paths": args.path, "evidence": args.evidence}
+            review_record.update({"contract": args.contract, "paths": args.path})
+            state["review"]["final"] = review_record
         state.update({"phase": "REPAIR_DECISION_PENDING", "next_action": NEXT_REQUEST_REPAIR_DECISION})
     else:
         if args.scope == "task":
-            state["review"]["task_reviews"][str(args.task_id)] = {"status": "PASS", "contract": args.contract, "evidence": args.evidence}
+            state["review"]["task_reviews"][str(args.task_id)] = review_record
             next_action = next_after_task_gate(state, plan)
         else:
-            state["review"]["final"] = {"status": "PASS", "contract": args.contract, "evidence": args.evidence}
+            state["review"]["final"] = review_record
             next_action = NEXT_RUN_VALIDATION if state["validation"].get("status") != "PASS" else NEXT_COMPLETE
         state.update({"phase": next_action, "next_action": next_action, "blocker": None})
     write_state(paths, args.id, state)
@@ -1133,8 +1443,6 @@ def cmd_record_review(args: argparse.Namespace, paths: Paths) -> int:
 
 def cmd_start_repair(args: argparse.Namespace, paths: Paths) -> int:
     state, plan = load_verified_state_and_plan(paths, args.id)
-    if plan["repair_policy"] != "in-scope":
-        raise NuclioError("INVALID_TRANSITION", "plan repair_policy is not in-scope")
     if state["next_action"] != NEXT_REQUEST_REPAIR_DECISION or not state.get("blocker"):
         raise NuclioError("INVALID_TRANSITION", "no repair decision is pending")
     if state["blocker"].get("source_gate") != args.source_gate:
@@ -1184,22 +1492,39 @@ def cmd_record_repair(args: argparse.Namespace, paths: Paths) -> int:
     changed_paths = commit_changed_paths(paths, "HEAD")
     require_all_commit_paths_allowed(changed_paths, plan["allowed_paths"])
     source_gate = repair["source_gate"]
-    repair.update({"status": "DONE", "checkpoint_commit": head, "closure_validation": {"status": "PASS", "summary": args.validation_summary}, "changed_paths": changed_paths})
-    state.update({"phase": source_gate, "next_action": source_gate, "blocker": None})
+    evidence = validation_evidence(
+        args.validation_command,
+        args.validation_exit_code,
+        args.validation_summary,
+        status="PASS",
+        head=head,
+    )
+    repair.update({"status": "DONE", "checkpoint_commit": head, "closure_validation": evidence, "changed_paths": changed_paths})
+    state["validation"] = {"status": "PENDING", "head": None, "commands": [], "summary": None}
+    if source_gate == NEXT_RUN_TASK_REVIEW:
+        next_action = NEXT_RUN_TASK_REVIEW
+    elif plan["review_policy"] in {"final", "task-and-final"}:
+        state["review"]["final"] = {"status": "PENDING"}
+        next_action = NEXT_RUN_FINAL_REVIEW
+    else:
+        next_action = NEXT_RUN_VALIDATION
+    state.update({"phase": next_action, "next_action": next_action, "blocker": None})
     write_state(paths, args.id, state)
-    return emit_ok({"ok": True, "change_id": args.id, "repair_id": args.repair_id, "checkpoint_commit": head, "changed_paths": changed_paths, "next_action": source_gate})
+    return emit_ok({"ok": True, "change_id": args.id, "repair_id": args.repair_id, "checkpoint_commit": head, "changed_paths": changed_paths, "next_action": next_action})
 
 
 def cmd_record_validation(args: argparse.Namespace, paths: Paths) -> int:
     state, plan = load_verified_state_and_plan(paths, args.id)
     if state["next_action"] != NEXT_RUN_VALIDATION:
         raise NuclioError("INVALID_TRANSITION", "next_action is not RUN_VALIDATION", next_action=state["next_action"])
+    validation = validation_evidence(args.command, args.exit_code, args.summary, status=args.status, head=state["current_head"])
     if args.status == "FAIL":
-        state["validation"] = {"status": "FAIL", "commands": args.command, "summary": args.summary, "paths": args.path, "evidence": args.evidence}
+        validation.update({"paths": args.path, "evidence": args.evidence})
+        state["validation"] = validation
         state["blocker"] = {"source_gate": NEXT_RUN_VALIDATION, "contract": "validation", "paths": args.path, "evidence": args.evidence or args.summary}
         state.update({"phase": "REPAIR_DECISION_PENDING", "next_action": NEXT_REQUEST_REPAIR_DECISION})
     else:
-        state["validation"] = {"status": "PASS", "commands": args.command, "summary": args.summary}
+        state["validation"] = validation
         state.update({"phase": NEXT_COMPLETE, "next_action": NEXT_COMPLETE, "blocker": None})
     write_state(paths, args.id, state)
     return emit_ok({"ok": True, "change_id": args.id, "next_action": state["next_action"]})
@@ -1229,31 +1554,74 @@ def locate_verified_successor(paths: Paths, predecessor_id: str, successor_id: s
         raise NuclioError("SELF_SUPERSEDE", "successor must differ from predecessor")
     active_dir = active_change_dir(paths, successor_id)
     archived_dir = archive_change_dir(paths, successor_id)
-    active_exists = active_dir.is_dir()
-    archived_exists = archived_dir.is_dir()
-    if active_exists and archived_exists:
+    if active_dir.is_dir() and archived_dir.is_dir():
         raise NuclioError("SUCCESSOR_AMBIGUOUS", "successor exists in both active and archive", successor_id=successor_id)
-    if not active_exists and not archived_exists:
-        raise NuclioError("UNKNOWN_SUCCESSOR", "successor change is not active or archived", successor_id=successor_id)
-    location = "active" if active_exists else "archive"
-    directory = active_dir if active_exists else archived_dir
-    change_path = directory / "change.md"
-    frontmatter = read_change_frontmatter(change_path, label="successor")
+    if active_dir.is_dir():
+        raise NuclioError("SUCCESSOR_NOT_ARCHIVED", "successor must be successfully archived before supersede", successor_id=successor_id)
+    if not archived_dir.is_dir():
+        raise NuclioError("UNKNOWN_SUCCESSOR", "archived successor change does not exist", successor_id=successor_id)
+    artifacts = archive_artifacts(archived_dir)
+    if artifacts not in [["change.md"], sorted(ARCHIVE_RETAINED_ARTIFACTS)]:
+        raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor has an unsupported artifact set", artifacts=artifacts)
+    frontmatter, _body, sections, _order = parse_change_document(archived_dir / "change.md", label="successor change.md")
+    require_change_frontmatter(frontmatter, successor_id, expected_status="completed")
     require_known_related(frontmatter, successor_id, predecessor_id, label="successor")
-    if location == "active":
-        missing = [name for name in ("change.md", "plan.yaml") if not (directory / name).is_file()]
-        if missing:
-            raise NuclioError("SUCCESSOR_INCOMPLETE", "active successor must include complete Spec and Plan", missing=missing)
-        plan = validate_plan_file(directory / "plan.yaml")
-        if plan["change_id"] != successor_id:
-            raise NuclioError("SUCCESSOR_INCOMPLETE", "active successor plan change_id mismatch", expected=successor_id, actual=plan["change_id"])
+    required_headings = LEGACY_ARCHIVE_REQUIRED_HEADINGS if artifacts == ["change.md"] else SPEC_REQUIRED_HEADINGS + ARCHIVE_REQUIRED_HEADINGS
+    missing = [heading for heading in required_headings if heading not in sections or not sections[heading].strip()]
+    if missing:
+        raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor record is missing required content", headings=missing)
+    pathspecs = [f".dev-docs/changes/archive/{successor_id}/{name}" for name in artifacts]
+    untracked = [
+        pathspec
+        for pathspec in pathspecs
+        if git(paths, "ls-files", "--error-unmatch", "--", pathspec, allow_fail=True).returncode != 0
+    ]
+    dirty = worktree_changes_for_paths(paths, pathspecs)
+    if untracked or dirty:
+        raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor must be committed and clean", untracked=untracked, dirty=dirty)
+    archive_commit = git(paths, "log", "-1", "--format=%H", "--", *pathspecs).stdout.strip()
+    if not archive_commit:
+        raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor has no Git archive commit")
+    if artifacts == ["change.md"]:
+        expected_subject = f"archive({successor_id}): retain distilled change record"
     else:
-        artifacts = archive_artifacts(directory)
-        if artifacts != ["change.md"]:
-            raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor must be a pruned one-file record", artifacts=artifacts)
-        if frontmatter.get("status") != "completed":
-            raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor must be a completed historical record", status=frontmatter.get("status"))
-    return {"id": successor_id, "location": location, "path": rel(directory, paths.root)}
+        expected_subject = archive_subject(successor_id)
+    if commit_subject(paths, archive_commit) != expected_subject:
+        raise NuclioError(
+            "SUCCESSOR_INCOMPLETE",
+            "successor archive commit subject is invalid",
+            commit=archive_commit,
+            expected_subject=expected_subject,
+        )
+    if artifacts != ["change.md"]:
+        plan_path = archived_dir / "plan.yaml"
+        plan = validate_plan_file(plan_path, allow_legacy=True)
+        state = read_yaml_file(archived_dir / "state.yaml")
+        if not isinstance(state, dict) or state.get("change_id") != successor_id:
+            raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor State identity mismatch")
+        if plan["change_id"] != successor_id or state.get("plan_revision") != plan["revision"] or state.get("plan_sha256") != sha256_file(plan_path):
+            raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor Plan identity mismatch")
+        if state.get("status") != "COMPLETED" or state.get("phase") != "COMPLETED" or state.get("next_action") != NEXT_ARCHIVE:
+            raise NuclioError("SUCCESSOR_INCOMPLETE", "archived successor State is not a completed archive source")
+        expected_paths = archive_allowed_commit_paths(successor_id, state)
+        actual_paths = set(commit_changed_paths(paths, archive_commit))
+        if actual_paths != expected_paths:
+            raise NuclioError(
+                "SUCCESSOR_INCOMPLETE",
+                "successor archive commit paths do not match the complete archive transition",
+                commit=archive_commit,
+                missing_paths=sorted(expected_paths - actual_paths),
+                outside_paths=sorted(actual_paths - expected_paths),
+            )
+        if commit_parent(paths, archive_commit) != state.get("current_head"):
+            raise NuclioError(
+                "SUCCESSOR_INCOMPLETE",
+                "successor archive commit parent does not match terminal State current_head",
+                commit=archive_commit,
+                expected_parent=state.get("current_head"),
+                actual_parent=commit_parent(paths, archive_commit),
+            )
+    return {"id": successor_id, "location": "archive", "path": rel(archived_dir, paths.root), "archive_commit": archive_commit}
 
 
 def require_no_in_progress_repair(state: dict[str, Any]) -> None:
@@ -1289,9 +1657,13 @@ def verified_unrecorded_task_checkpoint(paths: Paths, state: dict[str, Any], pla
     return {"task_id": current_task_id, "checkpoint_commit": git_head_value, "changed_paths": changed_paths, "checkpoint_subject": subject}
 
 
-def require_supersede_head_identity(paths: Paths, state: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any] | None:
+def require_supersede_head_identity(paths: Paths, state: dict[str, Any], plan: dict[str, Any], successor: dict[str, Any]) -> dict[str, Any] | None:
     current = git_head(paths)
     if state.get("current_head") == current:
+        return None
+    if successor.get("archive_commit") == current:
+        if git(paths, "merge-base", "--is-ancestor", state["current_head"], current, allow_fail=True).returncode != 0:
+            raise NuclioError("IDENTITY_DRIFT", "successor archive commit does not descend from predecessor current_head")
         return None
     checkpoint = verified_unrecorded_task_checkpoint(paths, state, plan, current)
     if checkpoint is None:
@@ -1313,7 +1685,7 @@ def cmd_supersede(args: argparse.Namespace, paths: Paths) -> int:
     require_clean_index(paths)
     require_no_preexisting_allowed_dirty(paths, plan["allowed_paths"])
     successor = locate_verified_successor(paths, predecessor_id, successor_id)
-    unrecorded_checkpoint = require_supersede_head_identity(paths, state, plan)
+    unrecorded_checkpoint = require_supersede_head_identity(paths, state, plan, successor)
     superseded_by: dict[str, Any] = {
         "successor_id": successor_id,
         "successor_location": successor["location"],
@@ -1357,11 +1729,48 @@ def cmd_complete(args: argparse.Namespace, paths: Paths) -> int:
         raise NuclioError("REVIEW_NOT_PASSED", "all task reviews must pass", tasks=missing_reviews)
     if plan["review_policy"] in {"final", "task-and-final"} and state["review"]["final"].get("status") != "PASS":
         raise NuclioError("REVIEW_NOT_PASSED", "final review must pass")
+    stale_task_reviews = [
+        task["id"]
+        for task in plan["tasks"]
+        if task_review_required(plan, task)
+        and (
+            state["review"]["task_reviews"].get(str(task["id"]), {}).get("base") != state_task(state, task["id"])["task_base"]
+            or state["review"]["task_reviews"].get(str(task["id"]), {}).get("head") != state_task(state, task["id"])["checkpoint_commit"]
+        )
+    ]
+    if stale_task_reviews:
+        raise NuclioError("REVIEW_EVIDENCE_STALE", "task review commit range is stale", tasks=stale_task_reviews)
+    if plan["review_policy"] in {"final", "task-and-final"}:
+        final_review = state["review"]["final"]
+        if final_review.get("base") != approval_checkpoint_for_state(state) or final_review.get("head") != state["current_head"]:
+            raise NuclioError("REVIEW_EVIDENCE_STALE", "final review commit range is stale")
     if state["validation"].get("status") != "PASS":
         raise NuclioError("VALIDATION_NOT_PASSED", "whole-change validation must pass")
-    state.update({"status": "COMPLETED", "phase": "COMPLETED", "next_action": NEXT_COMPLETE, "current_task_id": None, "blocker": None})
+    if state["validation"].get("head") != state["current_head"]:
+        raise NuclioError("VALIDATION_EVIDENCE_STALE", "whole-change validation HEAD is stale")
+    knowledge_paths = [validate_knowledge_path(path) for path in args.knowledge_path]
+    if len(knowledge_paths) != len(set(knowledge_paths)):
+        raise NuclioError("INVALID_KNOWLEDGE_PATH", "knowledge paths must not contain duplicates")
+    if args.knowledge_result in {"NO_OP", "REJECTED"} and knowledge_paths:
+        raise NuclioError("INVALID_KNOWLEDGE_RESULT", f"{args.knowledge_result} must not include knowledge paths")
+    if args.knowledge_result in {"APPLIED", "PARTIAL"} and not knowledge_paths:
+        raise NuclioError("INVALID_KNOWLEDGE_RESULT", f"{args.knowledge_result} requires at least one knowledge path")
+    dirty_knowledge = sorted(
+        name
+        for _status, name in porcelain_paths(paths)
+        if name == ".dev-docs/index.md" or name.startswith(".dev-docs/knowledge/")
+    )
+    if sorted(knowledge_paths) != dirty_knowledge:
+        raise NuclioError(
+            "KNOWLEDGE_PATH_MISMATCH",
+            "knowledge paths must exactly match current knowledge working-tree changes",
+            expected=dirty_knowledge,
+            actual=sorted(knowledge_paths),
+        )
+    state["knowledge"] = {"result": args.knowledge_result, "paths": knowledge_paths}
+    state.update({"status": "COMPLETED", "phase": "COMPLETED", "next_action": NEXT_ARCHIVE, "current_task_id": None, "blocker": None})
     write_state(paths, args.id, state)
-    return emit_ok({"ok": True, "change_id": args.id, "status": "COMPLETED", "head": state["current_head"]})
+    return emit_ok({"ok": True, "change_id": args.id, "status": "COMPLETED", "next_action": NEXT_ARCHIVE, "head": state["current_head"], "knowledge": state["knowledge"]})
 
 
 def archive_artifacts(directory: Path) -> list[str]:
@@ -1410,53 +1819,81 @@ def parse_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 def markdown_heading_sections(body: str) -> dict[str, str]:
-    headings = list(re.finditer(r"^##\s+(.+?)\s*$", body, flags=re.M))
-    sections: dict[str, str] = {}
-    for index, match in enumerate(headings):
-        name = match.group(1).strip()
-        start = match.end()
-        end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
-        sections[name] = body[start:end].strip()
+    sections, _order = parse_markdown_sections(body)
     return sections
 
 
-def require_distilled_change_record(paths: Paths, change_id: str) -> tuple[dict[str, Any], dict[str, str]]:
-    change = spec_path_for(paths, change_id)
-    try:
-        text = change.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
-        raise NuclioError("MISSING_ARTIFACT", f"missing artifact: {change}") from exc
-    except UnicodeDecodeError as exc:
-        raise NuclioError("INVALID_UTF8", f"change.md must be UTF-8: {change}") from exc
-    if not text.strip():
-        raise NuclioError("UNDISTILLED_RECORD", "change.md must be non-empty")
+def parse_change_text(text: str) -> tuple[dict[str, Any], str, dict[str, str], list[str]]:
     frontmatter, body = parse_markdown_frontmatter(text)
-    required_frontmatter = {"id", "title", "status", "created", "updated", "related_changes"}
-    missing_frontmatter = sorted(required_frontmatter - set(frontmatter))
-    if missing_frontmatter or frontmatter.get("id") != change_id or frontmatter.get("status") != "completed":
+    sections, order = parse_markdown_sections(body)
+    return frontmatter, body, sections, order
+
+
+def git_file_text(paths: Paths, commit: str, pathspec: str) -> str:
+    result = git(paths, "show", f"{commit}:{pathspec}", allow_fail=True)
+    if result.returncode != 0:
+        raise NuclioError("APPROVAL_SPEC_MISSING", "approved change.md is missing from the approval checkpoint", commit=commit, path=pathspec)
+    return result.stdout
+
+
+def require_completed_change_record(directory: Path, paths: Paths, change_id: str, state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    frontmatter, body, sections, order = parse_change_document(directory / "change.md")
+    require_change_frontmatter(frontmatter, change_id, expected_status="completed")
+    if h1_title_from_body(body) != frontmatter["title"]:
+        raise NuclioError("SPEC_HISTORY_DRIFT", "completed change.md H1 must match the approved title")
+    required = SPEC_REQUIRED_HEADINGS + ARCHIVE_REQUIRED_HEADINGS
+    missing = [heading for heading in required if heading not in sections]
+    empty = [heading for heading in required if heading in sections and not sections[heading].strip()]
+    if missing or empty:
         raise NuclioError(
-            "UNDISTILLED_RECORD",
-            "change.md must have completed historical-record frontmatter",
-            missing_frontmatter=missing_frontmatter,
-            frontmatter={"id": frontmatter.get("id"), "status": frontmatter.get("status")},
+            "INCOMPLETE_CHANGE_RECORD",
+            "completed change.md must preserve the Spec and contain non-empty completion sections",
+            missing_headings=missing,
+            empty_headings=empty,
         )
-    if not isinstance(frontmatter.get("title"), str) or not frontmatter["title"].strip():
-        raise NuclioError("UNDISTILLED_RECORD", "change.md completed frontmatter fields must be non-empty", empty_frontmatter=["title"])
-    for field in ("created", "updated"):
-        value = frontmatter.get(field)
-        if isinstance(value, str):
-            valid_date = bool(value.strip())
-        else:
-            valid_date = isinstance(value, _dt.date)
-        if not valid_date:
-            raise NuclioError("UNDISTILLED_RECORD", "change.md completed frontmatter fields must be non-empty", empty_frontmatter=[field])
-    if not isinstance(frontmatter.get("related_changes"), list):
-        raise NuclioError("UNDISTILLED_RECORD", "change.md related_changes frontmatter must be a list", frontmatter={"related_changes": frontmatter.get("related_changes")})
-    sections = markdown_heading_sections(body)
-    missing_headings = [heading for heading in ARCHIVE_REQUIRED_HEADINGS if heading not in sections]
-    empty_headings = [heading for heading in ARCHIVE_REQUIRED_HEADINGS if heading in sections and not sections[heading].strip()]
-    if missing_headings or empty_headings:
-        raise NuclioError("UNDISTILLED_RECORD", "change.md must contain non-empty completed historical-record headings", missing_headings=missing_headings, empty_headings=empty_headings)
+    if order[-len(ARCHIVE_REQUIRED_HEADINGS):] != list(ARCHIVE_REQUIRED_HEADINGS):
+        raise NuclioError("INCOMPLETE_CHANGE_RECORD", "completion sections must be appended in the canonical order")
+
+    approval_checkpoint = approval_checkpoint_for_state(state)
+    active_pathspec = f".dev-docs/changes/{change_id}/change.md"
+    approved_text = git_file_text(paths, approval_checkpoint, active_pathspec)
+    if hashlib.sha256(approved_text.encode("utf-8")).hexdigest() != state.get("spec_sha256"):
+        raise NuclioError("IDENTITY_DRIFT", "approved Spec bytes do not match state.spec_sha256")
+    approved_frontmatter, approved_body, approved_sections, approved_order = parse_change_text(approved_text)
+    require_change_frontmatter(approved_frontmatter, change_id, expected_status="active")
+    if h1_title_from_body(approved_body) != approved_frontmatter["title"]:
+        raise NuclioError("IDENTITY_DRIFT", "approved change.md H1 does not match its title")
+
+    for field in ("id", "title", "created"):
+        if frontmatter.get(field) != approved_frontmatter.get(field):
+            raise NuclioError("SPEC_HISTORY_DRIFT", "completed change.md changed approved frontmatter", field=field)
+    approved_related = list(approved_frontmatter.get("related_changes", []))
+    current_related = list(frontmatter.get("related_changes", []))
+    if state.get("status") == "SUPERSEDED":
+        successor_id = state.get("superseded_by", {}).get("successor_id")
+        expected_related = approved_related if successor_id in approved_related else approved_related + [successor_id]
+    else:
+        expected_related = approved_related
+    if current_related != expected_related:
+        raise NuclioError("SPEC_HISTORY_DRIFT", "completed change.md related_changes differs from the approved relation", expected=expected_related, actual=current_related)
+
+    frozen_headings = [heading for heading in approved_order if heading not in ARCHIVE_REQUIRED_HEADINGS]
+    for heading in frozen_headings:
+        if sections.get(heading) != approved_sections.get(heading):
+            raise NuclioError("SPEC_HISTORY_DRIFT", "completed change.md changed an approved Spec section", heading=heading)
+    current_frozen_order = [heading for heading in order if heading in frozen_headings]
+    if current_frozen_order != frozen_headings:
+        raise NuclioError("SPEC_HISTORY_DRIFT", "completed change.md changed approved Spec section order")
+    unknown = [heading for heading in order if heading not in set(approved_order) | set(ARCHIVE_REQUIRED_HEADINGS)]
+    if unknown:
+        raise NuclioError("SPEC_HISTORY_DRIFT", "completed change.md added unsupported sections", headings=unknown)
+
+    knowledge = state.get("knowledge")
+    if state.get("status") == "COMPLETED":
+        if not isinstance(knowledge, dict) or knowledge.get("result") not in KNOWLEDGE_RESULTS:
+            raise NuclioError("INVALID_STATE", "completed State must record a knowledge result")
+        if knowledge["result"] not in sections["Knowledge Updates"]:
+            raise NuclioError("INCOMPLETE_CHANGE_RECORD", "Knowledge Updates must name the recorded knowledge result", result=knowledge["result"])
     return frontmatter, sections
 
 
@@ -1475,20 +1912,28 @@ def require_superseded_validation_section(validation: str) -> None:
             )
 
 
-def require_distilled_superseded_record(paths: Paths, change_id: str, successor_id: str) -> None:
-    frontmatter, sections = require_distilled_change_record(paths, change_id)
+def require_completed_superseded_record(directory: Path, paths: Paths, change_id: str, state: dict[str, Any], successor_id: str) -> None:
+    frontmatter, sections = require_completed_change_record(directory, paths, change_id, state)
     if successor_id not in frontmatter.get("related_changes", []):
-        raise NuclioError("UNDISTILLED_RECORD", "superseded record must keep successor in related_changes", successor_id=successor_id)
+        raise NuclioError("INCOMPLETE_CHANGE_RECORD", "superseded record must keep successor in related_changes", successor_id=successor_id)
     outcome = sections.get("Outcome", "")
     if successor_id not in outcome or not re.search(r"接管|supersed|take[sn]? over|successor", outcome, flags=re.I):
-        raise NuclioError("UNDISTILLED_RECORD", "superseded record Outcome must explicitly identify the successor takeover", successor_id=successor_id)
+        raise NuclioError("INCOMPLETE_CHANGE_RECORD", "superseded record Outcome must explicitly identify the successor takeover", successor_id=successor_id)
     require_superseded_validation_section(sections.get("Validation", ""))
 
 
-def load_archive_verified_state_and_plan(paths: Paths, change_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    state = load_state(paths, change_id)
-    plan_path = plan_path_for(paths, change_id)
-    plan = validate_plan_file(plan_path)
+def load_archive_verified_state_and_plan(
+    paths: Paths,
+    change_id: str,
+    directory: Path,
+    *,
+    allow_archive_commit_head: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    state = read_yaml_file(directory / "state.yaml")
+    plan_path = directory / "plan.yaml"
+    plan = validate_plan_file(plan_path, allow_legacy=True)
+    if not isinstance(state, dict):
+        raise NuclioError("INVALID_STATE", "state.yaml must be a mapping")
     if state.get("schema_version") != 1 or state.get("change_id") != change_id:
         raise NuclioError("INVALID_STATE", "state identity mismatch")
     require_frozen_branch(paths, state)
@@ -1498,27 +1943,32 @@ def load_archive_verified_state_and_plan(paths: Paths, change_id: str) -> tuple[
         raise NuclioError("IDENTITY_DRIFT", "plan hash drift")
     status = state.get("status")
     phase = state.get("phase")
-    if status == "COMPLETED" and phase == "COMPLETED":
+    if status == "COMPLETED" and phase == "COMPLETED" and state.get("next_action") == NEXT_ARCHIVE:
         current = git_head(paths)
-        if state.get("current_head") != current:
+        archive_head = allow_archive_commit_head and commit_subject(paths, current) == archive_subject(change_id) and commit_parent(paths, current) == state.get("current_head")
+        if state.get("current_head") != current and not archive_head:
             raise NuclioError("IDENTITY_DRIFT", "state current_head differs from git HEAD", state_head=state.get("current_head"), git_head=current)
         if not isinstance(state.get("spec_sha256"), str) or not state["spec_sha256"]:
             raise NuclioError("IDENTITY_DRIFT", "state spec_sha256 is missing")
-        require_distilled_change_record(paths, change_id)
+        require_completed_change_record(directory, paths, change_id, state)
     elif status == "SUPERSEDED" and phase == "SUPERSEDED" and state.get("next_action") == NEXT_ARCHIVE_SUPERSEDED:
         superseded_by = state.get("superseded_by")
         if not isinstance(superseded_by, dict) or not isinstance(superseded_by.get("successor_id"), str):
             raise NuclioError("INVALID_STATE", "SUPERSEDED state must record superseded_by.successor_id")
         if not isinstance(state.get("spec_sha256"), str) or not state["spec_sha256"]:
             raise NuclioError("IDENTITY_DRIFT", "state spec_sha256 is missing")
-        require_distilled_superseded_record(paths, change_id, superseded_by["successor_id"])
+        current = git_head(paths)
+        archive_head = allow_archive_commit_head and commit_subject(paths, current) == archive_subject(change_id) and commit_parent(paths, current) == state.get("current_head")
+        if state.get("current_head") != current and not archive_head:
+            raise NuclioError("IDENTITY_DRIFT", "superseded State current_head differs from git HEAD")
+        require_completed_superseded_record(directory, paths, change_id, state, superseded_by["successor_id"])
     else:
         raise NuclioError("CHANGE_NOT_COMPLETE", "change must be complete or superseded before archive", status=status, phase=phase)
     return state, plan
 
 
 def archive_subject(change_id: str) -> str:
-    return f"archive({change_id}): retain distilled change record"
+    return f"archive({change_id}): retain complete change record"
 
 
 def archive_active_pathspecs(change_id: str) -> list[str]:
@@ -1526,20 +1976,32 @@ def archive_active_pathspecs(change_id: str) -> list[str]:
 
 
 def archive_target_pathspecs(change_id: str) -> list[str]:
-    return [f".dev-docs/changes/archive/{change_id}/change.md"]
+    return [f".dev-docs/changes/archive/{change_id}/{name}" for name in ARCHIVE_RETAINED_ARTIFACTS]
 
 
-def archive_stage_pathspecs(change_id: str) -> list[str]:
-    return archive_active_pathspecs(change_id) + archive_target_pathspecs(change_id)
+def archive_knowledge_paths(state: dict[str, Any]) -> list[str]:
+    knowledge = state.get("knowledge")
+    if not isinstance(knowledge, dict):
+        return []
+    raw_paths = knowledge.get("paths", [])
+    if not isinstance(raw_paths, list):
+        raise NuclioError("INVALID_STATE", "state knowledge.paths must be a list")
+    paths = [validate_knowledge_path(path) for path in raw_paths]
+    if len(paths) != len(set(paths)):
+        raise NuclioError("INVALID_STATE", "state knowledge.paths must not contain duplicates")
+    return paths
 
 
-def archive_allowed_commit_paths(change_id: str) -> set[str]:
-    return set(archive_active_pathspecs(change_id) + archive_target_pathspecs(change_id))
+def archive_stage_pathspecs(change_id: str, state: dict[str, Any]) -> list[str]:
+    return archive_active_pathspecs(change_id) + archive_target_pathspecs(change_id) + archive_knowledge_paths(state)
 
 
-def git_stage_archive_change(paths: Paths, change_id: str) -> None:
-    git(paths, "rm", "-q", "-f", "--ignore-unmatch", "--", *archive_active_pathspecs(change_id))
-    git(paths, "add", "--", *archive_target_pathspecs(change_id))
+def archive_allowed_commit_paths(change_id: str, state: dict[str, Any]) -> set[str]:
+    return set(archive_stage_pathspecs(change_id, state))
+
+
+def git_stage_archive_change(paths: Paths, change_id: str, state: dict[str, Any]) -> None:
+    git(paths, "add", "-A", "--", *archive_stage_pathspecs(change_id, state))
 
 
 def archive_error_details(paths: Paths, target: Path, change_id: str, *, manual: bool = False) -> dict[str, Any]:
@@ -1561,66 +2023,6 @@ def raise_archive_recoverable(code: str, message: str, paths: Paths, target: Pat
     raise NuclioError(code, message, **details)
 
 
-def write_archive_pending_state(paths: Paths, target: Path, change_id: str, state: dict[str, Any], archive_base: str, subject: str) -> None:
-    state["archive"] = {
-        "status": "COMMIT_PENDING",
-        "archive_base": archive_base,
-        "archive_subject": subject,
-        "archive_path": rel(target, paths.root),
-        "retained_artifacts": list(ARCHIVE_RETAINED_ARTIFACTS),
-        "recovery_action": ARCHIVE_RECOVERY_ACTION.format(change_id=change_id),
-    }
-    dump_yaml_atomic(target / "state.yaml", state)
-
-
-def prune_archive_execution_artifacts(target: Path, paths: Paths, *, keep_state: bool = False) -> list[str]:
-    names = ("plan.yaml",) if keep_state else ("plan.yaml", "state.yaml")
-    try:
-        for name in names:
-            artifact = target / name
-            if artifact.exists():
-                artifact.unlink()
-    except OSError as exc:
-        remaining = archive_artifacts(target)
-        raise NuclioError(
-            "ARCHIVE_PRUNE_FAILED",
-            "archive pruning failed",
-            archive_path=rel(target, paths.root),
-            remaining_artifacts=remaining,
-            recovery_action=ARCHIVE_RECOVERY_ACTION.format(change_id=target.name),
-        ) from exc
-    remaining = archive_artifacts(target)
-    expected = ["change.md", "state.yaml"] if keep_state else ["change.md"]
-    if remaining != expected:
-        raise NuclioError(
-            "ARCHIVE_PRUNE_FAILED",
-            "archive pruning left unexpected artifacts",
-            archive_path=rel(target, paths.root),
-            remaining_artifacts=remaining,
-            recovery_action=ARCHIVE_RECOVERY_ACTION.format(change_id=target.name),
-        )
-    return remaining
-
-
-def load_archive_recovery_state(paths: Paths, change_id: str, target: Path) -> dict[str, Any]:
-    if not (target / "state.yaml").is_file():
-        raise NuclioError("ARCHIVE_EXISTS", f"archive target already exists: {target}")
-    state = read_yaml_file(target / "state.yaml")
-    if not isinstance(state, dict):
-        raise NuclioError("INVALID_STATE", "archive recovery state.yaml must be a mapping")
-    if state.get("schema_version") != 1 or state.get("change_id") != change_id:
-        raise NuclioError("INVALID_STATE", "archive recovery state identity mismatch")
-    require_frozen_branch(paths, state)
-    archive = state.get("archive")
-    if not isinstance(archive, dict) or archive.get("status") != "COMMIT_PENDING":
-        raise NuclioError("ARCHIVE_EXISTS", f"archive target already exists: {target}")
-    if archive.get("archive_path") != rel(target, paths.root):
-        raise NuclioError("INVALID_STATE", "archive recovery path mismatch", expected=rel(target, paths.root), actual=archive.get("archive_path"))
-    if archive_artifacts(target) != ["change.md", "state.yaml"]:
-        raise_archive_recoverable("ARCHIVE_RECOVERY_ARTIFACTS", "archive recovery requires change.md and state.yaml", paths, target, change_id, manual=True)
-    return state
-
-
 def validate_archive_commit(paths: Paths, change_id: str, target: Path, state: dict[str, Any], *, expected_parent: str, expected_subject: str, commit_sha: str) -> list[str]:
     if git_head(paths) != commit_sha:
         raise_archive_recoverable("ARCHIVE_COMMIT_HEAD_MISMATCH", "archive commit is not current HEAD", paths, target, change_id, manual=True, expected=commit_sha, actual=git_head(paths))
@@ -1630,7 +2032,7 @@ def validate_archive_commit(paths: Paths, change_id: str, target: Path, state: d
     if subject != expected_subject:
         raise_archive_recoverable("ARCHIVE_COMMIT_SUBJECT_MISMATCH", "archive commit subject mismatch", paths, target, change_id, manual=True, expected=expected_subject, actual=subject)
     changed_paths = commit_changed_paths(paths, "HEAD")
-    allowed_paths = archive_allowed_commit_paths(change_id)
+    allowed_paths = archive_allowed_commit_paths(change_id, state)
     outside = [path for path in changed_paths if path not in allowed_paths]
     if outside:
         raise_archive_recoverable("ARCHIVE_COMMIT_PATH_MISMATCH", "archive commit changed paths outside this change archive", paths, target, change_id, manual=True, outside_paths=outside)
@@ -1649,17 +2051,19 @@ def complete_archive_commit(paths: Paths, change_id: str, target: Path, state: d
     require_frozen_branch(paths, state)
     if git_head(paths) != archive_base:
         raise_archive_recoverable("ARCHIVE_HEAD_DRIFT", "archive recovery requires HEAD to equal archive_base", paths, target, change_id, manual=True, expected=archive_base, actual=git_head(paths))
-    pathspecs = archive_stage_pathspecs(change_id)
+    pathspecs = archive_stage_pathspecs(change_id, state)
     git_unstage_exact(paths, pathspecs)
-    git_stage_archive_change(paths, change_id)
+    git_stage_archive_change(paths, change_id, state)
     indexed = index_changed_paths(paths)
-    outside = [path for path in indexed if path not in archive_allowed_commit_paths(change_id)]
+    allowed_paths = archive_allowed_commit_paths(change_id, state)
+    outside = [path for path in indexed if path not in allowed_paths]
     if outside:
         git_unstage_exact(paths, pathspecs)
         raise_archive_recoverable("ARCHIVE_INDEX_PATH_MISMATCH", "archive staged paths outside this change archive", paths, target, change_id, manual=True, outside_paths=outside)
-    if not indexed:
+    missing = sorted(allowed_paths - set(indexed))
+    if missing:
         git_unstage_exact(paths, pathspecs)
-        raise_archive_recoverable("ARCHIVE_EMPTY", "archive has no staged changes", paths, target, change_id, manual=True)
+        raise_archive_recoverable("ARCHIVE_INDEX_PATH_MISMATCH", "archive is missing required staged paths", paths, target, change_id, missing_paths=missing)
     try:
         commit_sha = git_commit(paths, subject)
     except Exception as exc:
@@ -1671,16 +2075,9 @@ def complete_archive_commit(paths: Paths, change_id: str, target: Path, state: d
                 raise wrapped from exc
         raise
     changed_paths = validate_archive_commit(paths, change_id, target, state, expected_parent=archive_base, expected_subject=subject, commit_sha=commit_sha)
-    try:
-        (target / "state.yaml").unlink()
-    except OSError as exc:
-        try:
-            raise_archive_recoverable("ARCHIVE_FINAL_PRUNE_FAILED", "archive final state pruning failed", paths, target, change_id, manual=True)
-        except NuclioError as wrapped:
-            raise wrapped from exc
     retained = archive_artifacts(target)
-    if retained != ["change.md"]:
-        raise_archive_recoverable("ARCHIVE_FINAL_PRUNE_FAILED", "archive final pruning left unexpected artifacts", paths, target, change_id, manual=True)
+    if retained != sorted(ARCHIVE_RETAINED_ARTIFACTS):
+        raise_archive_recoverable("ARCHIVE_ARTIFACT_MISMATCH", "archive did not retain the complete change record", paths, target, change_id, manual=True)
     if worktree_changes_for_paths(paths, pathspecs):
         raise_archive_recoverable("ARCHIVE_WORKTREE_DIRTY", "archive paths remain dirty after commit", paths, target, change_id, manual=True, dirty=worktree_changes_for_paths(paths, pathspecs))
     return {"archive_commit": commit_sha, "changed_paths": changed_paths, "retained_artifacts": retained}
@@ -1692,45 +2089,36 @@ def cmd_archive(args: argparse.Namespace, paths: Paths) -> int:
     target = archive_change_dir(paths, change_id)
     subject = archive_subject(change_id)
     if target.exists():
-        state = load_archive_recovery_state(paths, change_id, target)
-        archive = state["archive"]
-        result = complete_archive_commit(paths, change_id, target, state, archive_base=archive["archive_base"], subject=archive["archive_subject"])
-        return emit_ok({"ok": True, "change_id": change_id, "path": rel(target, paths.root), "archive_subject": archive["archive_subject"], **result})
+        if source.exists():
+            raise NuclioError("ARCHIVE_CONFLICT", "active and archive directories both exist", active_path=rel(source, paths.root), archive_path=rel(target, paths.root))
+        require_exact_archive_artifacts(target)
+        state, _plan = load_archive_verified_state_and_plan(paths, change_id, target, allow_archive_commit_head=True)
+        if git_head(paths) != state["current_head"]:
+            changed_paths = validate_archive_commit(
+                paths,
+                change_id,
+                target,
+                state,
+                expected_parent=state["current_head"],
+                expected_subject=subject,
+                commit_sha=git_head(paths),
+            )
+            retained = archive_artifacts(target)
+            return emit_ok({"ok": True, "change_id": change_id, "path": rel(target, paths.root), "archive_subject": subject, "archive_commit": git_head(paths), "changed_paths": changed_paths, "retained_artifacts": retained, "recovered": True})
+        result = complete_archive_commit(paths, change_id, target, state, archive_base=state["current_head"], subject=subject)
+        return emit_ok({"ok": True, "change_id": change_id, "path": rel(target, paths.root), "archive_subject": subject, "recovered": True, **result})
     require_exact_archive_artifacts(source)
-    state, _plan = load_archive_verified_state_and_plan(paths, change_id)
+    require_clean_index(paths)
+    state, _plan = load_archive_verified_state_and_plan(paths, change_id, source)
     archive_base = git_head(paths)
     target.parent.mkdir(parents=True, exist_ok=True)
     source.rename(target)
     try:
-        write_archive_pending_state(paths, target, change_id, state, archive_base, subject)
-    except NuclioError as exc:
-        if target.exists() and not source.exists():
-            try:
-                target.rename(source)
-            except OSError as rollback_exc:
-                details = archive_error_details(paths, target, change_id, manual=True)
-                details.update(exc.details)
-                raise NuclioError("ARCHIVE_PENDING_STATE_FAILED", "archive pending state write failed and active change could not be restored", **details) from rollback_exc
-        raise NuclioError(
-            "ARCHIVE_PENDING_STATE_FAILED",
-            "archive pending state write failed before recovery marker; active change restored",
-            active_path=rel(source, paths.root),
-            recovery_action=ARCHIVE_RECOVERY_ACTION.format(change_id=change_id),
-            stderr=exc.details.get("stderr", exc.message),
-        ) from exc
-    try:
-        prune_archive_execution_artifacts(target, paths, keep_state=True)
         result = complete_archive_commit(paths, change_id, target, state, archive_base=archive_base, subject=subject)
     except NuclioError as exc:
-        if exc.code in {"ARCHIVE_PRUNE_FAILED"}:
-            raise
-        if target.exists():
-            details = archive_error_details(paths, target, change_id, manual=exc.details.get("recovery_action") == ARCHIVE_MANUAL_RECOVERY_ACTION)
-            details.update(exc.details)
-            if exc.code.startswith("ARCHIVE_"):
-                raise NuclioError(exc.code, exc.message, **details) from exc
-            raise NuclioError("ARCHIVE_COMMIT_FAILED", "archive commit failed after move", **details) from exc
-        raise
+        details = archive_error_details(paths, target, change_id)
+        details.update(exc.details)
+        raise NuclioError(exc.code if exc.code.startswith("ARCHIVE_") else "ARCHIVE_COMMIT_FAILED", exc.message, **details) from exc
     return emit_ok({"ok": True, "change_id": change_id, "path": rel(target, paths.root), "archive_subject": subject, **result})
 
 

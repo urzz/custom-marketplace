@@ -1,149 +1,88 @@
 # Nuclio v2 Context Hygiene
 
-Nuclio v2 用路径、heading、helper JSON 摘要和短证据保持上下文可控。默认只读完成当前 change 所需的材料，不把 `.dev-docs`、Git 历史、agent 返回或测试日志当成必须全文加载的数据库。
+Nuclio 的上下文原则是按决策需要取证。文件存在不等于必须全文读取；State 与 Git identity 优先于 transcript 和 agent claim。
 
-## Contents
+## Default Read Order
 
-- [读取顺序](#读取顺序)
-- [默认禁止全文读取](#默认禁止全文读取)
-- [按需读取](#按需读取)
-- [终端输出预算](#终端输出预算)
-- [Subagent prompt 预算](#subagent-prompt-预算)
-- [Subagent return 预算](#subagent-return-预算)
-- [Review-specific read budget](#review-specific-read-budget)
-- [100k 警戒线](#100k-警戒线)
-- [status 与 next-action 恢复](#status-与-next-action-恢复)
-- [非 Gate 声明](#非-gate-声明)
+普通 active change：
 
-## 读取顺序
+1. 用户当前请求。
+2. `change.py status` 与 `next-action` 的紧凑输出。
+3. `change.md` 中与当前决策相关的 headings。
+4. Plan 中 risk、review policy、`allowed_paths` 与当前 Task。
+5. 当前 Task 涉及的源码、配置和测试。
+6. 只有发生 drift、review、repair 或恢复诊断时读取更多 State/Git 证据。
 
-推荐读取顺序：
+不要默认读取全部 active changes、所有 archive、整个 legacy tree、完整知识库或历史研究文档。
 
-1. `.dev-docs/index.md` 根索引。
-2. 匹配领域的知识文件或 heading。
-3. 相关全局知识章节：`project.md`、`architecture.md`、`engineering.md`。
-4. 必要 ADR。
-5. 当前 active `change.md` 的 Goal、Constraints、Non-goals、Acceptance、Decisions、Outcome 等相关 heading。
-6. 当前 `plan.yaml` 的 revision、risk/review/repair policy、`allowed_paths`、当前 Task、validation 与 `checkpoint_subject`。
-7. 当前 `state.yaml` 只通过 `change.py status` 和 `change.py next-action` 读取；需要排障时才查看指定字段。
-8. 相关源码、配置、测试和 CI 文件。
-9. 仅在历史必要时读取 archive 中的精简 `change.md`。
-10. 仅在用户明确要求时读取 legacy。
+## Artifact Budgets
 
-顺序不是强制命令脚本；它用于避免先吞入大量历史资料。若 helper JSON 已能回答当前恢复问题，不要再全文读取 `state.yaml`。
+- **change.md**：准备/批准时读必要 Spec sections；完成时读完整 Spec 与四个完成 sections。
+- **plan.yaml**：只取当前 Task 和 change-level contract；validator 负责完整机械校验。
+- **state.yaml**：优先用 helper 的 `status`/`next-action`，只在诊断时读取原文件片段。
+- **Git**：优先精确 range、status、name-only 和 commit metadata；不要默认粘贴完整 diff。
+- **validation**：保留 command、exit code、短摘要和关键失败片段，不复制长日志。
 
-## 默认禁止全文读取
+## Archive Read Budget
 
-默认不要全文读取：
+archive 默认不进入日常 prompt。需要历史追溯时：
 
-- 整个 `.dev-docs`。
-- 所有 active `change.md`、`plan.yaml` 或 `state.yaml`。
-- 完整 `state.yaml`，除非 helper JSON 不足以诊断。
-- 所有 `knowledge/domains/**`。
-- 所有 ADR。
-- 所有 runbook。
-- `.dev-docs/changes/archive/**`。
-- `.dev-docs/legacy/**`。
-- 全仓库源码。
-- 完整 Git diff、完整 commit history 或所有 checkpoint diffs。
-- 所有测试输出、CI 日志、agent 消息或聊天 transcript。
+1. 先读取目标 archived `change.md` 的相关 heading。
+2. 只有要确认批准范围、risk、Task 合同时读取 archived `plan.yaml`。
+3. 只有要审计 checkpoint、review、validation 或 knowledge result 时读取 archived `state.yaml`。
+4. 旧 4.0.x 单文件 archive 缺少 Plan/State 是兼容事实，不要推测或伪造。
 
-需要历史、长 diff 或日志时，先定位具体路径、commit range、heading 或失败片段，再读取必要片段。
+完整三件套 retention 是审计能力，不是默认上下文预算。
 
-## 按需读取
+## Approval Output
 
-读取前先说明要回答的问题：目标、约束、接口、`allowed_paths`、验证方法、风险、review/repair 决策、恢复状态或知识归属。读完后把结果压缩为可用于 Plan、实施、审查或恢复的结论。
+file-first Gate 默认输出：artifact paths、1-3 行 Spec 摘要、risk/review policy、Task 数、`allowed_paths` 摘要、验证 exit code 和完整三件套 archive disclosure。不要粘贴全 Spec、全 Plan、全 State 或完整日志，除非用户请求明确 section。
 
-若文件很大，优先读取目录、frontmatter、Contents、相关 heading、符号定义、测试名、helper JSON 字段或命令摘要。避免复制整份长文档到对话中。
+## Task Dispatch
 
-用户明确要求查看某 section 时，只显示指定 artifact 与 heading；若请求“全部”，先提醒可能较长并按需分段。
+subagent brief 只包含：
 
-## 终端输出预算
+- 当前 Task goal 与 non-goals；
+- change-level `allowed_paths` 和必要 read paths；
+- acceptance 与 validation commands；
+- `task_base`、expected checkpoint subject、frozen branch；
+- selective staging 与 one-checkpoint contract；
+- 禁止改三层 artifact、扩范围、递归委派、切换分支/worktree 和控制任务生命周期；
+- compact return schema。
 
-默认终端输出保持 compact：
+返回只需 checkpoint SHA、changed paths、commands/exit codes、关键摘要、风险和 blocker。Coordinator 必须用 Git 与 helper 核验，不凭返回文本推进 State。
 
-- Locate/resume：列出 change id、title、路径、State status/phase/next_action；每个候选 1 行。
-- Spec/Plan approval：只给 `change.md`/`plan.yaml` 路径、1–3 行摘要、risk/review/repair policy、Task count、`allowed_paths` 摘要、`validate-plan` exit code 和批准提示。
-- Task dispatch/checkpoint：给 Task id/name、executor、task base、frozen branch、expected checkpoint subject、validation command 摘要和后续 helper command；不贴长 prompt。
-- Review/validation：给 command、exit code、PASS/FAIL、关键失败片段或路径；长日志按用户要求显示。
-- Repair decision：给 source gate、违反合同、路径、证据摘要、是否仍在 `allowed_paths` 和建议决策。
-- Completion/archive：给产品结果、changed paths、validation summary、mandatory knowledge analysis 结果（写入、拒绝或 `NO_OP`）、retention disclosure、archive path、archive commit SHA、archive recovery action（失败时）和最终 artifact set。
+产品写入顺序执行。只有无写冲突的只读探索或独立 review 可并发；不引入 DAG scheduler、parallel product write、owner routing 或 automatic fixer。
 
-默认不回显完整 `change.md`、完整 `plan.yaml`、完整 `state.yaml`、完整 diff、transcript、agent 原文或长日志。用户明确要求时显示指定 section。
+## Review Budget
 
-## Subagent prompt 预算
+Task review 聚焦 helper 固定的 `task_base..task checkpoint` 和该 Task 合同。Final review 聚焦 `approval_checkpoint..current_head` 的集成语义、跨 Task 交叉触碰、repair 增量、失败后修复与高后果区域。
 
-单次 subagent prompt 目标低于约 4k tokens。只包含：
+未漂移且已独立审查的 Task evidence 可以作为 final review 输入，但以下情况必须深读相关 diff、合同和验证证据：
 
-- 当前 Task Goal 与 non-goals。
-- change-level `allowed_paths` 和本 Task 实施意图。
-- 必要 read paths/headings，避免一层 references 以外的阅读链。
-- Acceptance 与 validation commands。
-- `task_base`、expected `checkpoint_subject` 与 frozen branch `state.git_branch`。
-- selective staging/commit 合同。
-- 禁止编辑 `change.md`、`plan.yaml`、`state.yaml`，禁止递归委派、扩范围、自动 fixer routing、创建/切换/重命名分支、创建 worktree 执行分支、reset/rebase/squash/stash/history rewrite。
-- 禁止调用 TaskStop/Stop Task；禁止创建、更新、停止或接管 Controller/task-tracking 任务；禁止尝试停止自身、父任务、兄弟任务或后台任务。
-- compact return 格式。
+- repair 或同一路径重复触碰；
+- 跨 Task 交叉修改；
+- validation 失败后修复；
+- public API、数据、权限、并发、迁移或不可逆动作；
+- 风险上升或验证覆盖不足。
 
-不要传大型 packet、完整知识全文、完整 Spec/Plan/State、完整 transcript、全量 archive、legacy、长 diff 或长日志。
+review 输出保留 summary、evidence、violated contract 和 paths，不保存 reviewer transcript。
 
-## Subagent return 预算
+## Recovery Budget
 
-单次 subagent 返回目标低于约 2k tokens，包含：
+恢复先回答四个问题：
 
-- status：完成、阻塞或需要主会话决策。
-- checkpoint SHA；没有 commit 时写 none 并说明原因。
-- archive commit SHA（仅完成 archive 时）；archive 失败时给 archive path、remaining artifacts 和 recovery action。
-- changed paths。
-- commands、exit codes 和短输出摘要。
-- 风险、blocker、超出 `allowed_paths` 或合同变化迹象。
-- 完成、阻塞、超时或需要决策时，只返回 compact result 给主会话；不得调用 TaskStop/Stop Task 或停止任何自身、父级、兄弟、后台、Controller/task-tracking 任务。
-- report/notes 路径仅当主会话明确要求且该路径在授权范围内。
+1. 当前 attached branch 是否等于 frozen `state.git_branch`？
+2. HEAD 是否等于 State 允许的 checkpoint？
+3. index 与 `allowed_paths` 工作树是否满足当前动作前置条件？
+4. helper 的 `next_action` 是什么？
 
-不要要求 subagent 返回完整 diff、完整日志、过程 transcript 或自我 Gate 通过声明。主会话必须用 Git、helper State 和确定性证据核验。
+只有答案指向 drift 或中断时，才扩展读取 commit parent/subject/path range、archived State 或完整 diff。不要回放聊天记录来重建 State。
 
-## Review-specific read budget
+## User-Facing Results
 
-审查读取也遵循场景化预算，不把“保险起见全文重读”当默认策略。审查前先确定问题类型：Task 增量正确性、whole-change integration、validation 充分性、风险/非目标漂移或 repair closure。
+结果报告先给 outcome，再给最小证据：changed paths、commands、exit codes、关键摘要、archive path/commit 或 blocker。知识 proposal 与产品结果分开，不能让知识决策遮蔽已完成的产品验证。
 
-Task review 默认读取：Plan 中该 Task 的合同、`task_base..task_head` diff summary 或必要 diff、changed paths、Task validation command/exit code/摘要、checkpoint subject 和相关接口片段。只在增量触及安全、权限、迁移、public API、数据模型、并发/状态、破坏性/外向动作、高失败影响、验证缺口、或 diff summary 无法解释行为时深读完整文件或相邻模块。
+## Forbidden Context Stores
 
-Final review 默认先读取：Spec/Plan 摘要、checkpoint map、各 Task diff summary、task review 结论、whole-change 验证摘要、热点路径和已知 blocker/repair 摘要。Final review 必须覆盖整体集成语义，但允许复用未漂移的 Task review 与验证证据；证据复用条件是 checkpoint range、changed paths、reviewed diff、validation command、exit code、相关文件/提交范围和相关合同均未漂移，且 final diff summary 未显示跨 Task 新耦合。
-
-重复读取禁止项：不要无条件重读已审查且未变化的隔离 Task 增量；不要把所有 checkpoint diff、完整 State、完整 Plan、完整日志、完整 archive 或 agent transcript 作为 final review 起点；不要为普通多文件或跨模块变更自动扩大到全仓库源码。出现 identity drift、validation FAIL、review 过期、热点触发、接口耦合不明或用户指定路径时，才针对触发点深读。
-
-## 100k 警戒线
-
-当会话达到约 100k tokens，必须先收缩：
-
-1. 用 `change.py status` 和 `change.py next-action` 捕获当前 status/phase/current_task/next_action。
-2. 若需要写恢复摘要，只在 `change.md` 中压缩记录 Goal、批准 Plan revision、已完成 checkpoint commits、未完成 next_action、验证结果、blocker 和下一步；不要复制 State history 或日志。
-3. 停止无关读取。
-4. 改用路径、heading、commit SHA 和摘要。
-5. 必要时委派小范围 subagent 或建议用户在新 Session 用 `work` 恢复。
-
-不要继续全文读取 archive、legacy、所有领域知识、所有源码、完整 diff 或所有测试输出来“保险”。
-
-## status 与 next-action 恢复
-
-恢复依赖三类事实：
-
-1. `change.py status` 与 `change.py next-action` 返回的当前 State。
-2. Git HEAD、status/diff、checkpoint commits 和 commit subjects。
-3. 代码、配置、测试、CI 与实际 validation/review evidence。
-
-恢复步骤：
-
-1. 定位唯一 active change；多候选时让用户选择。
-2. 运行 `status` 和 `next-action`，记录 change id、plan revision、phase、current_task_id、next_action、frozen branch `git_branch` 和 blocker 摘要。
-3. 检查 Git status，确认当前 branch attached 且等于 frozen branch，index、allowed-path dirty 状态和 HEAD 是否与 State 一致。
-4. 根据 `next_action` 执行最小下一步：dispatch Task、run review、run validation、request repair decision、complete、archive recovery、或 halt。
-5. 若出现 `BRANCH_DRIFT`、`DETACHED_HEAD`、Spec/Plan hash、revision、HEAD、checkpoint parent/subject/range、allowed-path 边界或 validation evidence drift，停止并向用户报告具体冲突；不要创建/切换/重命名分支或 worktree 来“修复”恢复。
-
-不要重放 transcript、读取 agent claim 作为完成事实、把 `change.md` frontmatter `status` 当动态状态、或猜测最新聊天必然覆盖文件合同。
-
-Archive 默认不参与恢复。只有用户提到历史 change、回归、类似问题或 `related_changes` 时才读取相关 archive 的精简 `change.md`；不要期待 archived `plan.yaml` 或 `state.yaml` 存在。Legacy 仅在用户明确要求历史材料或 init 需要整体移动时读取。
-
-## 非 Gate 声明
-
-上下文预算不是身份、hash、状态版本或授权机制。计划批准是用户可理解的自然语言确认；知识确认只在候选存在时出现。不要把上下文指纹、包绑定、证据身份、旧式状态路由、agent 声明或 helper 之外的状态文件作为当前 v2 运行时权威。
+不得把完整 diff、测试日志、transcript、agent messages、file snapshots 或 linear event ledger 写入 `state.yaml`。不得创建 persistent process JSON、archive manifest、hidden archive backup、第二状态目录、`workflow.py` 或外部运行时服务来保存这些内容。
