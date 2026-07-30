@@ -9,7 +9,7 @@ Nuclio 的上下文原则是按决策需要取证。文件存在不等于必须�
 1. 用户当前请求。
 2. `change.py status` 与 `next-action` 的紧凑输出。
 3. `change.md` 中与当前决策相关的 headings。
-4. Plan 中 risk、review policy、`allowed_paths` 与当前 Task。
+4. Plan 中 risk、review policy、execution、`allowed_paths` 与当前 Task。
 5. 当前 Task 涉及的源码、配置和测试。
 6. 只有发生 drift、review、repair 或恢复诊断时读取更多 State/Git 证据。
 
@@ -36,9 +36,11 @@ archive 默认不进入日常 prompt。需要历史追溯时：
 
 ## Approval Output
 
-file-first Gate 默认输出：artifact paths、1-3 行 Spec 摘要、risk/review policy、Task 数、`allowed_paths` 摘要、验证 exit code 和完整三件套 archive disclosure。不要粘贴全 Spec、全 Plan、全 State 或完整日志，除非用户请求明确 section。
+file-first Gate 默认输出：artifact paths、1-3 行 Spec 摘要、risk/review policy、execution mode/rationale、Task 数、`allowed_paths` 摘要、验证 exit code 和完整三件套 archive disclosure。不要粘贴全 Spec、全 Plan、全 State 或完整日志，除非用户请求明确 section。
 
 ## Task Dispatch
+
+先读取 helper 的 `required_executor`。`subagent` 必须实际派发；不可用时报告 blocker，不得让主会话接管。`main` 只可能来自已批准且通过 helper 硬门槛的 `execution.mode: direct`。
 
 subagent brief 只包含：
 
@@ -52,7 +54,7 @@ subagent brief 只包含：
 
 返回只需 checkpoint SHA、changed paths、commands/exit codes、关键摘要、风险和 blocker。Coordinator 必须用 Git 与 helper 核验，不凭返回文本推进 State。
 
-产品写入顺序执行。只有无写冲突的只读探索或独立 review 可并发；不引入 DAG scheduler、parallel product write、owner routing 或 automatic fixer。
+产品写入顺序执行。只有无写冲突的只读探索或独立 review 可并发；`final`/`task-and-final` 使用 fresh read-only subagent reviewer；不引入 DAG scheduler、parallel product write、owner routing 或 automatic fixer。
 
 ## Review Budget
 

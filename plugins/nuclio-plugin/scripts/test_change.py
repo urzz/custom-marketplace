@@ -101,7 +101,19 @@ class ChangeHelperTests(unittest.TestCase):
         change.write_text(text, encoding="utf-8")
         return change
 
-    def write_plan(self, *, change_id="alpha-change", risk="medium", review="final", allowed_paths=None, tasks=None, legacy=False):
+    def write_plan(
+        self,
+        *,
+        change_id="alpha-change",
+        risk="medium",
+        review="final",
+        execution_mode="delegated",
+        execution_rationale="Use bounded subagents for product work.",
+        allowed_paths=None,
+        tasks=None,
+        legacy=False,
+        v1=False,
+    ):
         allowed_paths = allowed_paths or ["src/", "README.md"]
         tasks = tasks or [
             {
@@ -113,12 +125,20 @@ class ChangeHelperTests(unittest.TestCase):
             }
         ]
         lines = [
-            "schema_version: 1",
+            f"schema_version: {1 if legacy or v1 else 2}",
             f"change_id: {change_id}",
             "revision: 1",
             f"risk_level: {risk}",
             f"review_policy: {review}",
         ]
+        if not legacy and not v1:
+            lines.extend(
+                [
+                    "execution:",
+                    f"  mode: {execution_mode}",
+                    f"  rationale: {execution_rationale}",
+                ]
+            )
         if legacy:
             lines.append("repair_policy: in-scope")
         lines.extend(["summary: Implement alpha safely", "allowed_paths:"])
@@ -151,12 +171,12 @@ class ChangeHelperTests(unittest.TestCase):
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
-    def prepare_change(self, *, review="final", risk="medium", tasks=None):
+    def prepare_change(self, *, review="final", risk="medium", execution_mode="delegated", allowed_paths=None, tasks=None):
         self.init_git()
         self.make_skeleton()
         change_dir = self.create_change()
         self.approve_spec(change_dir)
-        self.write_plan(review=review, risk=risk, tasks=tasks)
+        self.write_plan(review=review, risk=risk, execution_mode=execution_mode, allowed_paths=allowed_paths, tasks=tasks)
         result = run_change(self.root, "init-state", "--id", "alpha-change")
         self.assertEqual(result.returncode, 0, result.stderr)
         return change_dir
@@ -382,24 +402,72 @@ class ChangeHelperTests(unittest.TestCase):
     def test_plan_schema_is_minimal_and_legacy_is_recovery_only(self):
         module = load_change_module()
         canonical = {
-            "schema_version": 1,
+            "schema_version": 2,
             "change_id": "alpha-change",
             "revision": 1,
             "risk_level": "medium",
             "review_policy": "final",
+            "execution": {"mode": "delegated", "rationale": "Use a bounded subagent."},
             "summary": "Implement alpha",
             "allowed_paths": ["src/"],
             "tasks": [{"id": 1, "name": "Alpha", "steps": ["Edit"], "acceptance": ["Works"], "validation": ["pytest"]}],
         }
         normalized = module.validate_plan_data(canonical)
         self.assertFalse(normalized["_legacy"])
+        self.assertEqual(normalized["_variant"], "v2")
+        self.assertEqual(normalized["execution"]["mode"], "delegated")
         self.assertEqual(normalized["tasks"][0]["checkpoint_subject"], self.task_subject())
-        legacy = dict(canonical)
+        v1 = dict(canonical)
+        v1["schema_version"] = 1
+        del v1["execution"]
+        with self.assertRaises(module.NuclioError):
+            module.validate_plan_data(v1)
+        recovered = module.validate_plan_data(v1, allow_legacy=True)
+        self.assertEqual(recovered["_variant"], "v1-4.1")
+        self.assertEqual(recovered["execution"]["mode"], "delegated")
+        legacy = dict(v1)
         legacy["repair_policy"] = "in-scope"
-        legacy["tasks"] = [dict(canonical["tasks"][0], delegate="main", review="final", checkpoint_subject="legacy subject")]
+        legacy["tasks"] = [dict(v1["tasks"][0], delegate="main", review="final", checkpoint_subject="legacy subject")]
         with self.assertRaises(module.NuclioError):
             module.validate_plan_data(legacy)
-        self.assertTrue(module.validate_plan_data(legacy, allow_legacy=True)["_legacy"])
+        recovered_legacy = module.validate_plan_data(legacy, allow_legacy=True)
+        self.assertTrue(recovered_legacy["_legacy"])
+        self.assertEqual(recovered_legacy["_variant"], "v1-4.0")
+        self.assertEqual(recovered_legacy["execution"]["mode"], "legacy-task-delegate")
+        self.assertEqual(module.required_task_executor(recovered_legacy, recovered_legacy["tasks"][0]), "main")
+        self.assertEqual(module.required_repair_executor(recovered_legacy), "main")
+
+    def test_direct_execution_requires_all_structural_eligibility_rules(self):
+        module = load_change_module()
+        direct = {
+            "schema_version": 2,
+            "change_id": "alpha-change",
+            "revision": 1,
+            "risk_level": "low",
+            "review_policy": "self",
+            "execution": {"mode": "direct", "rationale": "Localized fix in one source file and its test."},
+            "summary": "Fix alpha",
+            "allowed_paths": ["src/alpha.py", "tests/test_alpha.py"],
+            "tasks": [{"id": 1, "name": "Fix alpha", "steps": ["Edit"], "acceptance": ["Works"], "validation": ["pytest"]}],
+        }
+        normalized = module.validate_plan_data(direct)
+        self.assertEqual(module.required_task_executor(normalized, normalized["tasks"][0]), "main")
+        invalid_variants = (
+            dict(direct, risk_level="medium"),
+            dict(direct, review_policy="final"),
+            dict(direct, allowed_paths=["src/"]),
+            dict(direct, allowed_paths=["a.py", "b.py", "c.py", "d.py"]),
+            dict(
+                direct,
+                tasks=direct["tasks"]
+                + [{"id": 2, "name": "Second", "steps": ["Edit"], "acceptance": ["Works"], "validation": ["pytest"]}],
+            ),
+        )
+        for invalid in invalid_variants:
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(module.NuclioError) as raised:
+                    module.validate_plan_data(invalid)
+                self.assertEqual(raised.exception.code, "DIRECT_EXECUTION_INELIGIBLE")
 
     def test_plan_rejects_duplicate_yaml_unsafe_paths_and_invalid_review_override(self):
         self.init_git()
@@ -464,9 +532,99 @@ class ChangeHelperTests(unittest.TestCase):
         self.prepare_change()
         result = self.implement_task()
         state = self.state()
+        self.assertEqual(state["tasks"][0]["executor"], "subagent")
         evidence = state["tasks"][0]["validation"]
         self.assertEqual(evidence["head"], result["checkpoint_commit"])
         self.assertEqual(evidence["commands"], [{"command": "python -m pytest", "exit_code": 0}])
+
+    def test_next_action_and_start_task_derive_required_executor_from_plan(self):
+        self.prepare_change()
+        next_action = run_change(self.root, "next-action", "--id", "alpha-change")
+        self.assertEqual(stdout_json(next_action)["required_executor"], "subagent")
+        start = run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        self.assertEqual(stdout_json(start)["required_executor"], "subagent")
+        self.assertEqual(self.state()["tasks"][0]["executor"], "subagent")
+
+    def test_direct_plan_records_main_executor_only_after_hard_gate(self):
+        self.prepare_change(review="self", risk="low", execution_mode="direct", allowed_paths=["src/alpha-change-task-1.txt"])
+        next_action = run_change(self.root, "next-action", "--id", "alpha-change")
+        self.assertEqual(stdout_json(next_action)["required_executor"], "main")
+        start = run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        self.assertEqual(stdout_json(start)["required_executor"], "main")
+        self.assertEqual(self.state()["tasks"][0]["executor"], "main")
+
+    def test_direct_repair_inherits_main_executor(self):
+        self.prepare_change(review="self", risk="low", execution_mode="direct", allowed_paths=["src/alpha-change-task-1.txt"])
+        self.implement_task()
+        failed = run_change(
+            self.root,
+            "record-validation",
+            "--id",
+            "alpha-change",
+            "--status",
+            "FAIL",
+            "--summary",
+            "focused validation failed",
+            "--command",
+            "python -m unittest",
+            "--exit-code",
+            "1",
+            "--path",
+            "src/alpha-change-task-1.txt",
+        )
+        self.assertEqual(failed.returncode, 0, failed.stderr)
+        repair = run_change(
+            self.root,
+            "start-repair",
+            "--id",
+            "alpha-change",
+            "--source-gate",
+            "RUN_VALIDATION",
+            "--path",
+            "src/alpha-change-task-1.txt",
+            "--decision",
+            "repair the localized defect",
+            "--evidence",
+            "focused validation failure",
+            "--contract-unchanged",
+        )
+        self.assertEqual(repair.returncode, 0, repair.stderr)
+        self.assertEqual(stdout_json(repair)["required_executor"], "main")
+        self.assertEqual(self.state()["repair"]["executor"], "main")
+
+    def test_state_backed_v1_plan_defaults_pending_task_to_subagent(self):
+        self.init_git()
+        self.make_skeleton()
+        change_dir = self.create_change()
+        self.approve_spec(change_dir)
+        self.write_plan(v1=True)
+        module = load_change_module()
+        plan_path = change_dir / "plan.yaml"
+        plan = module.validate_plan_file(plan_path, allow_legacy=True)
+        state = {
+            "schema_version": 1,
+            "change_id": "alpha-change",
+            "plan_revision": 1,
+            "plan_sha256": module.sha256_file(plan_path),
+            "spec_sha256": module.sha256_file(change_dir / "change.md"),
+            "git_branch": git(self.root, "branch", "--show-current").stdout.strip(),
+            "initial_head": git(self.root, "rev-parse", "HEAD").stdout.strip(),
+            "approval_checkpoint": git(self.root, "rev-parse", "HEAD").stdout.strip(),
+            "current_head": git(self.root, "rev-parse", "HEAD").stdout.strip(),
+            "status": "ACTIVE",
+            "phase": "READY",
+            "current_task_id": None,
+            "next_action": "DISPATCH_TASK",
+            "tasks": module.initial_task_states(plan),
+            "review": {"task_reviews": {}, "final": {"status": "PENDING"}},
+            "validation": {"status": "PENDING", "head": None, "commands": [], "summary": None},
+            "repair": None,
+            "blocker": None,
+        }
+        module.dump_yaml_atomic(change_dir / "state.yaml", state)
+        next_action = run_change(self.root, "next-action", "--id", "alpha-change")
+        self.assertEqual(next_action.returncode, 0, next_action.stderr)
+        self.assertEqual(stdout_json(next_action)["required_executor"], "subagent")
 
     def test_record_task_rejects_command_mismatch_and_nonzero_pass(self):
         self.prepare_change()
@@ -486,6 +644,7 @@ class ChangeHelperTests(unittest.TestCase):
         self.finish_product_gates(review="task-and-final")
         state = self.state()
         task_review = state["review"]["task_reviews"]["1"]
+        self.assertEqual(task_review["reviewer"], "subagent")
         self.assertEqual(task_review["base"], state["tasks"][0]["task_base"])
         self.assertEqual(task_review["head"], checkpoint)
         self.assertEqual(state["review"]["final"]["base"], state["approval_checkpoint"])
@@ -508,6 +667,8 @@ class ChangeHelperTests(unittest.TestCase):
         start = run_change(self.root, "start-repair", "--id", "alpha-change", "--source-gate", "RUN_VALIDATION", "--path", "src/task-1.txt", "--decision", "fix integration", "--evidence", "trace", "--contract-unchanged")
         self.assertEqual(start.returncode, 0, start.stderr)
         payload = stdout_json(start)
+        self.assertEqual(payload["required_executor"], "subagent")
+        self.assertEqual(self.state()["repair"]["executor"], "subagent")
         (self.root / "src" / "task-1.txt").write_text("repaired\n", encoding="utf-8")
         git(self.root, "add", "src/task-1.txt")
         git(self.root, "commit", "-m", payload["checkpoint_subject"])

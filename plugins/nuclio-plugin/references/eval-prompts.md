@@ -32,11 +32,11 @@
 - `Expected Route`: State-driven command fail closed。
 - `Key Assertions`: 返回 `BRANCH_DRIFT`、`DETACHED_HEAD` 或 HEAD drift；不手改 State、不自动切回/reset/stash。
 
-### 6. Canonical 与 legacy Plan
+### 6. Plan v2 execution 与 legacy 恢复
 
-- `User Prompt`: 新 Plan 写入 `repair_policy`/`delegate`/`checkpoint_subject`；另恢复一个已有合法 State 的 4.0.x active Plan。
-- `Expected Route`: 新批准拒绝旧字段；恢复路径按精确 legacy variant 兼容。
-- `Key Assertions`: 不接受混合 schema，不自动迁移 legacy Plan；checkpoint subject 对新 Plan 由 helper 派生。
+- `User Prompt`: 新 Plan 缺少 execution、direct 不满足 low/self/单 Task/最多三个精确文件，或写入 `repair_policy`/Task-level `delegate`/`checkpoint_subject`；另恢复已有合法 State 的 4.1.x/4.0.x active Plan。
+- `Expected Route`: schema v2 新批准要求显式 `delegated|direct` 与 rationale，拒绝不合格 direct 和旧字段；State-backed legacy variant 按兼容规则恢复。
+- `Key Assertions`: 4.1.x 未开始 Task 默认 subagent；4.0.x `delegate: main` 保留 main、`subagent|auto` 归一为 subagent；不自动迁移 legacy Plan；checkpoint subject 由 helper 派生。
 
 ### 7. Task validation evidence
 
@@ -46,9 +46,9 @@
 
 ### 8. 脏 index 与预存修改
 
-- `User Prompt`: `start-task` 前 index 非空，或 `allowed_paths` 内已有未归属修改。
+- `User Prompt`: `start-task` 前 index 非空、`allowed_paths` 内已有未归属修改，或 Coordinator 试图覆盖 Plan 派生 executor。
 - `Expected Route`: helper 返回稳定 dirty error，要求人工处理。
-- `Key Assertions`: 不把预存修改吸收进 checkpoint，不自动 stash/reset/clean；allowed paths 外无关 unstaged 文件可保留。
+- `Key Assertions`: `next-action`/`start-task` 返回 `required_executor`，CLI 不接受 executor override；不把预存修改吸收进 checkpoint，不自动 stash/reset/clean；allowed paths 外无关 unstaged 文件可保留。
 
 ### 9. Review range binding
 
@@ -115,6 +115,7 @@
 - Runtime 入口只有 `init` 与 `work`，唯一 helper 是 `change.py`。
 - active 与新 archive 都使用完整三件套；旧单文件 archive 只作为兼容输入。
 - file-first approval、approval checkpoint、frozen branch、Git checkpoint 与 evidence freshness 均 fail closed。
+- 产品 Task 默认 delegated；direct 只用于通过硬门槛并经批准的单 Task 小变更；subagent 不可用时不得静默回退主会话。
 - Plan 使用 change-level `allowed_paths`，不引入 per-Task ownership、owner routing、automatic fixer、DAG scheduler 或 parallel product write。
 - 不新增 `workflow.py`、runtime hook、daemon、MCP、archive manifest、hidden archive backup 或隐藏状态目录。
 - State 保持轻量，不凭 transcript、agent claim 或长日志推进。

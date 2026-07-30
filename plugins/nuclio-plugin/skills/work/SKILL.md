@@ -22,10 +22,10 @@ disable-model-invocation: true
 2. 使用 `list` 找到唯一匹配的 active change。多个候选时让用户选择；没有候选时使用 `create` 创建草稿。
 3. 只读取相关知识、active artifact、源码、配置和测试。完成 `change.md` 必要 Spec sections 与 canonical `plan.yaml`。
 4. 运行 `validate-plan --id <change-id>`。它同时验证 Spec、Plan 和跨文件 identity。
-5. 展示精简 file-first Gate：artifact 路径、Goal/Constraints/Non-goals/Acceptance 摘要、risk/review policy、Task 数、`allowed_paths` 和验证结果。明确归档会完整保留三个 artifact，然后等待用户自然语言批准。
+5. 展示精简 file-first Gate：artifact 路径、Goal/Constraints/Non-goals/Acceptance 摘要、risk/review policy、`execution.mode`/rationale、Task 数、`allowed_paths` 和验证结果。明确归档会完整保留三个 artifact，然后等待用户自然语言批准。
 6. 仅在批准后运行 `init-state`。该命令创建 approval checkpoint，冻结 attached `git_branch`，并把 Spec、Plan、State 纳入 Git 事实。
-7. 通过 `status` 和 `next-action` 恢复。在 frozen branch 上顺序执行 Task；每个 Task 先 `start-task`，再在 `allowed_paths` 内实施、运行 Plan 中的验证、创建恰好一个 helper 派生 subject 的 checkpoint，最后用命令和 exit code 调用 `record-task`。
-8. 按 change-level `review_policy` 和可选 Task override 运行 task/final review；用 `record-review` 写入 helper 推导的 base/head、摘要和证据。
+7. 通过 `status` 和 `next-action` 恢复。在 frozen branch 上顺序执行 Task；读取 `required_executor`，每个 Task 先 `start-task`，再由该 executor 在 `allowed_paths` 内实施、运行 Plan 中的验证、创建恰好一个 helper 派生 subject 的 checkpoint，最后用命令和 exit code 调用 `record-task`。
+8. `self` 由主会话自检；`final`/`task-and-final` 以及 Task override 必须派发 fresh read-only subagent reviewer，再用 `record-review` 写入 helper 推导的 base/head、摘要和证据。
 9. 用 `record-validation` 保存 whole-change validation 的命令、exit code、摘要和当前 HEAD。FAIL 时请求 repair decision；只有不改变批准合同的 in-scope repair 才能直接继续，否则提升 revision 并重新批准。
 10. 先报告产品结果和验证证据，再始终分析长期知识候选。无候选记录 `NO_OP`；有候选时等待用户确认并记录实际结果和精确路径。
 11. 调用 `complete --knowledge-result <result> [--knowledge-path <path> ...]`。成功后 `state.next_action` 为 `ARCHIVE`。
@@ -35,7 +35,7 @@ disable-model-invocation: true
 
 ## Approval And Identity
 
-任何产品 mutation 或 `init-state` 前都必须有完整文件和自然语言批准。Goal、Constraints、Non-goals、Acceptance、`allowed_paths`、Task contract、risk 或 review policy 变化时，提升 Plan revision，重新运行 `validate-plan` 并重新展示 Gate。
+任何产品 mutation 或 `init-state` 前都必须有完整文件和自然语言批准。Goal、Constraints、Non-goals、Acceptance、`allowed_paths`、Task contract、risk、review policy 或 execution 变化时，提升 Plan revision，重新运行 `validate-plan` 并重新展示 Gate。
 
 `init-state` 创建 `state(<change-id>): initialize approved change state` checkpoint。之后 Spec/Plan hash、revision、approval checkpoint、frozen branch、current HEAD、checkpoint parent/subject/range 和 `allowed_paths` 都是 fail-closed identity。不要通过聊天记录、agent claim、手改 State 或 hash refresh 绕过 drift。
 
@@ -45,7 +45,9 @@ disable-model-invocation: true
 
 repair checkpoint 会使相关 final review 和 whole-change validation evidence 失效。按照 `next-action` 重跑，不复用过期 PASS。review 不能替代 deterministic validation。
 
-小型、边界清晰的单 Task 可由主会话直接实施。跨模块、多 Task、广泛探索或上下文压力明显时，可使用有界 generic subagent；dispatch 必须提供 Task goal、non-goals、allowed paths、验证命令、task base、expected subject、frozen branch 和 compact return contract。subagent 不得修改三层 artifact、扩范围、递归委派、控制任务生命周期或创建/切换分支与 worktree；完成、阻塞、超时或需要决策时只返回 checkpoint SHA、changed paths、commands/exit codes、风险和 blocker。
+产品 Task 默认 `execution.mode: delegated`，必须派发有界 generic subagent。只有同时满足 `risk_level: low`、`review_policy: self`、恰好一个 Task、最多三个不以 `/` 结尾的精确文件路径，并且语义上不涉及公共 API、数据模型、依赖、安全、权限、迁移、并发、外部副作用、不可逆动作或批准后探索时，才可用 `execution.mode: direct` 由主会话实施。helper 机械验证结构条件；Coordinator 必须在 rationale 和 Gate 中说明语义条件。subagent 不可用时停止并报告，不得静默回退主会话；只有合法 revision、重新验证和重新批准才能改变 execution。
+
+dispatch 必须提供 Task goal、non-goals、allowed paths、验证命令、task base、expected subject、frozen branch 和 compact return contract。subagent 不得修改三层 artifact、扩范围、递归委派、控制任务生命周期或创建/切换分支与 worktree；完成、阻塞、超时或需要决策时只返回 checkpoint SHA、changed paths、commands/exit codes、风险和 blocker。repair 继承 Plan execution；独立 review 始终由 fresh read-only subagent 执行。
 
 ## Finish And Archive
 

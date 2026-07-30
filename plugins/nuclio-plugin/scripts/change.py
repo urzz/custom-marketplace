@@ -62,11 +62,14 @@ PLAN_TOP_KEYS = {
     "revision",
     "risk_level",
     "review_policy",
+    "execution",
     "summary",
     "allowed_paths",
     "tasks",
 }
-LEGACY_PLAN_TOP_KEYS = PLAN_TOP_KEYS | {"repair_policy"}
+V1_PLAN_TOP_KEYS = PLAN_TOP_KEYS - {"execution"}
+LEGACY_PLAN_TOP_KEYS = V1_PLAN_TOP_KEYS | {"repair_policy"}
+EXECUTION_KEYS = {"mode", "rationale"}
 TASK_REQUIRED_KEYS = {"id", "name", "steps", "acceptance", "validation"}
 TASK_OPTIONAL_KEYS = {"review"}
 LEGACY_TASK_KEYS = TASK_REQUIRED_KEYS | {"delegate", "review", "checkpoint_subject"}
@@ -98,7 +101,7 @@ SUPERSEDED_NEGATED_FULL_SUCCESS_RE = re.compile(
 )
 RISK_LEVELS = {"low", "medium", "high"}
 REVIEW_POLICIES = {"self", "final", "task-and-final"}
-EXECUTORS = {"main", "subagent", "auto"}
+EXECUTION_MODES = {"delegated", "direct"}
 KNOWLEDGE_RESULTS = {"NO_OP", "APPLIED", "PARTIAL", "REJECTED"}
 NEXT_DISPATCH_TASK = "DISPATCH_TASK"
 NEXT_RUN_TASK_REVIEW = "RUN_TASK_REVIEW"
@@ -255,7 +258,6 @@ def build_parser() -> argparse.ArgumentParser:
     start_task = subparsers.add_parser("start-task", help="freeze one Task base")
     start_task.add_argument("--id", required=True)
     start_task.add_argument("--task-id", required=True, type=int)
-    start_task.add_argument("--executor", default="main", choices=tuple(sorted(EXECUTORS)))
     start_task.set_defaults(func=cmd_start_task)
 
     record_task = subparsers.add_parser("record-task", help="record one Task checkpoint commit")
@@ -660,20 +662,60 @@ def task_checkpoint_subject(change_id: str, task_id: int) -> str:
     return f"task({change_id}): complete task {task_id}"
 
 
+def validate_execution(execution: Any) -> dict[str, str]:
+    if not isinstance(execution, dict):
+        raise NuclioError("INVALID_SCHEMA", "execution must be a mapping")
+    assert_exact_keys(execution, EXECUTION_KEYS, "execution")
+    mode = execution["mode"]
+    if mode not in EXECUTION_MODES:
+        raise NuclioError("INVALID_SCHEMA", "execution.mode must be delegated or direct")
+    rationale = require_non_empty_string(execution["rationale"], "execution.rationale").strip()
+    return {"mode": mode, "rationale": rationale}
+
+
+def require_direct_execution_eligibility(plan: dict[str, Any], allowed_paths: list[str]) -> None:
+    reasons: list[str] = []
+    if plan["risk_level"] != "low":
+        reasons.append("risk_level must be low")
+    if plan["review_policy"] != "self":
+        reasons.append("review_policy must be self")
+    tasks = plan.get("tasks")
+    if not isinstance(tasks, list) or len(tasks) != 1:
+        reasons.append("exactly one Task is required")
+    if len(allowed_paths) > 3:
+        reasons.append("allowed_paths must contain at most three exact files")
+    if any(path.endswith("/") for path in allowed_paths):
+        reasons.append("allowed_paths must not contain directory prefixes")
+    if reasons:
+        raise NuclioError(
+            "DIRECT_EXECUTION_INELIGIBLE",
+            "direct execution is allowed only for a small, low-risk, self-reviewed change",
+            reasons=reasons,
+        )
+
+
 def validate_plan_data(plan: Any, *, allow_legacy: bool = False) -> dict[str, Any]:
     if not isinstance(plan, dict):
         raise NuclioError("INVALID_SCHEMA", "plan must be a mapping")
     keys = set(plan)
     if keys == PLAN_TOP_KEYS:
-        legacy = False
+        variant = "v2"
+    elif allow_legacy and keys == V1_PLAN_TOP_KEYS:
+        variant = "v1-4.1"
     elif allow_legacy and keys == LEGACY_PLAN_TOP_KEYS:
-        legacy = True
+        variant = "v1-4.0"
     else:
-        expected = LEGACY_PLAN_TOP_KEYS if allow_legacy and "repair_policy" in keys else PLAN_TOP_KEYS
+        if allow_legacy and "repair_policy" in keys:
+            expected = LEGACY_PLAN_TOP_KEYS
+        elif allow_legacy and plan.get("schema_version") == 1:
+            expected = V1_PLAN_TOP_KEYS
+        else:
+            expected = PLAN_TOP_KEYS
         assert_exact_keys(plan, expected, "plan")
         raise AssertionError("unreachable")
-    if plan["schema_version"] != 1:
-        raise NuclioError("INVALID_SCHEMA", "schema_version must be 1")
+    expected_schema_version = 2 if variant == "v2" else 1
+    if plan["schema_version"] != expected_schema_version:
+        raise NuclioError("INVALID_SCHEMA", f"schema_version must be {expected_schema_version} for {variant} Plan")
     change_id = validate_id(require_non_empty_string(plan["change_id"], "change_id"))
     if not isinstance(plan["revision"], int) or isinstance(plan["revision"], bool) or plan["revision"] <= 0:
         raise NuclioError("INVALID_SCHEMA", "revision must be a positive integer")
@@ -683,8 +725,20 @@ def validate_plan_data(plan: Any, *, allow_legacy: bool = False) -> dict[str, An
         raise NuclioError("INVALID_SCHEMA", "review_policy must be self, final, or task-and-final")
     if plan["risk_level"] == "high" and plan["review_policy"] != "task-and-final":
         raise NuclioError("RISK_REVIEW_MISMATCH", "high risk changes require task-and-final review")
-    if legacy and plan["repair_policy"] != "in-scope":
+    if variant == "v1-4.0" and plan["repair_policy"] != "in-scope":
         raise NuclioError("INVALID_SCHEMA", "repair_policy must be in-scope")
+    if variant == "v2":
+        execution = validate_execution(plan["execution"])
+    elif variant == "v1-4.0":
+        execution = {
+            "mode": "legacy-task-delegate",
+            "rationale": "State-backed 4.0 Plan preserves each Task delegate; auto maps to subagent.",
+        }
+    else:
+        execution = {
+            "mode": "delegated",
+            "rationale": "State-backed legacy Plan defaults pending work to subagent execution.",
+        }
     require_non_empty_string(plan["summary"], "summary")
     if not isinstance(plan["allowed_paths"], list) or not plan["allowed_paths"]:
         raise NuclioError("INVALID_SCHEMA", "allowed_paths must be a non-empty list")
@@ -699,7 +753,7 @@ def validate_plan_data(plan: Any, *, allow_legacy: bool = False) -> dict[str, An
     for task in plan["tasks"]:
         if not isinstance(task, dict):
             raise NuclioError("INVALID_SCHEMA", "each task must be a mapping")
-        if legacy:
+        if variant == "v1-4.0":
             assert_exact_keys(task, LEGACY_TASK_KEYS, "task")
         else:
             task_keys = set(task)
@@ -719,8 +773,8 @@ def validate_plan_data(plan: Any, *, allow_legacy: bool = False) -> dict[str, An
         require_string_list(task["steps"], "task.steps")
         require_string_list(task["acceptance"], "task.acceptance")
         require_string_list(task["validation"], "task.validation")
-        if legacy:
-            if task["delegate"] not in EXECUTORS:
+        if variant == "v1-4.0":
+            if task["delegate"] not in {"main", "subagent", "auto"}:
                 raise NuclioError("INVALID_SCHEMA", "task.delegate must be main, subagent, or auto")
             if task["review"] not in REVIEW_POLICIES:
                 raise NuclioError("INVALID_SCHEMA", "task.review must be self, final, or task-and-final")
@@ -745,8 +799,11 @@ def validate_plan_data(plan: Any, *, allow_legacy: bool = False) -> dict[str, An
                 "validation": list(task["validation"]),
                 "review": review,
                 "checkpoint_subject": subject,
+                "legacy_delegate": task.get("delegate") if variant == "v1-4.0" else None,
             }
         )
+    if execution["mode"] == "direct":
+        require_direct_execution_eligibility(plan, allowed_paths)
     if contains_placeholder(plan):
         raise NuclioError("PLACEHOLDER_VALUE", "plan contains placeholder text")
     return {
@@ -755,10 +812,12 @@ def validate_plan_data(plan: Any, *, allow_legacy: bool = False) -> dict[str, An
         "revision": plan["revision"],
         "risk_level": plan["risk_level"],
         "review_policy": plan["review_policy"],
+        "execution": execution,
         "summary": plan["summary"],
         "allowed_paths": allowed_paths,
         "tasks": normalized_tasks,
-        "_legacy": legacy,
+        "_legacy": variant != "v2",
+        "_variant": variant,
     }
 
 
@@ -771,6 +830,18 @@ def plan_task(plan: dict[str, Any], task_id: int) -> dict[str, Any]:
         if task["id"] == task_id:
             return task
     raise NuclioError("UNKNOWN_TASK", f"unknown task id: {task_id}")
+
+
+def required_task_executor(plan: dict[str, Any], task: dict[str, Any]) -> str:
+    if plan.get("_variant") == "v1-4.0" and task.get("legacy_delegate") == "main":
+        return "main"
+    return "main" if plan["execution"]["mode"] == "direct" else "subagent"
+
+
+def required_repair_executor(plan: dict[str, Any]) -> str:
+    if plan.get("_variant") == "v1-4.0" and all(task.get("legacy_delegate") == "main" for task in plan["tasks"]):
+        return "main"
+    return "main" if plan["execution"]["mode"] == "direct" else "subagent"
 
 
 # State and Git helpers
@@ -1222,6 +1293,7 @@ def cmd_validate_plan(args: argparse.Namespace, paths: Paths) -> int:
             "revision": plan["revision"],
             "risk_level": plan["risk_level"],
             "review_policy": plan["review_policy"],
+            "execution": plan["execution"],
             "tasks": [task["id"] for task in plan["tasks"]],
             "allowed_paths": plan["allowed_paths"],
         }
@@ -1280,7 +1352,18 @@ def cmd_init_state(args: argparse.Namespace, paths: Paths) -> int:
     state["approval_checkpoint"] = state_head
     state["current_head"] = state_head
     dump_yaml_atomic(state_path, state)
-    return emit_ok({"ok": True, "change_id": change_id, "path": rel(state_path, paths.root), "next_action": NEXT_DISPATCH_TASK, "head": state_head})
+    first_task = plan["tasks"][0]
+    required_executor = required_task_executor(plan, first_task)
+    return emit_ok(
+        {
+            "ok": True,
+            "change_id": change_id,
+            "path": rel(state_path, paths.root),
+            "next_action": NEXT_DISPATCH_TASK,
+            "required_executor": required_executor,
+            "head": state_head,
+        }
+    )
 
 
 def load_status_state_and_plan(paths: Paths, change_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1303,8 +1386,20 @@ def cmd_status(args: argparse.Namespace, paths: Paths) -> int:
 
 
 def cmd_next_action(args: argparse.Namespace, paths: Paths) -> int:
-    state, _plan = load_status_state_and_plan(paths, args.id)
-    return emit_ok({"ok": True, "change_id": args.id, "next_action": state["next_action"], "current_task_id": state.get("current_task_id")})
+    state, plan = load_status_state_and_plan(paths, args.id)
+    payload = {"ok": True, "change_id": args.id, "next_action": state["next_action"], "current_task_id": state.get("current_task_id")}
+    if state["next_action"] == NEXT_DISPATCH_TASK:
+        pending_task_id = first_pending_task_id(state)
+        if pending_task_id is not None:
+            payload.update(
+                {
+                    "task_id": pending_task_id,
+                    "required_executor": required_task_executor(plan, plan_task(plan, pending_task_id)),
+                }
+            )
+    elif state["next_action"] in {NEXT_RUN_TASK_REVIEW, NEXT_RUN_FINAL_REVIEW}:
+        payload["required_executor"] = "subagent"
+    return emit_ok(payload)
 
 
 def cmd_start_task(args: argparse.Namespace, paths: Paths) -> int:
@@ -1321,10 +1416,20 @@ def cmd_start_task(args: argparse.Namespace, paths: Paths) -> int:
     require_clean_index(paths)
     require_no_preexisting_allowed_dirty(paths, plan["allowed_paths"])
     head = git_head(paths)
-    state_task_entry.update({"status": "IN_PROGRESS", "task_base": head, "executor": args.executor})
+    executor = required_task_executor(plan, task)
+    state_task_entry.update({"status": "IN_PROGRESS", "task_base": head, "executor": executor})
     state.update({"phase": "TASK_IN_PROGRESS", "current_task_id": args.task_id, "next_action": NEXT_HALT})
     write_state(paths, args.id, state)
-    return emit_ok({"ok": True, "change_id": args.id, "task_id": args.task_id, "task_base": head, "checkpoint_subject": task["checkpoint_subject"]})
+    return emit_ok(
+        {
+            "ok": True,
+            "change_id": args.id,
+            "task_id": args.task_id,
+            "task_base": head,
+            "checkpoint_subject": task["checkpoint_subject"],
+            "required_executor": executor,
+        }
+    )
 
 
 def cmd_record_task(args: argparse.Namespace, paths: Paths) -> int:
@@ -1411,6 +1516,7 @@ def cmd_record_review(args: argparse.Namespace, paths: Paths) -> int:
         "status": args.status,
         "base": review_base,
         "head": review_head,
+        "reviewer": "subagent",
         "summary": summary,
         "evidence": args.evidence,
     }
@@ -1467,11 +1573,21 @@ def cmd_start_repair(args: argparse.Namespace, paths: Paths) -> int:
         "repair_base": head,
         "checkpoint_commit": None,
         "checkpoint_subject": subject,
+        "executor": required_repair_executor(plan),
         "closure_validation": None,
     }
     state.update({"phase": "REPAIR_IN_PROGRESS", "next_action": NEXT_HALT})
     write_state(paths, args.id, state)
-    return emit_ok({"ok": True, "change_id": args.id, "repair_id": repair_number, "repair_base": head, "checkpoint_subject": subject})
+    return emit_ok(
+        {
+            "ok": True,
+            "change_id": args.id,
+            "repair_id": repair_number,
+            "repair_base": head,
+            "checkpoint_subject": subject,
+            "required_executor": state["repair"]["executor"],
+        }
+    )
 
 
 def cmd_record_repair(args: argparse.Namespace, paths: Paths) -> int:

@@ -18,7 +18,7 @@
     {
       "name": "nuclio",
       "source": "./plugins/nuclio-plugin",
-      "description": "Adds /nuclio:init for v2 .dev-docs skeleton setup, repair, and legacy/v1 moves, plus /nuclio:work for Nuclio v2 4.1.0 file-first change.md Spec, canonical plan.yaml contract, lightweight state.yaml recovery state, approval checkpoint, Git-bound task/review/validation evidence, explicit knowledge result, recoverable complete three-artifact archive, and archived-only successor/predecessor closure while retaining legacy one-file archive read compatibility"
+      "description": "Adds /nuclio:init for v2 .dev-docs skeleton setup, repair, and legacy/v1 moves, plus /nuclio:work for Nuclio v2 4.2.0 file-first change.md Spec, plan.yaml v2 delegated-by-default execution with hard-gated direct exceptions, lightweight state.yaml recovery state, approval checkpoint, Git-bound task/review/validation evidence, explicit knowledge result, recoverable complete three-artifact archive, and archived-only successor/predecessor closure while retaining legacy active Plan and one-file archive read compatibility"
     }
   ]
 }

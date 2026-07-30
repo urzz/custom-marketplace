@@ -150,14 +150,17 @@ related_changes: []
 
 ## Canonical plan.yaml
 
-4.1.0 新建或重新批准的 Plan 只接受以下 exact schema：
+4.2.0 新建或重新批准的 Plan 只接受以下 exact schema：
 
 ```yaml
-schema_version: 1
+schema_version: 2
 change_id: example-change
 revision: 1
 risk_level: medium
 review_policy: final
+execution:
+  mode: delegated
+  rationale: The change spans implementation and tests and requires an independent executor.
 summary: Implement the approved behavior and cover it with tests.
 allowed_paths:
   - src/
@@ -183,6 +186,7 @@ change_id
 revision
 risk_level
 review_policy
+execution
 summary
 allowed_paths
 tasks
@@ -192,19 +196,29 @@ Task 必要字段为 `id`、`name`、`steps`、`acceptance`、`validation`；唯
 
 约束：
 
-- `schema_version` 当前为 `1`，revision 为正整数，Task id 从 `1` 连续递增。
+- `schema_version` 当前为 `2`，revision 为正整数，Task id 从 `1` 连续递增。
 - `risk_level` 为 `low|medium|high`；`review_policy` 为 `self|final|task-and-final`。
+- `execution` exact fields 为 `mode` 与非空 `rationale`；`mode` 为 `delegated|direct`。
 - `high` 必须使用 `task-and-final`。
 - change-level `final` 下，少数 Task 可写 `review: task-and-final`；其他组合拒绝冗余或无意义 override。
 - `allowed_paths`、steps、acceptance、validation 均为非空、去重、无 placeholder 的 string list。
 - Task checkpoint subject 由 helper 派生：`task(<change-id>): complete task <task-id>`。
-- canonical Plan 不含 `repair_policy`、`delegate` 或显式 `checkpoint_subject`。
+- canonical Plan 不含 `repair_policy`、Task-level `delegate`/`executor` 或显式 `checkpoint_subject`。
+
+`delegated` 是默认执行策略，所有 Task 与 repair 使用 `subagent`。`direct` 是受控例外，helper 要求：
+
+- `risk_level: low`；
+- `review_policy: self`；
+- Plan 恰好一个 Task；
+- `allowed_paths` 最多三个，全部为不以 `/` 结尾的精确文件。
+
+Coordinator 还必须确认并在 rationale/Gate 中展示：目标文件在批准前已确定、不需要批准后广泛探索、不涉及公共 API、数据模型、dependency、安全、权限、migration、并发、外部副作用或不可逆动作，并且存在明确的定向 validation。语义条件变化时必须改为 `delegated` 或修订 Plan 后重新批准。
 
 YAML loader 拒绝 duplicate key，限制文件大小，使用 safe load/dump，并进行 exact keys、类型、路径和跨文件 identity 校验。不要增加 requirement graph、DAG scheduler、owner routing 或第二个 validator。
 
 ### Legacy Active Plan
 
-已有合法 `state.yaml` 的 4.0.x active change 可在恢复命令中读取旧 exact schema，包括固定 `repair_policy: in-scope`、legacy `delegate`、`review`、`checkpoint_subject`。该 variant 只用于兼容既有冻结 State，不自动重写 Plan，也不能用于新的 `validate-plan`/`init-state` 批准。
+已有合法 `state.yaml` 的 4.1.x schema v1 active Plan 可在恢复命令中读取；其未开始 Task 与后续 repair 默认要求 `subagent`。已有合法 State 的 4.0.x active change 也可读取旧 exact schema，包括固定 `repair_policy: in-scope`、legacy `delegate`、`review`、`checkpoint_subject`；Task 的 `delegate: main` 保持 main，`subagent|auto` 归一为 subagent。这些 variant 只用于兼容既有冻结 State，不自动重写 Plan，也不能用于新的 `validate-plan`/`init-state` 批准。未初始化 State 的 schema v1 草稿必须升级为 schema v2 后才能批准。
 
 ## Initial state.yaml
 
@@ -236,7 +250,7 @@ state(<change-id>): initialize approved change state
 
 ## Task Evidence
 
-Task 开始后 State 保存 `task_base` 和 helper 派生 subject。`record-task` 的 validation evidence 形态：
+Task 开始后 State 保存 `task_base`、从 Plan 派生的 `executor` 和 helper 派生 subject。调用方不能覆盖 executor。`record-task` 的 validation evidence 形态：
 
 ```yaml
 validation:
@@ -258,6 +272,7 @@ Task review：
 status: PASS
 base: <task-base>
 head: <task-checkpoint>
+reviewer: subagent
 summary: No blocking findings.
 evidence:
   - src/example.py:42
@@ -269,12 +284,13 @@ Final review：
 status: PASS
 base: <approval-checkpoint>
 head: <current-head>
+reviewer: subagent
 summary: Whole-change integration review passed.
 evidence:
   - Reviewed the complete approved range.
 ```
 
-base/head 由 helper 推导，调用者只提供 scope、status、summary、evidence，以及 FAIL 所需 contract/paths。PASS 的 summary/evidence 不得同时为空。
+base/head 由 helper 推导；需要 `record-review` 的 task/final review 必须来自 fresh read-only subagent，State 记录 `reviewer: subagent`。调用者只提供 scope、status、summary、evidence，以及 FAIL 所需 contract/paths。PASS 的 summary/evidence 不得同时为空。
 
 ## Whole-Change Validation
 

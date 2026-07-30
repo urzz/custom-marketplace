@@ -53,7 +53,7 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 修改 `/commit` 时同步 `plugins/dev-stack/skills/commit/SKILL.md`、其一层 `references/`、插件 metadata、Marketplace、README 和本文件。
 
-## Nuclio v2 4.1.0 约束
+## Nuclio v2 4.2.0 约束
 
 Nuclio 当前权威文件：
 
@@ -66,13 +66,14 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 `docs/research/` 仅是历史设计输入，不是运行时权威。维护时遵守以下边界：
 
 - `/nuclio:init` 只负责 v2 `.dev-docs` skeleton、导航修复和旧目录整体移动到 `.dev-docs/legacy/v1/`；日常 change 只通过 `/nuclio:work`。
-- active change 使用 `change.md` Spec、canonical `plan.yaml` 批准合同和轻量 `state.yaml` 恢复状态。`change.py` 是唯一 runtime helper 和 State writer，运行时只依赖 PyYAML。
+- active change 使用 `change.md` Spec、Plan schema v2 批准合同和轻量 `state.yaml` 恢复状态。`change.py` 是唯一 runtime helper 和 State writer，运行时只依赖 PyYAML。
 - 产品 mutation 前必须通过 file-first Spec/Plan 验证和自然语言批准；`init-state` 创建 approval checkpoint 并冻结 `state.git_branch`。
 - 每个 implementation Task 与获批 in-scope repair 只有一个 selective-stage checkpoint。Task、review 和 whole-change validation evidence 必须绑定 helper 推导的 Git identity；repair 后过期 evidence 必须失效。
+- 产品 Task 和 repair 默认 `execution.mode: delegated`；只有 low/self/单 Task/最多三个精确文件且无高后果语义的变更可经批准使用 `direct`。helper 派生 executor，subagent 不可用时不得静默回退主会话；final/task-and-final review 必须使用 fresh read-only subagent。
 - Plan 只使用 change-level `allowed_paths`，不增加 per-Task ownership、owner routing、automatic fixer 或第二状态协议。
 - State 不保存完整 diff、日志、transcript、agent message、文件 snapshot 或完整 transition history。
 - finish 先报告产品结果，再分析长期知识；`complete` 必须记录 `knowledge.result` 与精确 paths。完成文档保留批准 Spec，并追加非空 `Outcome`、`Validation`、`Knowledge Updates`、`Residual Risks`。
-- 4.1.0 archive 完整移动并保留 `change.md`、`plan.yaml`、terminal `state.yaml`，创建一个 helper 验证的 archive commit；中断可恢复，成功重跑幂等，无关 dirty 文件不得进入 commit。
+- 4.2.0 archive 完整移动并保留 `change.md`、`plan.yaml`、terminal `state.yaml`，创建一个 helper 验证的 archive commit；中断可恢复，成功重跑幂等，无关 dirty 文件不得进入 commit。
 - `supersede` 只接受已成功归档、tracked/clean、completed 且 backlink predecessor 的 successor。旧 4.0.x 单文件 archive 仅作为只读兼容输入，不迁移。
 - branch drift 或 detached HEAD 必须 fail closed。Coordinator 与 subagent 不创建、切换或重命名分支，不创建 worktree，不自动 reset/rebase/stash 或改写历史。
 - 不增加 `workflow.py`、第二 State writer、DAG scheduler、并行产品写入、runtime hook、daemon、MCP、network service、项目级 `.claude/`、`.nuclio/` 状态、persistent process JSON、`changes/index.md`、archive manifest、隐藏备份、v1 converter 或双栈 runtime。

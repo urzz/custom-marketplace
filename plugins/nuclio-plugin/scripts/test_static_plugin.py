@@ -61,8 +61,9 @@ class RuntimeHelperTests(unittest.TestCase):
     def test_canonical_plan_schema_is_minimal(self):
         self.assertEqual(
             assignment_literal(self.tree, "PLAN_TOP_KEYS"),
-            {"schema_version", "change_id", "revision", "risk_level", "review_policy", "summary", "allowed_paths", "tasks"},
+            {"schema_version", "change_id", "revision", "risk_level", "review_policy", "execution", "summary", "allowed_paths", "tasks"},
         )
+        self.assertEqual(assignment_literal(self.tree, "EXECUTION_KEYS"), {"mode", "rationale"})
         self.assertEqual(
             assignment_literal(self.tree, "TASK_REQUIRED_KEYS"),
             {"id", "name", "steps", "acceptance", "validation"},
@@ -70,6 +71,7 @@ class RuntimeHelperTests(unittest.TestCase):
         self.assertEqual(assignment_literal(self.tree, "TASK_OPTIONAL_KEYS"), {"review"})
         for forbidden in ("owner", "owners", "depends_on", "requirements", "fix_budget", "behavioral_eval_owner"):
             self.assertNotIn(f'"{forbidden}"', self.source)
+        self.assertNotIn('start_task.add_argument("--executor"', self.source)
 
     def test_archive_retains_complete_record_without_pruning(self):
         self.assertIn('ARCHIVE_ACTIVE_ARTIFACTS = ("change.md", "plan.yaml", "state.yaml")', self.source)
@@ -136,6 +138,9 @@ class RuntimeHelperTests(unittest.TestCase):
             "retains_complete_record",
             "recovers_by_rerunning",
             "rejects_active_successor",
+            "direct_execution_requires",
+            "derive_required_executor",
+            "v1_plan_defaults_pending_task_to_subagent",
         ):
             self.assertTrue(any(behavior in test for test in tests), behavior)
 
@@ -168,6 +173,8 @@ class MarkdownContractTests(unittest.TestCase):
             self.assertIn(required, combined)
         self.assertIn("successor", combined)
         self.assertIn("archive", combined)
+        self.assertIn("execution.mode", combined)
+        self.assertIn("不得静默回退", combined)
 
     def test_current_docs_do_not_promise_one_file_pruning(self):
         combined = "\n".join(read(path) for path in RUNTIME_DOCS)
@@ -205,10 +212,10 @@ class PackageSyncTests(unittest.TestCase):
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
         self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "4.1.0")
+        self.assertEqual(plugin["version"], "4.2.0")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         for text in (plugin["description"], entry["description"], read(ROOT / "README.md"), read(ROOT / "CLAUDE.md")):
-            self.assertIn("4.1.0", text)
+            self.assertIn("4.2.0", text)
             self.assertIn("plan.yaml", text)
             self.assertIn("state.yaml", text)
 
