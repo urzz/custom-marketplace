@@ -187,6 +187,24 @@ class MarkdownContractTests(unittest.TestCase):
         for phrase in forbidden:
             self.assertNotIn(phrase, combined)
 
+    def test_knowledge_closeout_uses_one_result_oriented_decision(self):
+        work = read(WORK)
+        knowledge = read(REFERENCES / "knowledge.md")
+        workflow = read(REFERENCES / "workflow.md")
+        combined = "\n".join((work, knowledge, workflow))
+        for required in (
+            "AskUserQuestion",
+            "如何处理以上知识候选并完成本次 change？",
+            "写入并归档（推荐）",
+            "跳过并归档",
+            "不得要求固定口令",
+            "不得再次请求归档确认",
+        ):
+            self.assertIn(required, combined)
+        self.assertIn("无合格候选时不要显示这些选项", knowledge)
+        self.assertNotIn("接受知识更新", combined)
+        self.assertNotIn("不写知识，直接归档", combined)
+
     def test_runtime_docs_keep_forbidden_architecture_out(self):
         combined = "\n".join(read(path) for path in RUNTIME_DOCS)
         for forbidden in (
@@ -212,10 +230,10 @@ class PackageSyncTests(unittest.TestCase):
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
         self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "4.2.0")
+        self.assertEqual(plugin["version"], "4.2.1")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         for text in (plugin["description"], entry["description"], read(ROOT / "README.md"), read(ROOT / "CLAUDE.md")):
-            self.assertIn("4.2.0", text)
+            self.assertIn("4.2.1", text)
             self.assertIn("plan.yaml", text)
             self.assertIn("state.yaml", text)
 

@@ -72,13 +72,13 @@
 
 - `User Prompt`: 产品验证通过，但无合格知识；另测有候选但用户拒绝。
 - `Expected Route`: 分别用 `NO_OP` 或 `REJECTED` complete，paths 为空。
-- `Key Assertions`: 产品结果先报告；无候选不出现第二 Gate；拒绝不阻止 complete/archive。
+- `Key Assertions`: 产品结果先报告；无候选不出现第二 Gate 并直接归档；有候选时优先显示“写入并归档（推荐）/跳过并归档”的交互式单选，工具不可用时显示等价自然语言选项；不要求固定口令；拒绝后不再询问归档确认并连续 complete/archive。
 
 ### 13. Knowledge 实际写入绑定
 
 - `User Prompt`: 用户确认更新 `.dev-docs/knowledge/engineering.md`，另声明一个未实际修改或越界路径。
 - `Expected Route`: 实际、允许的路径可用 `APPLIED`/`PARTIAL`；虚假、重复、绝对或越界路径被拒绝。
-- `Key Assertions`: State 只保存 `knowledge.result` 和 paths；知识正文不进入 State；archive commit 只额外纳入声明路径。
+- `Key Assertions`: 一次“写入并归档”选择同时授权知识写入和后续归档；State 只保存 `knowledge.result` 和 paths；知识正文不进入 State；archive commit 只额外纳入声明路径。
 
 ### 14. Completion Spec preservation
 

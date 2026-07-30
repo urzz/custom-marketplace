@@ -1,6 +1,6 @@
 # Nuclio v2 Workflow
 
-Nuclio v2 4.2.0 是 file-first、Git-backed 的三层 change 工作流。`change.md` 保存用户意图和完成叙述，`plan.yaml` 保存批准合同与执行策略，`state.yaml` 保存当前恢复 cursor 与紧凑证据。主会话是唯一 Coordinator，`change.py` 是唯一 State writer。
+Nuclio v2 4.2.1 是 file-first、Git-backed 的三层 change 工作流。`change.md` 保存用户意图和完成叙述，`plan.yaml` 保存批准合同与执行策略，`state.yaml` 保存当前恢复 cursor 与紧凑证据。主会话是唯一 Coordinator，`change.py` 是唯一 State writer。
 
 本文件是生命周期、状态迁移、repair、finish、archive 和 supersede 的权威；精确 schema 见 `change-format.md`。
 
@@ -146,6 +146,8 @@ HALT
 - 用户接受并全部写入：`APPLIED`。
 - 仅部分写入或按用户修改写入：`PARTIAL`。
 - 候选存在但用户拒绝：`REJECTED`。
+
+有候选时只发起一次结果导向的收尾决策：优先通过 `AskUserQuestion` 提供“写入并归档（推荐）”与“跳过并归档”；工具不可用时给出等价自然语言选项，并允许用户直接说明修改意见。不得要求固定口令。用户选择写入或跳过后，连续执行对应知识处理、`complete`、完成文档更新与 `archive`，不得另行请求归档确认。无候选时直接以 `NO_OP` 连续完成并归档。
 
 调用：
 

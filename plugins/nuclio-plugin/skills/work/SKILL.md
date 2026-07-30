@@ -27,7 +27,7 @@ disable-model-invocation: true
 7. 通过 `status` 和 `next-action` 恢复。在 frozen branch 上顺序执行 Task；读取 `required_executor`，每个 Task 先 `start-task`，再由该 executor 在 `allowed_paths` 内实施、运行 Plan 中的验证、创建恰好一个 helper 派生 subject 的 checkpoint，最后用命令和 exit code 调用 `record-task`。
 8. `self` 由主会话自检；`final`/`task-and-final` 以及 Task override 必须派发 fresh read-only subagent reviewer，再用 `record-review` 写入 helper 推导的 base/head、摘要和证据。
 9. 用 `record-validation` 保存 whole-change validation 的命令、exit code、摘要和当前 HEAD。FAIL 时请求 repair decision；只有不改变批准合同的 in-scope repair 才能直接继续，否则提升 revision 并重新批准。
-10. 先报告产品结果和验证证据，再始终分析长期知识候选。无候选记录 `NO_OP`；有候选时等待用户确认并记录实际结果和精确路径。
+10. 先报告产品结果和验证证据，再始终分析长期知识候选。无候选记录 `NO_OP` 并连续完成归档，不增加交互；有候选时展示精简 proposal，优先使用 `AskUserQuestion` 提供“写入并归档（推荐）”与“跳过并归档”单选，工具不可用时给出等价自然语言选项。不得要求固定口令；用户也可直接说明修改意见。
 11. 调用 `complete --knowledge-result <result> [--knowledge-path <path> ...]`。成功后 `state.next_action` 为 `ARCHIVE`。
 12. 保留批准 Spec 内容，只更新允许的 frontmatter，并追加非空 `Outcome`、`Validation`、`Knowledge Updates`、`Residual Risks`。
 13. 调用 `archive`。helper 校验 Spec 历史、Plan/State identity、evidence freshness 和 knowledge paths，移动完整 change 目录并创建一个归档 commit。
@@ -52,6 +52,8 @@ dispatch 必须提供 Task goal、non-goals、allowed paths、验证命令、tas
 ## Finish And Archive
 
 `complete` 必须显式记录 `knowledge.result`。`APPLIED`/`PARTIAL` 的 paths 只允许 `.dev-docs/knowledge/**` 与必要的 `.dev-docs/index.md`；`NO_OP`/`REJECTED` 不得声明 paths。知识正文不进入 State。
+
+知识候选决策是唯一的收尾交互。用户选择写入或跳过时，该选择同时授权对应的知识处理、`complete`、完成文档更新与 `archive`；完成这些步骤前不得再次请求归档确认。用户提出调整时，先按反馈修订 proposal，再重新展示同一组结果导向选项。成功归档后只报告最终 outcome、archive path、commit 和必要风险。
 
 归档保留完整目录：
 

@@ -150,7 +150,7 @@ related_changes: []
 
 ## Canonical plan.yaml
 
-4.2.0 新建或重新批准的 Plan 只接受以下 exact schema：
+4.2.0 及之后版本新建或重新批准的 Plan 只接受以下 exact schema：
 
 ```yaml
 schema_version: 2
