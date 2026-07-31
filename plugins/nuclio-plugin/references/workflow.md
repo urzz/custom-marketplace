@@ -1,6 +1,6 @@
 # Nuclio v2 Workflow
 
-Nuclio v2 4.2.1 是 file-first、Git-backed 的三层 change 工作流。`change.md` 保存用户意图和完成叙述，`plan.yaml` 保存批准合同与执行策略，`state.yaml` 保存当前恢复 cursor 与紧凑证据。主会话是唯一 Coordinator，`change.py` 是唯一 State writer。
+Nuclio v2 4.2.2 是 file-first、Git-backed 的三层 change 工作流。`change.md` 保存用户意图和完成叙述，`plan.yaml` 保存批准合同与执行策略，`state.yaml` 保存当前恢复 cursor 与紧凑证据。主会话是唯一 Coordinator，`change.py` 是唯一 State writer。
 
 本文件是生命周期、状态迁移、repair、finish、archive 和 supersede 的权威；精确 schema 见 `change-format.md`。
 
@@ -86,24 +86,30 @@ helper 机械验证前三项中可结构化的部分；语义边界由 Coordinat
 Task 按 Plan 顺序执行：
 
 1. `next-action` 返回 `required_executor`；`start-task --id <id> --task-id <n>` 从批准 Plan 派生同一 executor、冻结 `task_base`，并返回 helper 派生的 `checkpoint_subject`。
-2. `delegated` 必须派发 bounded subagent；`direct` 才由主会话实施。两者都只在 change-level `allowed_paths` 内写入并保持 index 可控。
+2. `delegated` 必须派发 `nuclio:task-implementer`；`direct` 才由主会话实施。两者都只在 change-level `allowed_paths` 内写入并保持 index 可控。
 3. 精确执行 Task `validation` 中的全部命令并保存 exit code 与短摘要。
 4. selective stage Task 路径并创建恰好一个 checkpoint commit。
 5. `record-task` 传入每个 validation command/exit code。helper 验证直接 parent、subject、非空 changed paths、allowed-path 边界、空 index和 branch identity，再自动绑定 checkpoint SHA。
 
 Task validation command 的顺序与内容必须和 Plan 精确一致；PASS 的 exit codes 必须全为 `0`。agent claim、只写“测试通过”或没有 checkpoint 的工作均不能推进 State。
 
+`nuclio:task-implementer` 的 agent 文件固定工具白名单、artifact/Git/委派边界、工作顺序和 compact return。Coordinator 的 dispatch 只传 repo root、change id、artifact paths、action、Task id 或 repair id/source gate、helper base、expected subject、frozen branch 和必要 read paths；repair 还传获批 finding、closure goal、允许路径和精确 closure validation commands。implementer 从批准 artifact 读取当前合同，不在 prompt 复制完整 Spec/Plan；Task validation 来自 Plan，repair closure validation 来自 dispatch。repair 复用同一 agent，不新增 fixer role。
+
 ## Review And Validation
 
 review policy 由失败后果、耦合、变更性质和验证强度决定：
 
 - `self`：低风险可由主会话自检，仍必须运行 deterministic validation。
-- `final`：所有 Task 后派发 fresh read-only subagent 做 whole-change review；个别 Task 可用 `review: task-and-final` 提前审查。
-- `task-and-final`：每个 Task checkpoint 后派发 fresh read-only subagent 审查，所有 Task 后再派发 final reviewer；`high` 风险必须使用此策略。
+- `final`：所有 Task 后派发 fresh `nuclio:readonly-reviewer` 做 whole-change review；个别 Task 可用 `review: task-and-final` 提前审查。
+- `task-and-final`：每个 Task checkpoint 后派发 fresh `nuclio:readonly-reviewer` 审查，所有 Task 后再派发同一类型的 fresh final reviewer；`high` 风险必须使用此策略。
 
 Task review 的 range 由 helper 固定为 `task_base..task checkpoint`；final review 固定为 `approval_checkpoint..current_head`。`record-review` 记录 PASS/FAIL、summary、evidence，FAIL 还应记录 violated contract 与 paths。调用者不能覆盖 base/head。
 
+`nuclio:readonly-reviewer` 的 agent 文件固定 `Read/Grep/Glob/Bash` 工具白名单、只读命令边界、读取顺序和 compact return。它没有 Agent、Skill、Edit 或 Write 工具，不得调用 `code-review`、其他 workflow、Claude/Codex CLI、网络或 worktree。Coordinator 只传 review scope、Task id/expected checkpoint subject（Task review）、artifact paths、helper base/head、changed paths、validation evidence、repair/交叉触碰热点和可复用 evidence 摘要；Task 与 final review 不增加不同 agent 类型。
+
 `record-validation` 至少包含一个非空 command 及对应 exit code，绑定当前 HEAD。PASS 要求所有 exit code 为 `0`；FAIL 记录失败命令、非零 code、摘要和必要路径/证据。review PASS 不能覆盖 validation FAIL。
+
+每个 helper `next_action` 只允许一次 agent dispatch attempt。遇到 429、spawn limit、agent 或必要工具不可用、`NEEDS_CONTEXT`、`CANNOT_VERIFY`、中断或 isolation/worktree 丢失时，保持 State 当前 action 并报告 blocker；不得在当前 action 自动重试、恢复失败 agent、切换 generic subagent 或让主会话替代。后续用户请求或新会话可根据未推进的 State 派发一个 fresh named agent。失败或中断的 reviewer 输出不得写入 evidence。
 
 ## In-Scope Repair
 
@@ -206,4 +212,4 @@ move 后、commit 前中断时，同一命令可以根据 archived State 恢复�
 
 Git commits、working tree、代码、配置、测试和 CI 是产品事实；State 只保存当前恢复事实。恢复不得依赖 transcript 或 agent 信心。
 
-Nuclio 不引入第二 helper、`workflow.py`、DAG scheduler、parallel product write、owner routing、automatic fixer、archive manifest、hidden archive backup、runtime hook、daemon、MCP、network service、项目级 `.claude/`、`.nuclio/` 状态或 v1/v2 双栈。产品写入顺序执行，只允许无写冲突的只读探索或审查并发。
+Nuclio 不引入第二 helper、`workflow.py`、DAG scheduler、parallel product write、owner routing、automatic fixer、archive manifest、hidden archive backup、runtime hook、daemon、MCP、network service、项目级 `.claude/`、`.nuclio/` 状态或 v1/v2 双栈。named implementer/reviewer 只是工具隔离的 capability profile，不增加 planner、explorer、fixer 或固定多 agent pipeline；产品写入和 Nuclio review 顺序执行。

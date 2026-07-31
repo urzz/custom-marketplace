@@ -290,7 +290,7 @@ evidence:
   - Reviewed the complete approved range.
 ```
 
-base/head 由 helper 推导；需要 `record-review` 的 task/final review 必须来自 fresh read-only subagent，State 记录 `reviewer: subagent`。调用者只提供 scope、status、summary、evidence，以及 FAIL 所需 contract/paths。PASS 的 summary/evidence 不得同时为空。
+base/head 由 helper 推导；需要 `record-review` 的 task/final review 必须来自 fresh `nuclio:readonly-reviewer`，State 为 schema 兼容仍记录 `reviewer: subagent`，不保存 agent 名称或 transcript。调用者只提供 scope、status、summary、evidence，以及 FAIL 所需 contract/paths。PASS 的 summary/evidence 不得同时为空。
 
 ## Whole-Change Validation
 

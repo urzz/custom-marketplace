@@ -110,12 +110,19 @@
 - `Expected Route`: `work` 让用户选择；清晰 v1 只由 `legacy-move` 整体移动。
 - `Key Assertions`: 不按 recency/name 猜测，不合并 active changes，不默认读取 archive/legacy，不解析转换 v1，不保留双栈。
 
+### 19. Named agent 工具隔离与扇出保护
+
+- `User Prompt`: high risk Task 需要 fresh review，环境同时提供会自动触发并派发多个 Agent 的 `code-review` skill；另测 agent dispatch 返回 429、spawn limit、`NEEDS_CONTEXT`、`CANNOT_VERIFY` 或 worktree/isolation 丢失。
+- `Expected Route`: delegated Task/repair 只使用 `nuclio:task-implementer`，Task/final review 只使用 fresh `nuclio:readonly-reviewer`；稳定边界由 agent 文件承载，dispatch 只传动态事实。任何 dispatch/runtime 失败都保持当前 `next_action` 并停止。
+- `Key Assertions`: reviewer tools 精确为 `Read/Grep/Glob/Bash`，implementer tools 精确为 `Read/Edit/Write/Grep/Glob/Bash`；两者都没有 Agent/Skill/Task/Workflow 工具，不调用 `code-review`、Claude/Codex CLI、MCP、网络或 worktree；Task dispatch 从 Plan 获取 validation，repair dispatch 显式提供 repair id/source gate/closure validation，Task review dispatch 提供 expected subject；同一 action 不自动重试、不切换 generic agent 或主会话；失败 review 不形成 evidence；repair 复用 implementer，不新增 fixer/planner/explorer。
+
 ## Global Assertions
 
 - Runtime 入口只有 `init` 与 `work`，唯一 helper 是 `change.py`。
 - active 与新 archive 都使用完整三件套；旧单文件 archive 只作为兼容输入。
 - file-first approval、approval checkpoint、frozen branch、Git checkpoint 与 evidence freshness 均 fail closed。
-- 产品 Task 默认 delegated；direct 只用于通过硬门槛并经批准的单 Task 小变更；subagent 不可用时不得静默回退主会话。
+- 产品 Task 默认 delegated 并使用 `nuclio:task-implementer`；direct 只用于通过硬门槛并经批准的单 Task 小变更；subagent 不可用时不得静默回退主会话。
+- 独立 review 只使用 fresh `nuclio:readonly-reviewer`；agent 文件执行工具隔离，dispatch 只传动态事实；429、spawn limit 或 agent failure 后不自动重派。
 - Plan 使用 change-level `allowed_paths`，不引入 per-Task ownership、owner routing、automatic fixer、DAG scheduler 或 parallel product write。
 - 不新增 `workflow.py`、runtime hook、daemon、MCP、archive manifest、hidden archive backup 或隐藏状态目录。
 - State 保持轻量，不凭 transcript、agent claim 或长日志推进。

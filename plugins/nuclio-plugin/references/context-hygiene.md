@@ -40,21 +40,19 @@ file-first Gate 默认输出：artifact paths、1-3 行 Spec 摘要、risk/revie
 
 ## Task Dispatch
 
-先读取 helper 的 `required_executor`。`subagent` 必须实际派发；不可用时报告 blocker，不得让主会话接管。`main` 只可能来自已批准且通过 helper 硬门槛的 `execution.mode: direct`。
+先读取 helper 的 `required_executor`。`subagent` 必须实际派发 `nuclio:task-implementer`；不可用时报告 blocker，不得让主会话或 generic subagent 接管。`main` 只可能来自已批准且通过 helper 硬门槛的 `execution.mode: direct`。
 
-subagent brief 只包含：
+implementer agent 文件已保存稳定边界；dispatch 只包含：
 
-- 当前 Task goal 与 non-goals；
-- change-level `allowed_paths` 和必要 read paths；
-- acceptance 与 validation commands；
-- `task_base`、expected checkpoint subject、frozen branch；
-- selective staging 与 one-checkpoint contract；
-- 禁止改三层 artifact、扩范围、递归委派、切换分支/worktree 和控制任务生命周期；
-- compact return schema。
+- repo root、change id、`change.md`/`plan.yaml` 路径；
+- action，以及 Task id 或 repair id/source gate；
+- helper base、expected checkpoint subject、frozen branch；
+- 必要 read paths；
+- repair finding、closure goal、允许路径与精确 closure validation commands（如适用）。
 
-返回只需 checkpoint SHA、changed paths、commands/exit codes、关键摘要、风险和 blocker。Coordinator 必须用 Git 与 helper 核验，不凭返回文本推进 State。
+agent 自行从批准 artifact 读取相关 Spec、Task 合同和 change-level `allowed_paths`，不在 prompt 复制长合同。Task validation 来自 Plan；repair closure validation 来自获批 repair dispatch。返回只需 checkpoint SHA、changed paths、commands/exit codes、关键摘要、风险和 blocker。Coordinator 必须用 Git 与 helper 核验，不凭返回文本推进 State。
 
-产品写入顺序执行。只有无写冲突的只读探索或独立 review 可并发；`final`/`task-and-final` 使用 fresh read-only subagent reviewer；不引入 DAG scheduler、parallel product write、owner routing 或 automatic fixer。
+产品写入顺序执行。`final`/`task-and-final` 使用 fresh `nuclio:readonly-reviewer`，不与其他 Nuclio agent 并发；不引入 DAG scheduler、parallel product write、owner routing 或 automatic fixer。
 
 ## Review Budget
 
@@ -68,7 +66,9 @@ Task review 聚焦 helper 固定的 `task_base..task checkpoint` 和该 Task 合
 - public API、数据、权限、并发、迁移或不可逆动作；
 - 风险上升或验证覆盖不足。
 
-review 输出保留 summary、evidence、violated contract 和 paths，不保存 reviewer transcript。
+reviewer dispatch 只传 scope、Task id/expected checkpoint subject（Task review）、artifact paths、helper base/head、changed paths、validation evidence、repair/交叉触碰热点和可复用 evidence 摘要。稳定的只读、工具、读取顺序和返回合同不重复注入 prompt。review 输出保留 summary、evidence、violated contract 和 paths，不保存 reviewer transcript。
+
+同一 `next-action` 只 dispatch 一次。429、spawn limit、agent/工具不可用、`NEEDS_CONTEXT`、`CANNOT_VERIFY` 或 worktree/isolation 丢失时停止并报告；不自动重试、不恢复失败 agent、不切换 generic agent 或主会话。失败或中断的 review 不形成 evidence。
 
 ## Recovery Budget
 

@@ -8,9 +8,9 @@
 |---|---|---|
 | `openclaw-plugin` | `/openclaw-skill-creator` | 起草和维护 OpenClaw skill |
 | `dev-stack` | `/skill-forge`、`/commit` | 创建、修改或审查 Claude Code skill；基于当前 staged diff 生成 Conventional Commit |
-| `nuclio` | `/nuclio:init`、`/nuclio:work` | Nuclio v2 4.2.1 的 `.dev-docs` 初始化与 file-first change 工作流 |
+| `nuclio` | `/nuclio:init`、`/nuclio:work` | Nuclio v2 4.2.2 的 `.dev-docs` 初始化与 file-first change 工作流 |
 
-Nuclio 的 active change 和新 archive 都完整保留 `change.md`、`plan.yaml`、`state.yaml`。Plan v2 默认把产品 Task 和 repair 委派给 subagent，只有通过 low/self/单 Task/精确文件硬门槛并经用户批准后才允许主会话直接实施；独立 review 使用 fresh read-only subagent。工作流同时包含自然语言批准、approval checkpoint、Git-bound validation/review evidence、一次选择即可写入或跳过知识并归档的收尾交互、显式 knowledge result、可恢复 archive，以及只接受已归档 successor 的 predecessor 收口。
+Nuclio 的 active change 和新 archive 都完整保留 `change.md`、`plan.yaml`、`state.yaml`。Plan v2 默认把产品 Task 和 repair 委派给 tool-scoped `nuclio:task-implementer`，只有通过 low/self/单 Task/精确文件硬门槛并经用户批准后才允许主会话直接实施；独立 review 使用没有 Agent/Skill/写工具的 fresh `nuclio:readonly-reviewer`。agent 文件承载稳定边界，dispatch 只传动态事实；429、spawn limit 或 agent failure 后不自动重派。工作流同时包含自然语言批准、approval checkpoint、Git-bound validation/review evidence、一次选择即可写入或跳过知识并归档的收尾交互、显式 knowledge result、可恢复 archive，以及只接受已归档 successor 的 predecessor 收口。
 
 ## 仓库结构
 
@@ -19,6 +19,7 @@ Nuclio 的 active change 和新 archive 都完整保留 `change.md`、`plan.yaml
 plugins/
 └── <plugin-name>/
     ├── .claude-plugin/plugin.json
+    ├── agents/*.md                  # 可选：tool-scoped agent 定义
     ├── skills/<skill-name>/SKILL.md
     ├── references/                  # 可选：插件级参考资料
     └── scripts/                     # 可选：确定性 helper 与测试

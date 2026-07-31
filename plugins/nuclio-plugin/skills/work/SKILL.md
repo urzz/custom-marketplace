@@ -25,7 +25,7 @@ disable-model-invocation: true
 5. 展示精简 file-first Gate：artifact 路径、Goal/Constraints/Non-goals/Acceptance 摘要、risk/review policy、`execution.mode`/rationale、Task 数、`allowed_paths` 和验证结果。明确归档会完整保留三个 artifact，然后等待用户自然语言批准。
 6. 仅在批准后运行 `init-state`。该命令创建 approval checkpoint，冻结 attached `git_branch`，并把 Spec、Plan、State 纳入 Git 事实。
 7. 通过 `status` 和 `next-action` 恢复。在 frozen branch 上顺序执行 Task；读取 `required_executor`，每个 Task 先 `start-task`，再由该 executor 在 `allowed_paths` 内实施、运行 Plan 中的验证、创建恰好一个 helper 派生 subject 的 checkpoint，最后用命令和 exit code 调用 `record-task`。
-8. `self` 由主会话自检；`final`/`task-and-final` 以及 Task override 必须派发 fresh read-only subagent reviewer，再用 `record-review` 写入 helper 推导的 base/head、摘要和证据。
+8. `self` 由主会话自检；`final`/`task-and-final` 以及 Task override 必须派发 fresh `nuclio:readonly-reviewer`，再用 `record-review` 写入 helper 推导的 base/head、摘要和证据。
 9. 用 `record-validation` 保存 whole-change validation 的命令、exit code、摘要和当前 HEAD。FAIL 时请求 repair decision；只有不改变批准合同的 in-scope repair 才能直接继续，否则提升 revision 并重新批准。
 10. 先报告产品结果和验证证据，再始终分析长期知识候选。无候选记录 `NO_OP` 并连续完成归档，不增加交互；有候选时展示精简 proposal，优先使用 `AskUserQuestion` 提供“写入并归档（推荐）”与“跳过并归档”单选，工具不可用时给出等价自然语言选项。不得要求固定口令；用户也可直接说明修改意见。
 11. 调用 `complete --knowledge-result <result> [--knowledge-path <path> ...]`。成功后 `state.next_action` 为 `ARCHIVE`。
@@ -45,9 +45,11 @@ disable-model-invocation: true
 
 repair checkpoint 会使相关 final review 和 whole-change validation evidence 失效。按照 `next-action` 重跑，不复用过期 PASS。review 不能替代 deterministic validation。
 
-产品 Task 默认 `execution.mode: delegated`，必须派发有界 generic subagent。只有同时满足 `risk_level: low`、`review_policy: self`、恰好一个 Task、最多三个不以 `/` 结尾的精确文件路径，并且语义上不涉及公共 API、数据模型、依赖、安全、权限、迁移、并发、外部副作用、不可逆动作或批准后探索时，才可用 `execution.mode: direct` 由主会话实施。helper 机械验证结构条件；Coordinator 必须在 rationale 和 Gate 中说明语义条件。subagent 不可用时停止并报告，不得静默回退主会话；只有合法 revision、重新验证和重新批准才能改变 execution。
+产品 Task 默认 `execution.mode: delegated`，必须派发 `nuclio:task-implementer`；获批 repair 复用同一 agent。只有同时满足 `risk_level: low`、`review_policy: self`、恰好一个 Task、最多三个不以 `/` 结尾的精确文件路径，并且语义上不涉及公共 API、数据模型、依赖、安全、权限、迁移、并发、外部副作用、不可逆动作或批准后探索时，才可用 `execution.mode: direct` 由主会话实施。helper 机械验证结构条件；Coordinator 必须在 rationale 和 Gate 中说明语义条件。subagent 不可用时停止并报告，不得静默回退主会话；只有合法 revision、重新验证和重新批准才能改变 execution。
 
-dispatch 必须提供 Task goal、non-goals、allowed paths、验证命令、task base、expected subject、frozen branch 和 compact return contract。subagent 不得修改三层 artifact、扩范围、递归委派、控制任务生命周期或创建/切换分支与 worktree；完成、阻塞、超时或需要决策时只返回 checkpoint SHA、changed paths、commands/exit codes、风险和 blocker。repair 继承 Plan execution；独立 review 始终由 fresh read-only subagent 执行。
+agent 文件保存稳定的工具、读写、Git、委派和返回边界；dispatch 只传动态事实。implementer dispatch 提供 repo root、change id、artifact paths、action、Task id 或 repair id/source gate、helper base、expected subject、frozen branch 和必要 read paths；repair 还提供获批 finding、closure goal、允许路径和精确 closure validation commands。agent 从批准 artifact 读取 Goal、Constraints、Non-goals、Acceptance、`allowed_paths` 与相关 Task 合同；Task validation 来自 Plan，repair closure validation 来自 dispatch。reviewer dispatch 提供 scope、Task id/expected subject（Task review）、artifact paths、helper base/head、changed paths、validation evidence、repair/交叉触碰热点和可复用的未漂移 evidence。
+
+同一 `next-action` 只允许一次 agent dispatch。429、spawn limit、agent/工具不可用、`NEEDS_CONTEXT`、`CANNOT_VERIFY` 或隔离环境丢失时停止并报告，不自动重试、不恢复失败 agent、不改由 generic subagent 或主会话替代。只有后续用户请求或新会话才能按 State 对同一 action 派发一个 fresh agent。独立 reviewer 不调用任何 Skill、`code-review`、Agent、Task、Workflow 或 worktree；失败或中断结果不得写为 review evidence。
 
 ## Finish And Archive
 
@@ -71,7 +73,7 @@ successor 必须已归档、Git tracked/clean、状态完成，且 `change.md.re
 ## Hard Boundaries
 
 - `change.py` 是唯一 runtime helper 和唯一 State writer；不得增加 `workflow.py`、第二套状态服务或隐藏状态目录。
-- 不增加 `DAG scheduler`、`parallel product write`、per-Task ownership、`owner routing`、`automatic fixer`、repair loop 或固定 implementer/reviewer/fixer pipeline。
+- 不增加 `DAG scheduler`、`parallel product write`、per-Task ownership、`owner routing`、`automatic fixer`、repair loop 或固定 implementer/reviewer/fixer pipeline。两个 named agent 只是 tool-scoped capability profile，不增加额外阶段；repair 复用 implementer，Task/final review 复用 reviewer。
 - 不增加 runtime hook、daemon、MCP、network service、persistent process JSON、`changes/index.md`、`archive manifest`、`hidden archive backup` 或 v1/v2 双栈。
 - Coordinator 与 subagent 不创建、切换或重命名分支，不创建 worktree，不自动 squash/reset/rebase/stash，不 push 或改写历史。
 - State 不保存完整 diff、日志、transcript、agent messages、文件 snapshot 或完整 transition history。

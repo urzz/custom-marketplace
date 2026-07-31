@@ -14,6 +14,8 @@ CHANGE = PLUGIN / "scripts" / "change.py"
 BEHAVIOR_TESTS = PLUGIN / "scripts" / "test_change.py"
 WORK = PLUGIN / "skills" / "work" / "SKILL.md"
 INIT = PLUGIN / "skills" / "init" / "SKILL.md"
+IMPLEMENTER = PLUGIN / "agents" / "task-implementer.md"
+REVIEWER = PLUGIN / "agents" / "readonly-reviewer.md"
 REFERENCES = PLUGIN / "references"
 RUNTIME_DOCS = [
     WORK,
@@ -218,10 +220,79 @@ class MarkdownContractTests(unittest.TestCase):
         ):
             self.assertIn(forbidden, combined)
 
-    def test_eval_prompts_keep_eighteen_named_cases(self):
+    def test_eval_prompts_keep_nineteen_named_cases(self):
         text = read(REFERENCES / "eval-prompts.md")
         cases = re.findall(r"^###\s+(\d+)\.\s+", text, flags=re.M)
-        self.assertEqual(cases, [str(index) for index in range(1, 19)])
+        self.assertEqual(cases, [str(index) for index in range(1, 20)])
+
+
+class AgentContractTests(unittest.TestCase):
+    def test_named_agents_have_exact_tool_allowlists(self):
+        implementer_frontmatter = read(IMPLEMENTER).split("---\n", 2)[1]
+        reviewer_frontmatter = read(REVIEWER).split("---\n", 2)[1]
+        implementer_tools = re.search(r"^tools:\s*(.+)$", implementer_frontmatter, flags=re.M)
+        reviewer_tools = re.search(r"^tools:\s*(.+)$", reviewer_frontmatter, flags=re.M)
+        self.assertIsNotNone(implementer_tools)
+        self.assertIsNotNone(reviewer_tools)
+        self.assertIn("name: task-implementer", implementer_frontmatter)
+        self.assertIn("name: readonly-reviewer", reviewer_frontmatter)
+        self.assertEqual(
+            [item.strip() for item in implementer_tools.group(1).split(",")],
+            ["Read", "Edit", "Write", "Grep", "Glob", "Bash"],
+        )
+        self.assertEqual(
+            [item.strip() for item in reviewer_tools.group(1).split(",")],
+            ["Read", "Grep", "Glob", "Bash"],
+        )
+
+    def test_named_agents_block_recursive_composition_and_worktrees(self):
+        for source in (read(IMPLEMENTER), read(REVIEWER)):
+            for required in (
+                "不调用 Agent、Skill、Workflow、Task",
+                "`/code-review`",
+                "Claude/Codex CLI",
+                "MCP",
+                "worktree",
+            ):
+                self.assertIn(required, source)
+        self.assertIn("创建恰好一个", read(IMPLEMENTER))
+        self.assertIn("不调用 `change.py`", read(IMPLEMENTER))
+        self.assertIn("不得修改产品、Git 或 Nuclio State", read(REVIEWER))
+
+    def test_named_agents_constrain_bash_usage(self):
+        implementer = read(IMPLEMENTER)
+        reviewer = read(REVIEWER)
+        self.assertIn("## Bash Allowlist", implementer)
+        self.assertIn("git add -- <exact approved paths>", implementer)
+        self.assertIn("git commit -m <expected subject>", implementer)
+        self.assertIn("rm -- <exact approved file paths>", implementer)
+        self.assertIn("不使用递归选项、目录目标或 glob", implementer)
+        self.assertIn("## Bash Allowlist", reviewer)
+        self.assertIn("Bash 只允许", reviewer)
+        self.assertIn("不使用 shell 重定向、管道、命令替换", reviewer)
+
+    def test_named_agent_dispatch_distinguishes_task_and_repair(self):
+        implementer = read(IMPLEMENTER)
+        reviewer = read(REVIEWER)
+        self.assertIn("`TASK` 提供 Task id，`REPAIR` 提供 repair id 与 source gate", implementer)
+        self.assertIn("精确 closure validation commands", implementer)
+        self.assertIn("`TASK` 的 validation commands 以 Plan 为准", implementer)
+        self.assertIn("Task id 与 helper 派生的 expected checkpoint subject", reviewer)
+
+    def test_work_routes_only_to_named_agents_with_single_attempt(self):
+        work = read(WORK)
+        workflow = read(REFERENCES / "workflow.md")
+        context = read(REFERENCES / "context-hygiene.md")
+        combined = "\n".join((work, workflow, context))
+        for required in (
+            "nuclio:task-implementer",
+            "nuclio:readonly-reviewer",
+            "只允许一次 agent dispatch",
+            "不自动重试",
+            "不改由 generic subagent",
+            "失败或中断的 review",
+        ):
+            self.assertIn(required, combined)
 
 
 class PackageSyncTests(unittest.TestCase):
@@ -230,10 +301,10 @@ class PackageSyncTests(unittest.TestCase):
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
         self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "4.2.1")
+        self.assertEqual(plugin["version"], "4.2.2")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         for text in (plugin["description"], entry["description"], read(ROOT / "README.md"), read(ROOT / "CLAUDE.md")):
-            self.assertIn("4.2.1", text)
+            self.assertIn("4.2.2", text)
             self.assertIn("plan.yaml", text)
             self.assertIn("state.yaml", text)
 
