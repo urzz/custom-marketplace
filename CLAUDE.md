@@ -53,7 +53,7 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 修改 `/commit` 时同步 `plugins/dev-stack/skills/commit/SKILL.md`、其一层 `references/`、插件 metadata、Marketplace、README 和本文件。
 
-## Nuclio v2 4.2.2 约束
+## Nuclio v2 4.2.3 约束
 
 Nuclio 当前权威文件：
 
@@ -70,7 +70,7 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 - active change 使用 `change.md` Spec、Plan schema v2 批准合同和轻量 `state.yaml` 恢复状态。`change.py` 是唯一 runtime helper 和 State writer，运行时只依赖 PyYAML。
 - 产品 mutation 前必须通过 file-first Spec/Plan 验证和自然语言批准；`init-state` 创建 approval checkpoint 并冻结 `state.git_branch`。
 - 每个 implementation Task 与获批 in-scope repair 只有一个 selective-stage checkpoint。Task、review 和 whole-change validation evidence 必须绑定 helper 推导的 Git identity；repair 后过期 evidence 必须失效。
-- 产品 Task 和 repair 默认 `execution.mode: delegated` 并使用 tool-scoped `nuclio:task-implementer`；只有 low/self/单 Task/最多三个精确文件且无高后果语义的变更可经批准使用 `direct`。final/task-and-final review 使用 fresh `nuclio:readonly-reviewer`。两者都禁止 Agent/Skill/Task/Workflow、`code-review`、MCP、网络和 worktree；同一 action 的 429、spawn limit 或 agent failure 不自动重派，也不回退 generic agent 或主会话。
+- 产品 Task 和 repair 默认 `execution.mode: delegated` 并使用 tool-scoped `nuclio:task-implementer`；只有 low/self/单 Task/最多三个精确文件且无高后果语义的变更可经批准使用 `direct`。checkpoint 前的 validation FAIL 在当前 Task 内继续修正；只有合规 HANDOFF 可经 helper/Git 核验后由一个 fresh implementer 串行接管一次。final/task-and-final review 使用 fresh `nuclio:readonly-reviewer`。两者都禁止 Agent/Skill/Task/Workflow、`code-review`、MCP、网络和 worktree；429、spawn limit 或其他 agent failure 不自动重派，也不回退 generic agent 或主会话。
 - Plan 只使用 change-level `allowed_paths`，不增加 per-Task ownership、owner routing、automatic fixer 或第二状态协议。
 - State 不保存完整 diff、日志、transcript、agent message、文件 snapshot 或完整 transition history。
 - finish 先报告产品结果，再分析长期知识；无候选直接 `NO_OP` 并归档，有候选只询问一次“写入并归档/跳过并归档”，不得要求固定口令或再次确认归档。`complete` 必须记录 `knowledge.result` 与精确 paths。完成文档保留批准 Spec，并追加非空 `Outcome`、`Validation`、`Knowledge Updates`、`Residual Risks`。

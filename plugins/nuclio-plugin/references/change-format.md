@@ -252,6 +252,8 @@ state(<change-id>): initialize approved change state
 
 Task 开始后 State 保存 `task_base`、从 Plan 派生的 `executor` 和 helper 派生 subject。调用方不能覆盖 executor。`record-task` 的 validation evidence 形态：
 
+Task/repair 处于 `IN_PROGRESS/HALT` 时，`next-action` 会从 State、Plan、Git 和 working tree 派生 in-progress action、base、当前 HEAD、expected subject、required executor、index 状态与 `dirty_allowed_paths`，用于核验一次 fresh HANDOFF continuation。agent 的 `HANDOFF`/`NEEDS_CONTEXT` 文本不是 State authority；写后错误状态只有满足 workflow 的 identity/index/path 条件才能被规范化。它不向 State 增加 attempt、agent message、diff snapshot 或 handoff ledger；最终 evidence 仍只接受原动作的一个 checkpoint。
+
 ```yaml
 validation:
   status: PASS

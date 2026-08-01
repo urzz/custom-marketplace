@@ -545,6 +545,80 @@ class ChangeHelperTests(unittest.TestCase):
         self.assertEqual(stdout_json(start)["required_executor"], "subagent")
         self.assertEqual(self.state()["tasks"][0]["executor"], "subagent")
 
+    def test_next_action_exposes_verified_task_handoff_facts(self):
+        self.prepare_change()
+        start = run_change(self.root, "start-task", "--id", "alpha-change", "--task-id", "1")
+        start_payload = stdout_json(start)
+        source = self.root / "src"
+        source.mkdir()
+        (source / "handoff.txt").write_text("unfinished\n", encoding="utf-8")
+
+        result = run_change(self.root, "next-action", "--id", "alpha-change")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = stdout_json(result)
+        self.assertEqual(payload["next_action"], "HALT")
+        self.assertEqual(payload["in_progress_action"], "TASK")
+        self.assertEqual(payload["task_id"], 1)
+        self.assertEqual(payload["base"], start_payload["task_base"])
+        self.assertEqual(payload["head"], start_payload["task_base"])
+        self.assertEqual(payload["checkpoint_subject"], self.task_subject())
+        self.assertEqual(payload["required_executor"], "subagent")
+        self.assertTrue(payload["index_clean"])
+        self.assertEqual(payload["dirty_allowed_paths"], ["src/handoff.txt"])
+
+    def test_next_action_exposes_verified_repair_handoff_facts(self):
+        self.prepare_change()
+        self.implement_task()
+        run_change(
+            self.root,
+            "record-review",
+            "--id",
+            "alpha-change",
+            "--scope",
+            "final",
+            "--status",
+            "FAIL",
+            "--summary",
+            "review failed",
+            "--contract",
+            "Acceptance Criteria",
+            "--path",
+            "src/alpha-change-task-1.txt",
+            "--evidence",
+            "missing behavior",
+        )
+        start = run_change(
+            self.root,
+            "start-repair",
+            "--id",
+            "alpha-change",
+            "--source-gate",
+            "RUN_FINAL_REVIEW",
+            "--path",
+            "src/alpha-change-task-1.txt",
+            "--decision",
+            "repair the reviewed defect",
+            "--evidence",
+            "missing behavior",
+            "--contract-unchanged",
+        )
+        start_payload = stdout_json(start)
+        (self.root / "src" / "alpha-change-task-1.txt").write_text("unfinished repair\n", encoding="utf-8")
+
+        result = run_change(self.root, "next-action", "--id", "alpha-change")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = stdout_json(result)
+        self.assertEqual(payload["next_action"], "HALT")
+        self.assertEqual(payload["in_progress_action"], "REPAIR")
+        self.assertEqual(payload["repair_id"], start_payload["repair_id"])
+        self.assertEqual(payload["source_gate"], "RUN_FINAL_REVIEW")
+        self.assertEqual(payload["base"], start_payload["repair_base"])
+        self.assertEqual(payload["head"], start_payload["repair_base"])
+        self.assertEqual(payload["checkpoint_subject"], start_payload["checkpoint_subject"])
+        self.assertEqual(payload["required_executor"], "subagent")
+        self.assertTrue(payload["index_clean"])
+        self.assertEqual(payload["dirty_allowed_paths"], ["src/alpha-change-task-1.txt"])
+
     def test_direct_plan_records_main_executor_only_after_hard_gate(self):
         self.prepare_change(review="self", risk="low", execution_mode="direct", allowed_paths=["src/alpha-change-task-1.txt"])
         next_action = run_change(self.root, "next-action", "--id", "alpha-change")

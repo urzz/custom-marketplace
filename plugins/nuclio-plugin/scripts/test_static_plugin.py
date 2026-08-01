@@ -142,6 +142,7 @@ class RuntimeHelperTests(unittest.TestCase):
             "rejects_active_successor",
             "direct_execution_requires",
             "derive_required_executor",
+            "verified_task_handoff_facts",
             "v1_plan_defaults_pending_task_to_subagent",
         ):
             self.assertTrue(any(behavior in test for test in tests), behavior)
@@ -220,10 +221,10 @@ class MarkdownContractTests(unittest.TestCase):
         ):
             self.assertIn(forbidden, combined)
 
-    def test_eval_prompts_keep_nineteen_named_cases(self):
+    def test_eval_prompts_keep_twenty_named_cases(self):
         text = read(REFERENCES / "eval-prompts.md")
         cases = re.findall(r"^###\s+(\d+)\.\s+", text, flags=re.M)
-        self.assertEqual(cases, [str(index) for index in range(1, 20)])
+        self.assertEqual(cases, [str(index) for index in range(1, 21)])
 
 
 class AgentContractTests(unittest.TestCase):
@@ -279,7 +280,17 @@ class AgentContractTests(unittest.TestCase):
         self.assertIn("`TASK` 的 validation commands 以 Plan 为准", implementer)
         self.assertIn("Task id 与 helper 派生的 expected checkpoint subject", reviewer)
 
-    def test_work_routes_only_to_named_agents_with_single_attempt(self):
+    def test_implementer_supports_only_verified_bounded_handoff(self):
+        implementer = read(IMPLEMENTER)
+        self.assertIn("DONE | HANDOFF | BLOCKED | NEEDS_CONTEXT", implementer)
+        self.assertIn("`NEEDS_CONTEXT` 只能在首次产品写入前返回", implementer)
+        self.assertIn("validation FAIL 是当前实施动作的反馈", implementer)
+        self.assertIn("HEAD 等于 base", implementer)
+        self.assertIn("index 为空", implementer)
+        self.assertIn("continuation: HANDOFF", implementer)
+        self.assertIn("dirty_allowed_paths", implementer)
+
+    def test_work_routes_only_to_named_agents_with_bounded_handoff(self):
         work = read(WORK)
         workflow = read(REFERENCES / "workflow.md")
         context = read(REFERENCES / "context-hygiene.md")
@@ -290,6 +301,12 @@ class AgentContractTests(unittest.TestCase):
             "只允许一次 agent dispatch",
             "不自动重试",
             "不改由 generic subagent",
+            "一次 fresh `nuclio:task-implementer`",
+            "不再次调用 `start-task`/`start-repair`",
+            "不要求用户重复批准",
+            "错误返回 `NEEDS_CONTEXT`",
+            "agent 状态文本不能覆盖 Git 事实",
+            "再次未完成",
             "失败或中断的 review",
         ):
             self.assertIn(required, combined)
@@ -301,10 +318,10 @@ class PackageSyncTests(unittest.TestCase):
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
         self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "4.2.2")
+        self.assertEqual(plugin["version"], "4.2.3")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         for text in (plugin["description"], entry["description"], read(ROOT / "README.md"), read(ROOT / "CLAUDE.md")):
-            self.assertIn("4.2.2", text)
+            self.assertIn("4.2.3", text)
             self.assertIn("plan.yaml", text)
             self.assertIn("state.yaml", text)
 

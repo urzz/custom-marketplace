@@ -1,6 +1,6 @@
 # Nuclio v2 Workflow
 
-Nuclio v2 4.2.2 是 file-first、Git-backed 的三层 change 工作流。`change.md` 保存用户意图和完成叙述，`plan.yaml` 保存批准合同与执行策略，`state.yaml` 保存当前恢复 cursor 与紧凑证据。主会话是唯一 Coordinator，`change.py` 是唯一 State writer。
+Nuclio v2 4.2.3 是 file-first、Git-backed 的三层 change 工作流。`change.md` 保存用户意图和完成叙述，`plan.yaml` 保存批准合同与执行策略，`state.yaml` 保存当前恢复 cursor 与紧凑证据。主会话是唯一 Coordinator，`change.py` 是唯一 State writer。
 
 本文件是生命周期、状态迁移、repair、finish、archive 和 supersede 的权威；精确 schema 见 `change-format.md`。
 
@@ -46,6 +46,8 @@ python3 plugins/nuclio-plugin/scripts/change.py --project-root <repo> next-actio
 
 随后核对 attached branch、HEAD、index、working tree、Plan/Spec identity 和 helper 返回的最小动作。`BRANCH_DRIFT`、`DETACHED_HEAD`、hash/revision drift 或不合法 checkpoint 都必须停止并请求人工判断。
 
+若恢复到 `TASK_IN_PROGRESS`/`REPAIR_IN_PROGRESS` 与 `HALT`，`next-action` 会附带 in-progress action、base、HEAD、expected subject、required executor、index 状态和 `dirty_allowed_paths`。只有这些事实满足下文 HANDOFF 合同时，Coordinator 才能在当前用户请求内执行一次 fresh 串行 continuation；否则保持 HALT 并报告冲突，不能把未知 dirty work 自动归属给新 agent。
+
 ## File-First Gate
 
 产品 mutation 与 `init-state` 前必须把完整 Spec/Plan 写到文件并通过 `validate-plan`。终端默认只展示：
@@ -87,7 +89,7 @@ Task 按 Plan 顺序执行：
 
 1. `next-action` 返回 `required_executor`；`start-task --id <id> --task-id <n>` 从批准 Plan 派生同一 executor、冻结 `task_base`，并返回 helper 派生的 `checkpoint_subject`。
 2. `delegated` 必须派发 `nuclio:task-implementer`；`direct` 才由主会话实施。两者都只在 change-level `allowed_paths` 内写入并保持 index 可控。
-3. 精确执行 Task `validation` 中的全部命令并保存 exit code 与短摘要。
+3. 精确执行 Task `validation` 中的全部命令并保存 exit code 与短摘要。checkpoint 前的 validation FAIL 属于当前 Task 实施反馈，executor 必须在批准范围内继续诊断、修正和重跑；它不是 review/whole-change validation 后的 repair gate。
 4. selective stage Task 路径并创建恰好一个 checkpoint commit。
 5. `record-task` 传入每个 validation command/exit code。helper 验证直接 parent、subject、非空 changed paths、allowed-path 边界、空 index和 branch identity，再自动绑定 checkpoint SHA。
 
@@ -109,7 +111,11 @@ Task review 的 range 由 helper 固定为 `task_base..task checkpoint`；final 
 
 `record-validation` 至少包含一个非空 command 及对应 exit code，绑定当前 HEAD。PASS 要求所有 exit code 为 `0`；FAIL 记录失败命令、非零 code、摘要和必要路径/证据。review PASS 不能覆盖 validation FAIL。
 
-每个 helper `next_action` 只允许一次 agent dispatch attempt。遇到 429、spawn limit、agent 或必要工具不可用、`NEEDS_CONTEXT`、`CANNOT_VERIFY`、中断或 isolation/worktree 丢失时，保持 State 当前 action 并报告 blocker；不得在当前 action 自动重试、恢复失败 agent、切换 generic subagent 或让主会话替代。后续用户请求或新会话可根据未推进的 State 派发一个 fresh named agent。失败或中断的 reviewer 输出不得写入 evidence。
+每个 helper `next_action` 默认只允许一次 agent dispatch attempt。遇到 429、spawn limit、agent 或必要工具不可用、pre-write `NEEDS_CONTEXT`、`CANNOT_VERIFY`、`BLOCKED` 或 isolation/worktree 丢失时，保持 State 当前 action 并报告 blocker；不得自动重试、恢复失败 agent、切换 generic subagent 或让主会话替代。失败或中断的 reviewer 输出不得写入 evidence。
+
+可核验的未完成 implementer 动作是唯一例外，并且不是失败重试。正常 agent 应返回 `HANDOFF`；若它已经产生产品写入，却因 Task-local validation FAIL、上下文耗尽而错误返回 `NEEDS_CONTEXT` 或直接中断，Coordinator 不能让该 claim 覆盖 State/Git 产品事实，可以在下列机械条件全部成立时把结果规范化为 HANDOFF：存在非空 in-scope diff、HEAD 仍等于 helper base、index 为空、尚无 checkpoint、同一 action 仍为 `IN_PROGRESS/HALT`，且没有 scope expansion 或用户决策。429、spawn/tool/isolation 故障和真正的 `BLOCKED` 不适用此兼容恢复。
+
+Coordinator 重新运行 `next-action` 取得 `in_progress_action`、base、HEAD、expected subject、required executor、index 状态和 `dirty_allowed_paths`；全部一致后，可在同一用户请求内派发一次 fresh `nuclio:task-implementer` 串行接管。continuation 使用相同 `TASK`/`REPAIR` action，并额外携带 `continuation: HANDOFF`、已核验 dirty paths、前次 validation commands/exit codes/摘要和剩余工作；不得再次调用 `start-task`/`start-repair`，不得并发，不要求用户重复批准，最终仍只创建原动作的一个 checkpoint。continuation 再次未完成、没有可验证进展或核验不通过时停止。
 
 ## In-Scope Repair
 

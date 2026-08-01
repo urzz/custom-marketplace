@@ -950,7 +950,7 @@ def require_clean_index(paths: Paths) -> None:
 
 
 def porcelain_paths(paths: Paths) -> list[tuple[str, str]]:
-    result = git(paths, "status", "--porcelain=v1", "-z")
+    result = git(paths, "status", "--porcelain=v1", "-z", "--untracked-files=all")
     fields = [field for field in result.stdout.split("\0") if field]
     parsed: list[tuple[str, str]] = []
     index = 0
@@ -1399,6 +1399,45 @@ def cmd_next_action(args: argparse.Namespace, paths: Paths) -> int:
             )
     elif state["next_action"] in {NEXT_RUN_TASK_REVIEW, NEXT_RUN_FINAL_REVIEW}:
         payload["required_executor"] = "subagent"
+    elif state["next_action"] == NEXT_HALT:
+        dirty_allowed_paths = sorted(
+            {
+                name
+                for _status, name in porcelain_paths(paths)
+                if path_is_allowed(name, plan["allowed_paths"])
+            }
+        )
+        payload.update(
+            {
+                "head": git_head(paths),
+                "index_clean": index_is_clean(paths),
+                "dirty_allowed_paths": dirty_allowed_paths,
+            }
+        )
+        if state.get("phase") == "TASK_IN_PROGRESS" and isinstance(state.get("current_task_id"), int):
+            task = plan_task(plan, state["current_task_id"])
+            entry = state_task(state, state["current_task_id"])
+            payload.update(
+                {
+                    "in_progress_action": "TASK",
+                    "task_id": state["current_task_id"],
+                    "base": entry["task_base"],
+                    "checkpoint_subject": task["checkpoint_subject"],
+                    "required_executor": entry["executor"],
+                }
+            )
+        elif state.get("phase") == "REPAIR_IN_PROGRESS" and isinstance(state.get("repair"), dict):
+            repair = state["repair"]
+            payload.update(
+                {
+                    "in_progress_action": "REPAIR",
+                    "repair_id": repair["id"],
+                    "source_gate": repair["source_gate"],
+                    "base": repair["repair_base"],
+                    "checkpoint_subject": repair["checkpoint_subject"],
+                    "required_executor": repair["executor"],
+                }
+            )
     return emit_ok(payload)
 
 

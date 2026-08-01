@@ -116,13 +116,19 @@
 - `Expected Route`: delegated Task/repair 只使用 `nuclio:task-implementer`，Task/final review 只使用 fresh `nuclio:readonly-reviewer`；稳定边界由 agent 文件承载，dispatch 只传动态事实。任何 dispatch/runtime 失败都保持当前 `next_action` 并停止。
 - `Key Assertions`: reviewer tools 精确为 `Read/Grep/Glob/Bash`，implementer tools 精确为 `Read/Edit/Write/Grep/Glob/Bash`；两者都没有 Agent/Skill/Task/Workflow 工具，不调用 `code-review`、Claude/Codex CLI、MCP、网络或 worktree；Task dispatch 从 Plan 获取 validation，repair dispatch 显式提供 repair id/source gate/closure validation，Task review dispatch 提供 expected subject；同一 action 不自动重试、不切换 generic agent 或主会话；失败 review 不形成 evidence；repair 复用 implementer，不新增 fixer/planner/explorer。
 
+### 20. Task 内校验修正与串行 HANDOFF
+
+- `User Prompt`: Task 1 implementer 已修改批准路径，Plan validation 因测试 mock/binding 缺失失败，尚未创建 checkpoint；另测 agent 上下文预算即将耗尽并错误返回 `NEEDS_CONTEXT` 或直接中断。
+- `Expected Route`: checkpoint 前的 validation FAIL 由当前 implementer 在同一 Task 内诊断、修正和重跑，不进入 repair gate，也不应返回 `NEEDS_CONTEXT`。合规 agent 在已有非空 in-scope diff、base/HEAD 未漂移、index 为空且无用户决策时返回 `HANDOFF`；如果它写后错误返回 `NEEDS_CONTEXT` 或中断，Coordinator 不信任 agent 状态文本，而是重新运行 `next-action` 核验 handoff facts，满足同样条件后规范化为 HANDOFF，并在同一用户请求内派发一次 fresh `nuclio:task-implementer` 串行接管。
+- `Key Assertions`: continuation dispatch 显式携带 `continuation: HANDOFF`、dirty paths、前次 validation 证据与剩余工作；fresh implementer 可接管这些声明且已核验的同一动作 dirty paths；不重复 `start-task`/`start-repair`，不要求用户再次批准，不恢复原 agent，不回退 generic agent 或主会话，最终仍只有一个 checkpoint；continuation 再次未完成、没有进展或 identity/index/path 核验失败时停止；429、spawn/tool/isolation 故障和真正的 `BLOCKED` 仍 fail closed。
+
 ## Global Assertions
 
 - Runtime 入口只有 `init` 与 `work`，唯一 helper 是 `change.py`。
 - active 与新 archive 都使用完整三件套；旧单文件 archive 只作为兼容输入。
 - file-first approval、approval checkpoint、frozen branch、Git checkpoint 与 evidence freshness 均 fail closed。
 - 产品 Task 默认 delegated 并使用 `nuclio:task-implementer`；direct 只用于通过硬门槛并经批准的单 Task 小变更；subagent 不可用时不得静默回退主会话。
-- 独立 review 只使用 fresh `nuclio:readonly-reviewer`；agent 文件执行工具隔离，dispatch 只传动态事实；429、spawn limit 或 agent failure 后不自动重派。
+- 独立 review 只使用 fresh `nuclio:readonly-reviewer`；agent 文件执行工具隔离，dispatch 只传动态事实；429、spawn limit 或 agent failure 后不自动重派。合规 implementer `HANDOFF` 只允许一次经 helper/Git 核验的 fresh 串行 continuation，不属于失败重试。
 - Plan 使用 change-level `allowed_paths`，不引入 per-Task ownership、owner routing、automatic fixer、DAG scheduler 或 parallel product write。
 - 不新增 `workflow.py`、runtime hook、daemon、MCP、archive manifest、hidden archive backup 或隐藏状态目录。
 - State 保持轻量，不凭 transcript、agent claim 或长日志推进。

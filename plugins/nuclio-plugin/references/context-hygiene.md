@@ -49,8 +49,9 @@ implementer agent 文件已保存稳定边界；dispatch 只包含：
 - helper base、expected checkpoint subject、frozen branch；
 - 必要 read paths；
 - repair finding、closure goal、允许路径与精确 closure validation commands（如适用）。
+- 合规 HANDOFF continuation 的 helper facts、dirty paths、前次 validation 短证据与剩余工作（如适用）。
 
-agent 自行从批准 artifact 读取相关 Spec、Task 合同和 change-level `allowed_paths`，不在 prompt 复制长合同。Task validation 来自 Plan；repair closure validation 来自获批 repair dispatch。返回只需 checkpoint SHA、changed paths、commands/exit codes、关键摘要、风险和 blocker。Coordinator 必须用 Git 与 helper 核验，不凭返回文本推进 State。
+agent 自行从批准 artifact 读取相关 Spec、Task 合同和 change-level `allowed_paths`，不在 prompt 复制长合同。Task validation 来自 Plan；repair closure validation 来自获批 repair dispatch。checkpoint 前的 validation FAIL 由当前 implementer 在批准范围内继续修正，不升级为 repair。返回只需 checkpoint SHA、changed paths、commands/exit codes、关键摘要、风险、剩余工作和 blocker。Coordinator 必须用 Git 与 helper 核验，不凭返回文本推进 State。
 
 产品写入顺序执行。`final`/`task-and-final` 使用 fresh `nuclio:readonly-reviewer`，不与其他 Nuclio agent 并发；不引入 DAG scheduler、parallel product write、owner routing 或 automatic fixer。
 
@@ -68,7 +69,7 @@ Task review 聚焦 helper 固定的 `task_base..task checkpoint` 和该 Task 合
 
 reviewer dispatch 只传 scope、Task id/expected checkpoint subject（Task review）、artifact paths、helper base/head、changed paths、validation evidence、repair/交叉触碰热点和可复用 evidence 摘要。稳定的只读、工具、读取顺序和返回合同不重复注入 prompt。review 输出保留 summary、evidence、violated contract 和 paths，不保存 reviewer transcript。
 
-同一 `next-action` 只 dispatch 一次。429、spawn limit、agent/工具不可用、`NEEDS_CONTEXT`、`CANNOT_VERIFY` 或 worktree/isolation 丢失时停止并报告；不自动重试、不恢复失败 agent、不切换 generic agent 或主会话。失败或中断的 review 不形成 evidence。
+同一 `next-action` 默认只 dispatch 一次。429、spawn limit、agent/工具不可用、pre-write `NEEDS_CONTEXT`、`CANNOT_VERIFY`、`BLOCKED` 或 worktree/isolation 丢失时停止并报告；不自动重试、不恢复失败 agent、不切换 generic agent 或主会话。唯一例外是有非空 in-scope diff、base/HEAD 未漂移、index 为空且没有决策需求的未完成 implementer 动作；正常 `HANDOFF`，以及写后因 Task-local validation FAIL/上下文耗尽错误返回 `NEEDS_CONTEXT` 或中断，都可由 Coordinator 用 `next-action` 与 Git 核验并规范化。随后可在当前用户请求内派发一次 fresh named implementer 串行 continuation，接管声明的 dirty paths，不重复 `start-task`/`start-repair`，不要求用户再次批准；continuation 再次未完成或无进展时停止。失败或中断的 review 不形成 evidence。
 
 ## Recovery Budget
 
@@ -79,7 +80,7 @@ reviewer dispatch 只传 scope、Task id/expected checkpoint subject（Task revi
 3. index 与 `allowed_paths` 工作树是否满足当前动作前置条件？
 4. helper 的 `next_action` 是什么？
 
-只有答案指向 drift 或中断时，才扩展读取 commit parent/subject/path range、archived State 或完整 diff。不要回放聊天记录来重建 State。
+`TASK_IN_PROGRESS`/`REPAIR_IN_PROGRESS` 与 `HALT` 同时出现时，优先读取 `next-action` 返回的 `in_progress_action`、base、HEAD、subject、executor、index 和 `dirty_allowed_paths`。这些事实满足 HANDOFF 条件时按一次串行 continuation 处理；不满足时停止并报告精确冲突。只有答案指向 drift 或中断时，才扩展读取 commit parent/subject/path range、archived State 或完整 diff。不要回放聊天记录来重建 State。
 
 ## User-Facing Results
 

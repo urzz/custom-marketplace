@@ -24,7 +24,7 @@ disable-model-invocation: true
 4. 运行 `validate-plan --id <change-id>`。它同时验证 Spec、Plan 和跨文件 identity。
 5. 展示精简 file-first Gate：artifact 路径、Goal/Constraints/Non-goals/Acceptance 摘要、risk/review policy、`execution.mode`/rationale、Task 数、`allowed_paths` 和验证结果。明确归档会完整保留三个 artifact，然后等待用户自然语言批准。
 6. 仅在批准后运行 `init-state`。该命令创建 approval checkpoint，冻结 attached `git_branch`，并把 Spec、Plan、State 纳入 Git 事实。
-7. 通过 `status` 和 `next-action` 恢复。在 frozen branch 上顺序执行 Task；读取 `required_executor`，每个 Task 先 `start-task`，再由该 executor 在 `allowed_paths` 内实施、运行 Plan 中的验证、创建恰好一个 helper 派生 subject 的 checkpoint，最后用命令和 exit code 调用 `record-task`。
+7. 通过 `status` 和 `next-action` 恢复。在 frozen branch 上顺序执行 Task；读取 `required_executor`，每个 Task 先 `start-task`，再由该 executor 在 `allowed_paths` 内实施并把 checkpoint 前的 validation FAIL 作为当前 Task 反馈继续修正，全部通过后创建恰好一个 helper 派生 subject 的 checkpoint，最后用命令和 exit code 调用 `record-task`。
 8. `self` 由主会话自检；`final`/`task-and-final` 以及 Task override 必须派发 fresh `nuclio:readonly-reviewer`，再用 `record-review` 写入 helper 推导的 base/head、摘要和证据。
 9. 用 `record-validation` 保存 whole-change validation 的命令、exit code、摘要和当前 HEAD。FAIL 时请求 repair decision；只有不改变批准合同的 in-scope repair 才能直接继续，否则提升 revision 并重新批准。
 10. 先报告产品结果和验证证据，再始终分析长期知识候选。无候选记录 `NO_OP` 并连续完成归档，不增加交互；有候选时展示精简 proposal，优先使用 `AskUserQuestion` 提供“写入并归档（推荐）”与“跳过并归档”单选，工具不可用时给出等价自然语言选项。不得要求固定口令；用户也可直接说明修改意见。
@@ -49,7 +49,7 @@ repair checkpoint 会使相关 final review 和 whole-change validation evidence
 
 agent 文件保存稳定的工具、读写、Git、委派和返回边界；dispatch 只传动态事实。implementer dispatch 提供 repo root、change id、artifact paths、action、Task id 或 repair id/source gate、helper base、expected subject、frozen branch 和必要 read paths；repair 还提供获批 finding、closure goal、允许路径和精确 closure validation commands。agent 从批准 artifact 读取 Goal、Constraints、Non-goals、Acceptance、`allowed_paths` 与相关 Task 合同；Task validation 来自 Plan，repair closure validation 来自 dispatch。reviewer dispatch 提供 scope、Task id/expected subject（Task review）、artifact paths、helper base/head、changed paths、validation evidence、repair/交叉触碰热点和可复用的未漂移 evidence。
 
-同一 `next-action` 只允许一次 agent dispatch。429、spawn limit、agent/工具不可用、`NEEDS_CONTEXT`、`CANNOT_VERIFY` 或隔离环境丢失时停止并报告，不自动重试、不恢复失败 agent、不改由 generic subagent 或主会话替代。只有后续用户请求或新会话才能按 State 对同一 action 派发一个 fresh agent。独立 reviewer 不调用任何 Skill、`code-review`、Agent、Task、Workflow 或 worktree；失败或中断结果不得写为 review evidence。
+同一 `next-action` 默认只允许一次 agent dispatch。429、spawn limit、agent/工具不可用、pre-write `NEEDS_CONTEXT`、`CANNOT_VERIFY`、`BLOCKED` 或隔离环境丢失时停止并报告，不自动重试、不恢复失败 agent、不改由 generic subagent 或主会话替代。唯一例外是可核验的未完成 implementer 动作：agent 返回合规 `HANDOFF`，或错误地在产生产品写入后因 Task-local validation FAIL/上下文耗尽返回 `NEEDS_CONTEXT` 或中断。agent 状态文本不能覆盖 Git 事实；Coordinator 必须重新运行 `next-action`，确认同一 Task/repair 仍为 `HALT`、frozen branch 与 base/HEAD 未漂移、index 为空、存在非空且完全位于 `allowed_paths` 内的可归属 dirty paths，并确认没有 scope expansion 或用户决策需求，才把后两种情况规范化为 HANDOFF。随后可在当前用户请求内派发一次 fresh `nuclio:task-implementer` 串行接管，不再次调用 `start-task`/`start-repair`，也不要求用户重复批准。continuation dispatch 必须携带 helper handoff facts、dirty paths、前次 validation 证据和剩余工作；一次 continuation 后再次未完成、没有可验证进展或任一前置条件不满足都停止。独立 reviewer 不调用任何 Skill、`code-review`、Agent、Task、Workflow 或 worktree；失败或中断结果不得写为 review evidence。
 
 ## Finish And Archive
 
