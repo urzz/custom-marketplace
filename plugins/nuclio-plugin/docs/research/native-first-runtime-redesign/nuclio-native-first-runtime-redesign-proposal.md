@@ -47,7 +47,7 @@ Git      保存产品事实
 3. Runtime 是薄的交付控制面，不是 Agent 调度器、权限系统或工作流操作系统。
 4. 删除 `allowed_paths`，不以 content hash、receipt store 或动态文件 ownership 替代它。
 5. 验证使用 Git HEAD、宿主原生命令结果和 Acceptance 覆盖；Runtime 记录结构化结果，不建设自定义命令执行器或证据身份体系。
-6. 上下文问题通过当前 milestone、短 handoff 和宿主原生 Subagent/压缩能力解决。
+6. 上下文问题通过当前 milestone、短 handoff、知识索引的按需路由和宿主原生 Subagent/压缩能力解决。
 7. 删除旧 active schema 和所有兼容逻辑；旧 archive 原样保留，但新 Runtime 不解析。
 
 ---
@@ -69,6 +69,8 @@ Nuclio 只应解决宿主、Git 和项目检查不能稳定解决的部分。
 | 实现方法和拆分 | Agent 管理的 `delivery.yaml` |
 | 当前恢复游标和验证结果 | Runtime 管理的 `state.yaml` |
 | 代码、配置、测试和提交 | Git 与工作区 |
+| 跨 change 稳定、非显然且已验证的项目事实 | `.dev-docs/knowledge/**`，由 `.dev-docs/index.md` 路由 |
+| 已完成 change 的结果与历史证据 | `.dev-docs/changes/archive/**` 与 Git 历史 |
 | 命令权限、Subagent、Worktree、上下文压缩 | 当前 Code Agent 宿主 |
 | 测试命令的执行结果 | 宿主原生工具输出与 Runtime 的当前结果记录 |
 | 测试是否足够 | Agent、项目约定和必要时的独立审查 |
@@ -91,6 +93,7 @@ Nuclio 只应解决宿主、Git 和项目检查不能稳定解决的部分。
 - 每条 Acceptance 都有当前实现上的验证依据。
 - 新会话不依赖旧聊天记录即可恢复当前工作。
 - Runtime 输出足够小，可以直接作为下一次 Agent 或 Subagent 的工作包。
+- Agent 在 Shape、Build、恢复和 Verify 中只读取当前任务相关的长期知识，不默认装载整个知识目录。
 - 普通失败在合同不变时由 Agent 自主修复，不产生例行用户确认。
 - 归档保留最终合同、交付摘要、验证结果和残余风险。
 
@@ -618,7 +621,20 @@ next_action: implement-current-milestone
 
 不为每种错误建立复杂 transition graph。`next_action` 是建议，不是 Agent 调度指令。
 
-### 8.2 Subagent
+### 8.2 阶段化上下文装配
+
+Runtime 工作包、长期知识、当前合同和仓库事实承担不同职责，不能互相复制或替代。Agent 按当前问题装配上下文：
+
+- **Shape**：先理解用户请求并遵守宿主已按作用域装载的项目规则，再读取 `.dev-docs/index.md` 和相关长期知识，随后调查代码、测试与配置，最后形成 `change.md`；
+- **Build/恢复**：先读取 `status --json`、当前合同、milestone 和 handoff，再通过 `.dev-docs/index.md` 定位相关知识，最后读取当前实现与测试；
+- **Verify**：以批准合同、delivery、实际 diff、当前检查和观察结果为主；相关知识只提供约束和判断背景，不能替代完成证据；
+- **Finish**：在产品验证通过后，结合本次 diff、结果和受影响的现有知识，统一判断新增候选与存量失效。
+
+`.dev-docs/index.md` 是路由入口，不承载知识正文。Agent 默认只读取能够说明“为何相关”的知识文件或 heading，不递归读取 `.dev-docs/knowledge/**`，也不默认搜索 archive。代码、测试、配置与 Git 回答“当前实现是什么”；批准合同回答“本次要交付什么”；长期知识回答“哪些稳定约束、术语、决策理由或陷阱不能仅靠当前代码可靠推导”；State 只回答“现在做到哪里”。发生冲突时按问题对应的权威重新核验，不能用较新的聊天记忆静默覆盖磁盘事实。
+
+知识路径由 Agent 根据索引和仓库调查选择，不进入 Runtime State，也不由 `status` 生成 context manifest。只有真实使用证明原生检索持续遗漏必要知识时，才评估更强的自动路由。
+
+### 8.3 Subagent
 
 主 Agent 需要委派时，只传递：
 
@@ -626,20 +642,22 @@ next_action: implement-current-milestone
 - 相关 Acceptance；
 - Constraints 和 Non-goals；
 - 当前 handoff；
+- 相关长期知识的精确路径或 heading；
 - 必要仓库路径或调查范围；
 - 预期验证。
 
-Subagent 返回结果摘要和未完成项，不回传完整日志。Runtime 不保存 Agent ID、transcript、attempt 或 dispatch history。
+主 Agent 传递路径和读取理由，不复制长期知识正文；Subagent 在 fresh context 中自行读取。Subagent 返回结果摘要和未完成项，不回传完整日志。Runtime 不保存 Agent ID、transcript、attempt 或 dispatch history。
 
-### 8.3 会话恢复
+### 8.4 会话恢复
 
 新会话按以下顺序恢复：
 
 1. `status --json`；
-2. 读取当前 milestone 和 handoff；
-3. 检查 Git HEAD 与工作区；
-4. 继续当前 milestone，或在事实漂移时重新规划；
-5. 已通过验证但 HEAD 改变时回到 Build/Verify。
+2. 读取当前合同、milestone 和 handoff；
+3. 通过 `.dev-docs/index.md` 读取当前阶段相关的长期知识；
+4. 检查 Git HEAD、工作区、相关代码和测试；
+5. 继续当前 milestone，或在事实漂移时重新规划；
+6. 已通过验证但 HEAD 改变时回到 Build/Verify。
 
 恢复依赖当前 artifacts 与 Git，不依赖旧聊天、隐藏 memory 或完整执行轨迹。
 
@@ -756,13 +774,49 @@ milestone 全部 `done`、Agent 自述完成或一次 review PASS 都不能替�
 
 ### 11.2 知识闭环
 
-保留现有知识机制，但只在产品验证通过后执行：
+保留现有 `.dev-docs/index.md`、`.dev-docs/knowledge/project.md`、`architecture.md`、`engineering.md` 与按需 topic 文件，不迁移为 Comet/OpenSpec 式完整行为规格，也不增加第二套 memory/store。代码、测试和配置仍是当前实现事实；知识层只保存跨 change 稳定、可复用、非显然、已验证且有唯一归属的项目事实。
+
+知识日常读取遵循 8.2 的阶段化装配；写入与维护只在产品验证通过后执行。Finish 必须同时检查：
+
+- 本次 change 是否产生合格的新知识候选；
+- 本次 diff、API、数据模型、架构边界、权限、发布方式或用户决定是否使现有知识失效。
+
+当前指导类知识可以 `MERGE`、`REFINE`、`REPLACE`、`DEPRECATE` 或在强证据下 `DELETE`；已接受 ADR 不覆写历史，通过新 ADR 或 `SUPERSEDE_ADR` 表达替代关系。无法确认时标记 `review-needed` 或停止该项写入，不自动删除。
+
+收尾结果仍只有：
 
 - 无长期价值：记录 `NO_OP`，不打断用户；
-- 有候选：只询问一次“写入并归档”或“跳过并归档”；
+- 有新增、修订、失效或拆分候选：合并成一个 proposal，只询问一次“写入并归档”或“跳过并归档”；
 - Runtime 只允许已确认的 `.dev-docs/knowledge/**` 精确路径和必要的 `.dev-docs/index.md` 进入 archive commit。
 
 不增加知识评分、自动合并或第二套审批流程。
+
+#### 11.2.1 主题拆分与索引合同
+
+初始化仍只创建三个全局文件。全局文件只保存真正跨主题的内容；某个长期主题先使用 `.dev-docs/knowledge/<topic>.md`，不预建 domain、decision 或 runbook 目录。
+
+只有当能够给出稳定主题名、唯一语义 authority 和明确“何时读取”说明，并出现以下至少一个信号时，Agent 才提出 `SCOPE_SPLIT`：
+
+- 一个文件已经包含多个可独立检索、面向不同任务的长期主题；
+- 局部任务反复需要读取大量无关内容；
+- 不同主题被多个 change 独立维护，继续共用文件会造成归属不清或冲突；
+- 文件已明显难以扫描；约 500-800 行只能触发复审，不能单独决定拆分。
+
+拆分必须作为一次知识候选由用户确认，并在同一知识更新中完成：
+
+1. 把完整语义移动到新的 topic authority，不在原文件保留正文副本；
+2. 原全局文件只保留仍然跨主题的结论，必要时保留一条导航链接；
+3. 同步修复相关链接、`sources` 和 `related_paths`；
+4. 同步更新 `.dev-docs/index.md`，为新入口记录标题、精确路径、一行摘要和读取时机；只有确有路由价值时才记录相关代码范围；
+5. 确认每个结论仍只有一个 authority，索引不包含知识正文、每个 heading、change 列表或执行历史。
+
+索引示例保持紧凑：
+
+```markdown
+- [身份认证](knowledge/authentication.md)：登录、会话和身份生命周期；修改认证流程或 `src/auth/` 时读取。
+```
+
+普通正文修改不要求改索引；只有新增、删除、重命名入口，或摘要、读取时机、相关范围发生实质变化时才更新。单个 topic 文件仍无法提供聚焦读取时，才可创建 `.dev-docs/knowledge/<topic>/index.md` 和语义明确的子文件，并应用同一套无重复、按需路由规则。Runtime 不按行数自动拆分，也不校验知识分类语义。
 
 收尾顺序固定为：先报告产品结果并完成知识决定；再按决定写入知识文件和四个完成 section；随后调用带显式 knowledge result 与精确 knowledge paths 的 `complete`；最后立即 `archive`。`complete` 要求 `APPLIED/PARTIAL` 的 paths 与当前知识 dirty paths 精确一致，`NO_OP/REJECTED` 不得带 paths，并在成功后写 terminal State。知识正文不进入 State。
 
@@ -844,7 +898,9 @@ Archive 保留完整三件套，并满足：
 9. `status` 只返回当前 milestone、相关 AC、handoff 和失败检查；
 10. archive 不吸收 unrelated path，move 中断可恢复，成功重跑幂等；
 11. 旧 archive 不被扫描、解析、修改或删除；
-12. 静态扫描确认权威运行时不再引用 `allowed_paths`、`execution.mode`、固定 Tasks 或旧 CLI。
+12. 静态扫描确认权威运行时不再引用 `allowed_paths`、`execution.mode`、固定 Tasks 或旧 CLI；
+13. Skill/reference 静态一致性确认 Shape、Build、恢复、Verify 和 Finish 采用 index-first、relevant-only 的知识合同，Subagent 只接收相关知识路径，Finish 同时检查新增候选与存量失效；
+14. init 生成的索引可表达路径、摘要和读取时机，主题拆分不由 Runtime 自动触发或维护。
 
 不为每个字段建立测试矩阵。围绕完成错误、数据损失和恢复边界保留最小高价值测试。
 
@@ -903,6 +959,8 @@ Runtime 会让 check definition 变化后的旧结果失效，但不能判断新
 - 所有 Acceptance 被 milestone 和验证覆盖；
 - Agent 可在不重新确认合同的情况下重排 delivery；
 - `status` 可为 fresh context 返回当前 milestone 和短 handoff；
+- Shape、Build 和恢复通过 `.dev-docs/index.md` 只读取相关长期知识，不默认装载全部 knowledge 或 archive；
+- Subagent 接收相关知识路径和读取理由，不接收复制的知识正文；
 - Runtime 不保存 transcript、完整日志或 Agent 调度历史。
 
 ### 15.3 质量与完成
@@ -912,6 +970,7 @@ Runtime 会让 check definition 变化后的旧结果失效，但不能判断新
 - 每条 Acceptance 都有当前依据；
 - 产品 HEAD 变化后旧验证自动失效；
 - 独立 review 是风险和 oracle 驱动的可选能力，不是固定每 Task 流程；
+- Finish 在同一次知识决策中处理新知识候选和受本次变更影响的存量知识；
 - Archive 保留 Outcome、Validation、Knowledge Updates 和 Residual Risks。
 
 ### 15.4 复杂度
@@ -940,6 +999,7 @@ Runtime 会让 check definition 变化后的旧结果失效，但不能判断新
 
 ## 17. 参考依据
 
+- [Nuclio v3 上下文工程与知识机制业界对比](nuclio-native-first-context-knowledge-industry-research.md)：Comet Native、OpenSpec、BMAD、GSD Core、gstack、Trellis 与主流宿主的实现对比及本方案取舍；
 - [Comet Native 工作流](https://docs.comet.rpamis.com/zh/concepts/native-workflow)：结果约束、四阶段和 Runtime completion authority；
 - [Comet Native 与 Classic 实验](https://docs.comet.rpamis.com/zh/eval/comet-native-vs-040-experiment)：流程缩短的方向性证据及其因果限制；
 - [Codex Long-running work](https://learn.chatgpt.com/docs/long-running-work)：Outcome、Constraints、Verification 和宿主 Goal；
@@ -976,3 +1036,5 @@ Agent 调度器
 ```
 
 v3 的长期正确性不来自更多协议，而来自清晰的职责边界：用户锁定结果，Agent 自主收敛，Runtime 只拒绝没有当前事实支持的“完成”。
+
+Agent 的有效上下文同样不来自更多持久状态，而来自问题对应的权威：当前合同和 Runtime 工作包说明目标与进度，知识索引路由少量长期知识，代码、测试与 Git 提供当前实现事实。
