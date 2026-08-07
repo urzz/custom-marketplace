@@ -8,9 +8,9 @@
 |---|---|---|
 | `openclaw-plugin` | `/openclaw-skill-creator` | 起草和维护 OpenClaw skill |
 | `dev-stack` | `/skill-forge`、`/commit` | 创建、修改或审查 Claude Code skill；基于当前 staged diff 生成 Conventional Commit |
-| `nuclio` | `/nuclio:init`、`/nuclio:work` | Nuclio v2 4.2.3 的 `.dev-docs` 初始化与 file-first change 工作流 |
+| `nuclio` | `/nuclio:init`、`/nuclio:work` | Nuclio v3 5.0.0 的 `.dev-docs` 知识骨架与 file-first change 交付工作流 |
 
-Nuclio 的 active change 和新 archive 都完整保留 `change.md`、`plan.yaml`、`state.yaml`。Plan v2 默认把产品 Task 和 repair 委派给 tool-scoped `nuclio:task-implementer`，只有通过 low/self/单 Task/精确文件硬门槛并经用户批准后才允许主会话直接实施；独立 review 使用没有 Agent/Skill/写工具的 fresh `nuclio:readonly-reviewer`。agent 文件承载稳定边界，dispatch 只传动态事实；checkpoint 前的 validation FAIL 在当前 Task 内继续修正，合规未完成改动可经 helper/Git 核验后由一个 fresh implementer 串行接管，429、spawn limit 或其他 agent failure 仍不自动重派。工作流同时包含自然语言批准、approval checkpoint、Git-bound validation/review evidence、一次选择即可写入或跳过知识并归档的收尾交互、显式 knowledge result、可恢复 archive，以及只接受已归档 successor 的 predecessor 收口。
+Nuclio v3 5.0.0 的 active change 和新 archive 都完整保留 `change.md`、`delivery.yaml`、`state.yaml`。用户只确认一次结果合同；Claude Code 主会话自主维护 delivery milestone、直接实施或按需使用有界 Agent，并直接运行定义的检查，再由 Runtime 记录和验证当前依据。可选 `nuclio:readonly-reviewer` 的工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings。Runtime 只提供 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令；工作流采用 index-first 知识读取、一次知识决定、明确知识结果与可恢复完整 archive。
 
 ## 仓库结构
 

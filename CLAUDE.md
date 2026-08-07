@@ -53,33 +53,30 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 修改 `/commit` 时同步 `plugins/dev-stack/skills/commit/SKILL.md`、其一层 `references/`、插件 metadata、Marketplace、README 和本文件。
 
-## Nuclio v2 4.2.3 约束
+## Nuclio v3 5.0.0 约束
 
 Nuclio 当前权威文件：
 
 ```text
 plugins/nuclio-plugin/skills/{init,work}/SKILL.md
-plugins/nuclio-plugin/agents/{task-implementer,readonly-reviewer}.md
+plugins/nuclio-plugin/agents/readonly-reviewer.md
 plugins/nuclio-plugin/references/{workflow,change-format,knowledge,context-hygiene,eval-prompts}.md
 plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 ```
 
-`docs/research/` 仅是历史设计输入，不是运行时权威。维护时遵守以下边界：
+`docs/research/` 仅是历史设计输入，不是 Runtime 权威。维护时遵守以下边界：
 
-- `/nuclio:init` 只负责 v2 `.dev-docs` skeleton、导航修复和旧目录整体移动到 `.dev-docs/legacy/v1/`；日常 change 只通过 `/nuclio:work`。
-- active change 使用 `change.md` Spec、Plan schema v2 批准合同和轻量 `state.yaml` 恢复状态。`change.py` 是唯一 runtime helper 和 State writer，运行时只依赖 PyYAML。
-- 产品 mutation 前必须通过 file-first Spec/Plan 验证和自然语言批准；`init-state` 创建 approval checkpoint 并冻结 `state.git_branch`。
-- 每个 implementation Task 与获批 in-scope repair 只有一个 selective-stage checkpoint。Task、review 和 whole-change validation evidence 必须绑定 helper 推导的 Git identity；repair 后过期 evidence 必须失效。
-- 产品 Task 和 repair 默认 `execution.mode: delegated` 并使用 tool-scoped `nuclio:task-implementer`；只有 low/self/单 Task/最多三个精确文件且无高后果语义的变更可经批准使用 `direct`。checkpoint 前的 validation FAIL 在当前 Task 内继续修正；只有合规 HANDOFF 可经 helper/Git 核验后由一个 fresh implementer 串行接管一次。final/task-and-final review 使用 fresh `nuclio:readonly-reviewer`。两者都禁止 Agent/Skill/Task/Workflow、`code-review`、MCP、网络和 worktree；429、spawn limit 或其他 agent failure 不自动重派，也不回退 generic agent 或主会话。
-- Plan 只使用 change-level `allowed_paths`，不增加 per-Task ownership、owner routing、automatic fixer 或第二状态协议。
-- State 不保存完整 diff、日志、transcript、agent message、文件 snapshot 或完整 transition history。
-- finish 先报告产品结果，再分析长期知识；无候选直接 `NO_OP` 并归档，有候选只询问一次“写入并归档/跳过并归档”，不得要求固定口令或再次确认归档。`complete` 必须记录 `knowledge.result` 与精确 paths。完成文档保留批准 Spec，并追加非空 `Outcome`、`Validation`、`Knowledge Updates`、`Residual Risks`。
-- 4.2.0+ archive 完整移动并保留 `change.md`、`plan.yaml`、terminal `state.yaml`，创建一个 helper 验证的 archive commit；中断可恢复，成功重跑幂等，无关 dirty 文件不得进入 commit。
-- `supersede` 只接受已成功归档、tracked/clean、completed 且 backlink predecessor 的 successor。旧 4.0.x 单文件 archive 仅作为只读兼容输入，不迁移。
-- branch drift 或 detached HEAD 必须 fail closed。Coordinator 与 subagent 不创建、切换或重命名分支，不创建 worktree，不自动 reset/rebase/stash 或改写历史。
-- 不增加 `workflow.py`、第二 State writer、DAG scheduler、并行产品写入、runtime hook、daemon、MCP、network service、项目级 `.claude/`、`.nuclio/` 状态、persistent process JSON、`changes/index.md`、archive manifest、隐藏备份、v1 converter 或双栈 runtime。
+- `/nuclio:init` 与 `/nuclio:work` 都只能由用户显式调用；init 只在 `${CLAUDE_PROJECT_DIR}/.dev-docs/` 创建或安全修复知识骨架后停止，普通 change 只通过 work。
+- active change 与新 archive 都完整保留 `change.md`、`delivery.yaml`、`state.yaml`。主会话是唯一控制器；`change.py` 是唯一 State writer，只提供 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令。
+- 用户只确认结果合同。主会话自主维护 delivery milestone、实施方式、检查和合同不变的修复；只有产品语义、兼容性、外部副作用或不可逆结果变化才重新确认。
+- bundled Runtime 通过 `${CLAUDE_SKILL_DIR}` 定位，并显式传入 `${CLAUDE_PROJECT_DIR}`；插件源码和 Marketplace cache 始终只读，运行时写入只落在项目 `.dev-docs/**`。
+- `record-check` 只校验并记录 Claude Code 直接运行的 exact argv，不执行命令。合同、HEAD、检查定义或产品工作区漂移必须使旧验证失效；失败、缺失或过期依据回到 Build 修复。
+- 主会话始终自检；独立审查仅按需要使用 `nuclio:readonly-reviewer`。其工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings，不运行 shell、不写文件、不调用 Skill 或 Agent，也不接管 Runtime。
+- Shape、Build、恢复、Verify 与 Finish 均从 `.dev-docs/index.md` 路由相关知识；不默认读取全部知识或 archive。Finish 同时检查新增候选和既有知识失效，无候选记录 `NO_OP`，有候选只询问一次“写入并归档（推荐）/跳过并归档”。
+- v2 active 输入必须 fail closed；旧 archive 不扫描、解析、修改或删除。archive 只处理显式已完成 change，完整保留三件套且可恢复重跑，不吸收无关 dirty work。
+- Runtime 不执行项目检查，不复制 Claude Code 权限、sandbox、Agent 或 worktree 能力；不自动 push、merge、stash、reset、clean、切换分支或改写历史，不新增 daemon、MCP、网络服务、第二 State writer、DAG 或双栈 Runtime。
 
-修改 Nuclio 时同步上述 skill/reference/script/test、插件 metadata、Marketplace、README 和本文件。详细 schema 与状态迁移以 Nuclio runtime reference 和 helper 测试为准，不在仓库级文档复制完整合同。
+修改 Nuclio 时同步上述 skill/reference/script/test、插件 metadata、Marketplace、README 和本文件。详细 schema 与状态迁移以 Nuclio Runtime reference 和 helper 测试为准，不在仓库级文档复制完整合同。
 
 ## 验证命令
 

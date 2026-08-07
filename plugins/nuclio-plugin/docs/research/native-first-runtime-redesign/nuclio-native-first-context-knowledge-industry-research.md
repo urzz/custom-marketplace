@@ -4,6 +4,7 @@
 > 日期：2026-08-06
 > 研究对象：Comet Native、OpenSpec、BMAD-METHOD、GSD Core、gstack、Trellis，以及主流 Code Agent 的上下文装配机制
 > 关联提案：[Nuclio v3 薄 Runtime 直接替换方案](nuclio-native-first-runtime-redesign-proposal.md)
+> 适用边界：Nuclio v3 的目标宿主是 Claude Code；Codex、Cursor、Kiro、Windsurf 等仅作为对比样本，不构成兼容性要求
 
 ## 1. 研究问题与结论
 
@@ -187,6 +188,8 @@ gstack 以多个角色 Skill 组成工作流，并维护数个跨会话存储：
 事件化决定的 supersede 语义和 checkpoint 内容值得参考，但 Nuclio 已有 ADR supersede、State/handoff、change archive 和 Git。再增加 repo 外的 decision/checkpoint/learning stores 会形成重复 authority，也会把个人工作流设施带入团队仓库协议。
 
 ## 5. 主流 Code Agent 的共同做法
+
+本节用于提取上下文工程的共同信号，不定义 Nuclio 的运行时 API。Nuclio 的 Skill、agent、权限、路径解析和 fresh-session 验证均以 Claude Code 为准。
 
 | 工具 | 机制 | 共同信号 |
 |---|---|---|

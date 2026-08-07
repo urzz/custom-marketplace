@@ -1,7 +1,7 @@
 {
   "name": "nuclio",
-  "description": "Use when a project needs Nuclio v2 4.2.3 with /nuclio:work for a file-first change.md Spec, plan.yaml v2 delegated-by-default execution through tool-scoped task-implementer and readonly-reviewer agents, hard-gated direct exceptions, bounded verified serial handoff for unfinished in-scope work, lightweight state.yaml recovery state, approval checkpoint, Git-bound task/review/validation evidence, one-decision knowledge closeout, recoverable complete three-artifact archive, and archived-only successor closure; /nuclio:init remains limited to v2 skeleton setup, repair, and whole-directory legacy/v1 moves",
-  "version": "4.2.3",
+  "description": "Use when a project needs Nuclio v3 5.0.0 for explicit /nuclio:init knowledge skeleton setup or /nuclio:work delivery: one user-confirmed result contract in change.md, Agent-maintained delivery.yaml, Runtime-owned state.yaml, seven Runtime commands, index-first knowledge, current verification, optional read-only reviewer, and recoverable complete archive.",
+  "version": "5.0.0",
   "author": {
     "name": "Jade Liu",
     "email": "[redacted-email]"

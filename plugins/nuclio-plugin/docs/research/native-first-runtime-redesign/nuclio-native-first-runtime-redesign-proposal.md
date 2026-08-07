@@ -4,7 +4,11 @@
 > 日期：2026-08-06
 > 替换对象：Nuclio v2 4.2.3
 > 目标插件版本：5.0.0
+> 目标宿主与验证基线：Claude Code 2.1.212
+> 实施方式：使用 dev-stack `/skill-forge` 的 MODIFY 流程；Skill Forge 不进入 Nuclio 运行时
 > 当前说明：在本方案完成实现以前，现有 Skill、references 与 `change.py` 仍是运行时权威
+>
+> 术语说明：下文“宿主”仅指 Claude Code；其他工具只出现在业界调研中，不属于 v3 兼容合同
 
 ## 0. 决策摘要
 
@@ -14,9 +18,9 @@ v3 的目标不是复制 Comet Native，也不是删除所有流程。它只重�
 
 ```text
 用户     决定要交付什么
-Agent    决定如何完成
+主 Agent  决定如何完成并作为唯一流程控制器
 Runtime  保存少量可恢复事实并判断是否可以结束
-宿主     提供权限、Subagent、Worktree、上下文和工具执行环境
+Claude Code 提供权限、Agent、Worktree、上下文和工具执行环境
 Git      保存产品事实
 项目检查 证明当前结果
 ```
@@ -47,8 +51,9 @@ Git      保存产品事实
 3. Runtime 是薄的交付控制面，不是 Agent 调度器、权限系统或工作流操作系统。
 4. 删除 `allowed_paths`，不以 content hash、receipt store 或动态文件 ownership 替代它。
 5. 验证使用 Git HEAD、宿主原生命令结果和 Acceptance 覆盖；Runtime 记录结构化结果，不建设自定义命令执行器或证据身份体系。
-6. 上下文问题通过当前 milestone、短 handoff、知识索引的按需路由和宿主原生 Subagent/压缩能力解决。
+6. 上下文问题通过当前 milestone、短 handoff、知识索引的按需路由和 Claude Code 原生 Agent/压缩能力解决。
 7. 删除旧 active schema 和所有兼容逻辑；旧 archive 原样保留，但新 Runtime 不解析。
+8. `/nuclio:init` 与 `/nuclio:work` 保持用户显式调用；Nuclio 不自动触发，也不在运行中调用 Skill Forge 或其他 Skill。
 
 ---
 
@@ -71,8 +76,8 @@ Nuclio 只应解决宿主、Git 和项目检查不能稳定解决的部分。
 | 代码、配置、测试和提交 | Git 与工作区 |
 | 跨 change 稳定、非显然且已验证的项目事实 | `.dev-docs/knowledge/**`，由 `.dev-docs/index.md` 路由 |
 | 已完成 change 的结果与历史证据 | `.dev-docs/changes/archive/**` 与 Git 历史 |
-| 命令权限、Subagent、Worktree、上下文压缩 | 当前 Code Agent 宿主 |
-| 测试命令的执行结果 | 宿主原生工具输出与 Runtime 的当前结果记录 |
+| 命令权限、Agent、Worktree、`AskUserQuestion`、上下文压缩 | Claude Code |
+| 测试命令的执行结果 | Claude Code 原生工具输出与 Runtime 的当前结果记录 |
 | 测试是否足够 | Agent、项目约定和必要时的独立审查 |
 
 由此得到两个边界：
@@ -92,22 +97,24 @@ Nuclio 只应解决宿主、Git 和项目检查不能稳定解决的部分。
 - Agent 可以自行决定直接实现、委派、探索、提交和 review 方式。
 - 每条 Acceptance 都有当前实现上的验证依据。
 - 新会话不依赖旧聊天记录即可恢复当前工作。
-- Runtime 输出足够小，可以直接作为下一次 Agent 或 Subagent 的工作包。
+- Runtime 输出足够小，可以直接作为下一次主 Agent 或 Claude Code agent 的工作包。
 - Agent 在 Shape、Build、恢复和 Verify 中只读取当前任务相关的长期知识，不默认装载整个知识目录。
 - 普通失败在合同不变时由 Agent 自主修复，不产生例行用户确认。
 - 归档保留最终合同、交付摘要、验证结果和残余风险。
+- 从 Marketplace 缓存安装后仍能正确定位 bundled script，并且只向目标项目的 `.dev-docs/**` 写入状态。
 
 ### 2.2 非目标
 
 v3 不建设：
 
-- 多宿主抽象层或跨 Code Agent 统一 Runtime；
+- Codex、Cursor 或其他宿主兼容，以及跨 Code Agent 统一 Runtime；
 - Agent scheduler、DAG、wave、owner routing 或并行写入协调器；
 - 自动 branch、worktree、push、PR、merge 或远端 controller；
 - `allowed_paths`、目录白名单或预测性实现范围；
 - 工作区 snapshot、content hash、receipt store、CAS 或事件日志；
 - 自定义命令执行器、权限代理或宿主 transcript 解析器；
 - 固定 implementer/reviewer/fixer 流水线；
+- 模型自动调用 Nuclio、Skill 嵌套或把 Skill Forge 作为运行时依赖；
 - risk tag DSL、自动风险分类或按文件数量触发的 review policy；
 - repair failure key、重试预算或自动循环控制器；
 - transcript、完整命令日志、完整 diff 或 Agent message 存档；
@@ -150,11 +157,13 @@ Agent 负责：
 - 生成、维护和重排 milestone；
 - 保证每条 Acceptance 被 milestone 与验证覆盖；
 - 选择实现方法、测试和 review 深度；
-- 使用宿主能力委派、隔离和压缩上下文；
+- 使用 Claude Code 能力委派、隔离和压缩上下文；
 - 在合同不变时持续修复；
 - 识别何时出现新的用户决定。
 
 Agent 对 `delivery.yaml` 的 `done` 声明只是交付进度，不构成最终完成证据。
+
+Claude Code 主会话是唯一流程控制器：只有它调用 Nuclio Skill、执行 Runtime 命令、处理用户 Gate 和决定是否使用 `Agent` 工具。被委派的 agent 只完成有界工作并返回结果，不接管流程，也不再次调用 Nuclio 或 Skill Forge。
 
 ### 3.3 Runtime 负责
 
@@ -172,19 +181,22 @@ Runtime 只负责：
 
 Runtime 不理解产品语义，不选择 Agent，不评价架构品味，也不判断某条测试在语义上是否充分。
 
-### 3.4 宿主负责
+### 3.4 Claude Code 负责
 
-Claude Code、Codex 或实际承载 Nuclio 的宿主继续负责：
+本方案只定义 Claude Code 插件行为，不承诺 Codex 或其他宿主兼容。Claude Code 继续负责：
 
-- 文件和命令权限；
+- 文件、命令和工具权限；
 - 直接执行项目检查并返回 exit code 与输出；
 - sandbox；
-- Subagent 和独立上下文；
+- `Agent` 工具和 fresh context；
 - Worktree 和并行隔离；
+- `AskUserQuestion` 交互；
 - 上下文压缩、恢复与运行时长控制；
 - 网络、提权和破坏性操作的用户授权。
 
-Nuclio 不复制这些能力。v3 只面向当前实际支持的宿主；未来增加第二宿主时，只适配 Skill 入口，不预先抽象一套公共 Agent API。
+Nuclio 不复制这些能力。Claude Code subagent 不能继续委派，因此主会话必须保持唯一控制器；可选 reviewer 和其他 agent 只接收有界任务并返回摘要。
+
+v3 的实现与 fresh-session 行为以 Claude Code 2.1.212 为验证基线，只使用该版本已存在的 Skill、plugin agent 与路径变量能力；降低最低版本需要另行提供兼容性证据。Skill 内调用 bundled script 时使用 `${CLAUDE_SKILL_DIR}` 定位插件文件，使用 `${CLAUDE_PROJECT_DIR}` 明确目标项目根目录。Marketplace 插件可能从 `~/.claude/plugins/cache` 运行，因此不得依赖本仓库源码路径，也不得向插件安装目录写运行时状态。
 
 ---
 
@@ -224,7 +236,7 @@ Complete / Archive
 4. Agent 已无法形成新的可执行假设，或环境真实阻塞；
 5. 存在长期知识候选时，选择写入并归档或跳过并归档。
 
-Agent 选择文件、拆分 milestone、改用 Subagent、增加测试或修复失败不构成用户 Gate。
+Agent 选择文件、拆分 milestone、改用 `Agent` 工具、增加测试或修复失败不构成用户 Gate。首次结果合同和后续真实产品决定使用 Claude Code `AskUserQuestion` 明确确认，不把沉默、继续对话或旧消息推断为批准。
 
 ### 4.3 合同变化
 
@@ -241,7 +253,7 @@ Agent 选择文件、拆分 milestone、改用 Subagent、增加测试或修复�
 - 普通实现文件增删；
 - 实现方案、库选择或内部算法；
 - 检查命令增强或替换；
-- commit、Subagent 或 review 组织方式。
+- commit、Claude Code agent 或 review 组织方式。
 
 `revision` 是 `change.md` frontmatter 中从 `1` 开始的正整数。合同语义变化时必须恰好加一；`delivery.yaml` 单独变化不提升 revision。重新 `approve` 会创建新的 approval 元数据提交、替换 `approval_head`、清空全部旧检查/手工观察/review 与 `verified_head`，然后回到 Build。
 
@@ -489,7 +501,7 @@ Agent 根据以下信号拆分 milestone：
 - 存在可独立验证的业务切片；
 - 前置能力需要先落地；
 - 多模块修改需要最终集成；
-- 某部分适合交给独立 Subagent。
+- 某部分适合交给独立 Claude Code agent。
 
 拆分遵循四条约束：
 
@@ -568,6 +580,8 @@ Runtime 只验证记录完整且绑定当前 HEAD，不声称观察本身真实�
 
 多 milestone 本身不自动触发独立 review，文件数量也不是风险代理。
 
+v3 删除固定 `task-implementer`，但保留并重写 Nuclio plugin 的 `readonly-reviewer` agent 作为可选 Claude Code 原生能力。该 agent 的 frontmatter 不授予 `Edit`、`Write`、shell 或其他可修改工作区的工具；主 Agent 传入批准合同、当前 HEAD、changed paths、必要材料和审查问题，它只读取相关文件并返回按严重度排序的 finding。它不调用 Skill、不委派、不写 artifact，也不决定 Runtime 状态。
+
 Runtime 不调度 reviewer，也不验证 reviewer 身份。Verify 保存当前整体 review 的类型（self/independent）、覆盖的 Acceptance、HEAD、PASS/FAIL 和简短摘要；执行独立 review 时用其替代 self-review 记录。产品修改后该结果自然过期。
 
 ### 7.5 Repair
@@ -634,9 +648,9 @@ Runtime 工作包、长期知识、当前合同和仓库事实承担不同职责
 
 知识路径由 Agent 根据索引和仓库调查选择，不进入 Runtime State，也不由 `status` 生成 context manifest。只有真实使用证明原生检索持续遗漏必要知识时，才评估更强的自动路由。
 
-### 8.3 Subagent
+### 8.3 Claude Code Agent
 
-主 Agent 需要委派时，只传递：
+主 Agent 需要通过 Claude Code `Agent` 工具委派时，只传递：
 
 - 当前 milestone；
 - 相关 Acceptance；
@@ -646,7 +660,7 @@ Runtime 工作包、长期知识、当前合同和仓库事实承担不同职责
 - 必要仓库路径或调查范围；
 - 预期验证。
 
-主 Agent 传递路径和读取理由，不复制长期知识正文；Subagent 在 fresh context 中自行读取。Subagent 返回结果摘要和未完成项，不回传完整日志。Runtime 不保存 Agent ID、transcript、attempt 或 dispatch history。
+主 Agent 传递路径和读取理由，不复制长期知识正文；agent 在 fresh context 中自行读取。agent 返回结果摘要和未完成项，不回传完整日志。由于 Claude Code subagent 不能继续委派，它不得调用 Nuclio、Skill Forge 或其他 Skill。Runtime 不保存 Agent ID、transcript、attempt 或 dispatch history。
 
 ### 8.4 会话恢复
 
@@ -747,6 +761,8 @@ Runtime 实现原则：
 
 - Python 本地 CLI，优先复用现有可靠 Git/archive 代码；
 - 不增加 daemon、数据库、网络和新依赖；
+- Skill 以 `python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_PROJECT_DIR}" ...` 调用唯一 CLI，不依赖当前工作目录或源码仓库绝对路径；
+- 所有 change、配置、知识与归档写入都解析到 `${CLAUDE_PROJECT_DIR}/.dev-docs/**`；插件源码目录和 Marketplace cache 在运行时视为只读；
 - 成功与失败使用结构化 JSON；
 - mutation 前重新读取 Git 和 artifacts；
 - State 使用临时文件加原子替换；
@@ -852,17 +868,19 @@ Archive 保留完整三件套，并满足：
 
 ### 12.2 同一变更内完成
 
+本次替换使用 dev-stack `/skill-forge` 的 MODIFY 流程生成 Spec、Plan、实现与验证结果；`.skill-forge/**` 只承担本次开发控制，不随 Nuclio 发布，也不成为 `/nuclio:work` 的依赖。不得用待删除的 Nuclio v2 工作流自举本次替换。
+
 替换必须在一个实现变更中完成：
 
 1. 重写 active artifacts 为 `change.md + delivery.yaml + state.yaml`；
 2. 实现最小 Runtime 命令；
 3. 重写 `/nuclio:work`；
-4. 删除固定 implementer、Task、review 和 repair 协议；
+4. 删除 `task-implementer.md` 与固定 Task/review/repair 协议，把 `readonly-reviewer.md` 收缩为可选、无写工具的 Claude Code reviewer；
 5. 更新 workflow、format、context 和 knowledge references；
 6. 删除 `allowed_paths`、Plan schema、旧 CLI 和兼容测试；
 7. 更新 init、README、plugin metadata 和静态检查；
-8. 运行新 Runtime 测试和仓库测试；
-9. 用新流程完成一次普通真实 change，修正明显可用性问题；
+8. 运行新 Runtime 测试、仓库测试和 `claude plugin validate --strict`；
+9. 在 fresh Claude Code 2.1.212 会话中从实际 plugin 入口完成行为评测，再用 v3 在另一个普通真实 change 上做 dogfood；
 10. 将插件版本从 `4.2.3` 提升为 `5.0.0`，发布唯一 v3 行为。
 
 没有中间可发布双栈。开发分支可以逐步提交，但合并结果必须完整。
@@ -878,8 +896,9 @@ Archive 保留完整三件套，并满足：
 - Git/工作区集成测试；
 - archive 中断和幂等测试；
 - Skill/reference 静态一致性测试；
+- Claude Code plugin strict validation 与 fresh-session 行为评测；
 - 仓库现有测试；
-- 一次新流程实际使用。
+- 一次与 v3 实现相互独立的新流程实际使用。
 
 ---
 
@@ -898,9 +917,13 @@ Archive 保留完整三件套，并满足：
 9. `status` 只返回当前 milestone、相关 AC、handoff 和失败检查；
 10. archive 不吸收 unrelated path，move 中断可恢复，成功重跑幂等；
 11. 旧 archive 不被扫描、解析、修改或删除；
-12. 静态扫描确认权威运行时不再引用 `allowed_paths`、`execution.mode`、固定 Tasks 或旧 CLI；
-13. Skill/reference 静态一致性确认 Shape、Build、恢复、Verify 和 Finish 采用 index-first、relevant-only 的知识合同，Subagent 只接收相关知识路径，Finish 同时检查新增候选与存量失效；
-14. init 生成的索引可表达路径、摘要和读取时机，主题拆分不由 Runtime 自动触发或维护。
+12. 静态扫描确认权威运行时不再引用 `allowed_paths`、`execution.mode`、固定 Tasks、`task-implementer` 或旧 CLI；
+13. Skill/reference 静态一致性确认 Shape、Build、恢复、Verify 和 Finish 采用 index-first、relevant-only 的知识合同，Claude Code agent 只接收相关知识路径，Finish 同时检查新增候选与存量失效；
+14. init 生成的索引可表达路径、摘要和读取时机，主题拆分不由 Runtime 自动触发或维护；
+15. `/nuclio:init` 与 `/nuclio:work` 保持 `disable-model-invocation: true`，Should Trigger/Should Not Trigger 和一次 `AskUserQuestion` 合同 Gate 在 fresh session 中符合预期；
+16. bundled script 从 `${CLAUDE_SKILL_DIR}` 定位，并以 `${CLAUDE_PROJECT_DIR}` 为唯一项目根目录；测试必须覆盖当前目录不是插件源码目录、插件从临时 cache 路径加载且 cache 不发生写入；
+17. `readonly-reviewer` 只能使用只读文件工具，不能写文件、执行 shell、调用 Skill 或继续委派；
+18. `claude plugin validate plugins/nuclio-plugin --strict` 与本仓库 plugin 静态测试通过，并在 Claude Code 2.1.212 记录 fresh-session 结果。
 
 不为每个字段建立测试矩阵。围绕完成错误、数据损失和恢复边界保留最小高价值测试。
 
@@ -914,7 +937,7 @@ Archive 保留完整三件套，并满足：
 
 ### 14.2 弱模型执行质量下降
 
-v3 假设当前目标宿主使用能够自主规划、调用工具和修复的强模型。它不为较弱模型保留 Classic 流水线。需要支持弱模型时，应选择更强模型或在宿主层提供更明确提示，不恢复双工作流。
+v3 假设 Claude Code 主会话使用能够自主规划、调用工具和修复的强模型。它不为较弱模型保留 Classic 流水线。需要支持弱模型时，应选择更强模型或在 Skill 中提供更明确提示，不恢复双工作流。
 
 ### 14.3 干净工作区要求产生摩擦
 
@@ -936,7 +959,7 @@ Runtime 会让 check definition 变化后的旧结果失效，但不能判断新
 
 ### 14.6 Runtime 不是安全沙箱
 
-验证命令只在用户信任的本地仓库运行，并由宿主命令工具直接执行，使实际 argv 继续受宿主权限与 sandbox 约束。Runtime 的 `record-check` 不执行传入 argv，只记录宿主观察结果，因此不会成为绕过命令级权限的 Python subprocess wrapper。结构化 argv 避免定义歧义，但 Runtime 不解析宿主 transcript，也不提供防篡改执行证明；若未来确实需要，应通过宿主原生集成单独设计，而不是给本地 Runtime 增加权限代理。
+验证命令只在用户信任的本地仓库运行，并由 Claude Code 命令工具直接执行，使实际 argv 继续受 Claude Code 权限与 sandbox 约束。Runtime 的 `record-check` 不执行传入 argv，只记录宿主观察结果，因此不会成为绕过命令级权限的 Python subprocess wrapper。结构化 argv 避免定义歧义，但 Runtime 不解析宿主 transcript，也不提供防篡改执行证明；若未来确实需要，应通过 Claude Code 原生集成单独设计，而不是给本地 Runtime 增加权限代理。
 
 ---
 
@@ -947,6 +970,7 @@ Runtime 会让 check definition 变化后的旧结果失效，但不能判断新
 ### 15.1 用户体验
 
 - 日常入口仍只有 `/nuclio:work`；
+- `/nuclio:init` 与 `/nuclio:work` 只能由用户显式调用，不允许模型自动触发；
 - Build 前只有一次结果合同确认；
 - 不展示或批准 `allowed_paths`、Tasks、execution mode 或 Agent 选择；
 - 合同不变的失败不会例行询问 repair permission；
@@ -960,7 +984,7 @@ Runtime 会让 check definition 变化后的旧结果失效，但不能判断新
 - Agent 可在不重新确认合同的情况下重排 delivery；
 - `status` 可为 fresh context 返回当前 milestone 和短 handoff；
 - Shape、Build 和恢复通过 `.dev-docs/index.md` 只读取相关长期知识，不默认装载全部 knowledge 或 archive；
-- Subagent 接收相关知识路径和读取理由，不接收复制的知识正文；
+- Claude Code agent 接收相关知识路径和读取理由，不接收复制的知识正文；
 - Runtime 不保存 transcript、完整日志或 Agent 调度历史。
 
 ### 15.3 质量与完成
@@ -970,6 +994,7 @@ Runtime 会让 check definition 变化后的旧结果失效，但不能判断新
 - 每条 Acceptance 都有当前依据；
 - 产品 HEAD 变化后旧验证自动失效；
 - 独立 review 是风险和 oracle 驱动的可选能力，不是固定每 Task 流程；
+- 可选 `readonly-reviewer` 没有写工具、shell、Skill 调用或继续委派能力；
 - Finish 在同一次知识决策中处理新知识候选和受本次变更影响的存量知识；
 - Archive 保留 Outcome、Validation、Knowledge Updates 和 Residual Risks。
 
@@ -981,6 +1006,7 @@ Runtime 会让 check definition 变化后的旧结果失效，但不能判断新
 - 不存在兼容 adapter、双栈、feature flag 或 converter；
 - 不存在 custom content hash、snapshot、receipt store、failure key 或 risk DSL；
 - 不存在 Runtime Agent scheduler、Worktree manager 或权限系统；
+- 主 Claude Code 会话是唯一控制器，plugin cache 不承载运行时写入；
 - 旧 `change.py` 和固定流程测试被删除，而不是包一层继续保留。
 
 ---
@@ -990,8 +1016,8 @@ Runtime 会让 check definition 变化后的旧结果失效，但不能判断新
 实施按一个 vertical slice 推进，不按长期平台路线拆分：
 
 1. **Artifact 与 Runtime 核心**：三件套、approve、status、record-check、verify、complete、archive。
-2. **工作流替换**：重写 Skill/references，删除 Plan、Task、path、execution 和固定 review/repair 协议。
-3. **验证与收口**：补最小高价值测试，更新 init/README/metadata，执行一次新流程并直接发布。
+2. **Claude Code 工作流替换**：重写 Skill/references，删除 Plan、Task、path、execution 和固定 review/repair 协议，收缩可选 reviewer 权限。
+3. **验证与收口**：补最小高价值测试，更新 init/README/metadata，在 fresh Claude Code 2.1.212 会话验证真实 plugin 行为，再用 v3 完成一个独立 dogfood change。
 
 实现过程中优先复用当前 `change.py` 中已经证明可靠的 ID/path 校验、原子文件写入和 archive 恢复代码。其余逻辑按新合同重写；不为了复用而保留旧 schema 或命令结构。
 
@@ -1000,10 +1026,11 @@ Runtime 会让 check definition 变化后的旧结果失效，但不能判断新
 ## 17. 参考依据
 
 - [Nuclio v3 上下文工程与知识机制业界对比](nuclio-native-first-context-knowledge-industry-research.md)：Comet Native、OpenSpec、BMAD、GSD Core、gstack、Trellis 与主流宿主的实现对比及本方案取舍；
+- [Claude Code Skills](https://code.claude.com/docs/en/slash-commands)：用户调用、`disable-model-invocation`、`${CLAUDE_SKILL_DIR}` 与 `${CLAUDE_PROJECT_DIR}`；
+- [Claude Code Plugins reference](https://code.claude.com/docs/en/plugins-reference)：Marketplace cache、plugin 目录结构与 strict validation；
+- [Claude Code Subagents](https://code.claude.com/docs/en/sub-agents)：`Agent` 工具、fresh context、工具权限和不可继续委派边界；
 - [Comet Native 工作流](https://docs.comet.rpamis.com/zh/concepts/native-workflow)：结果约束、四阶段和 Runtime completion authority；
 - [Comet Native 与 Classic 实验](https://docs.comet.rpamis.com/zh/eval/comet-native-vs-040-experiment)：流程缩短的方向性证据及其因果限制；
-- [Codex Long-running work](https://learn.chatgpt.com/docs/long-running-work)：Outcome、Constraints、Verification 和宿主 Goal；
-- [Codex Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)：bounded work、fresh context 和 summary return；
 - [Claude Opus 5 prompting](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5)：长任务、自主验证以及删除旧式过度验证脚手架；
 - [Anthropic long-running harness](https://www.anthropic.com/engineering/harness-design-long-running-apps)：结构化 handoff、上下文重置和独立评价；
 - [OpenSpec](https://github.com/Fission-AI/OpenSpec)：轻量 artifact 与非刚性阶段；

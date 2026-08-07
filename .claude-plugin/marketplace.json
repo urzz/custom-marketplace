@@ -18,7 +18,7 @@
     {
       "name": "nuclio",
       "source": "./plugins/nuclio-plugin",
-      "description": "Adds /nuclio:init for v2 .dev-docs skeleton setup, repair, and legacy/v1 moves, plus /nuclio:work for Nuclio v2 4.2.3 file-first change.md Spec, plan.yaml v2 delegated-by-default execution through tool-scoped task-implementer and readonly-reviewer agents, hard-gated direct exceptions, bounded verified serial handoff for unfinished in-scope work, lightweight state.yaml recovery state, approval checkpoint, Git-bound task/review/validation evidence, one-decision knowledge closeout, recoverable complete three-artifact archive, and archived-only successor/predecessor closure while retaining legacy active Plan and one-file archive read compatibility"
+      "description": "Use when a project needs Nuclio v3 5.0.0 for explicit /nuclio:init knowledge skeleton setup or /nuclio:work delivery: one user-confirmed result contract in change.md, Agent-maintained delivery.yaml, Runtime-owned state.yaml, seven Runtime commands, index-first knowledge, current verification, optional read-only reviewer, and recoverable complete archive."
     }
   ]
 }
