@@ -107,6 +107,16 @@ class ClaudeCodeContracts(unittest.TestCase):
         for phase in ("Shape", "Build / recovery", "Verify", "Finish"):
             self.assertIn(phase, context)
 
+    def test_change_contract_is_concise_but_information_complete(self):
+        work = read(WORK)
+        change_format = read(REFERENCES / "change-format.md")
+        eval_prompts = read(REFERENCES / "eval-prompts.md")
+        self.assertIn("`create` 的单行参数只是种子", work)
+        self.assertIn("精简不等于单句", work)
+        self.assertIn("精简不等于单句", change_format)
+        self.assertIn("验证所绑定的 HEAD", change_format)
+        self.assertIn("不直接批准只有单句概括的草稿", eval_prompts)
+
 
 class PackageSyncContracts(unittest.TestCase):
     def test_v3_metadata_and_repository_docs_are_synced(self):

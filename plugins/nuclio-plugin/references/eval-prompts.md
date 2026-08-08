@@ -7,8 +7,8 @@
 ### 1. 普通 change
 
 - **User Prompt**：`/nuclio:work 修复登录回跳并补测试`
-- **Expected**：进入 Shape，索引优先读取相关知识，形成 `change.md`，用一次 `AskUserQuestion` 确认结果合同；随后主会话自主 Build/Verify。
-- **Assertions**：不要求批准 milestone、路径、Agent 或普通失败修复；检查由 Claude Code 直接执行，再以 `record-check` 记录。
+- **Expected**：进入 Shape，索引优先读取相关知识；把 `create` 的单行种子补全为无需旧聊天也能理解、精简但信息完整的 `change.md`，再用一次 `AskUserQuestion` 确认结果合同；随后主会话自主 Build/Verify。
+- **Assertions**：不直接批准只有单句概括的草稿；多个独立边界分别记录、Acceptance 原子且可观察；不要求批准 milestone、路径、Agent 或普通失败修复；检查由 Claude Code 直接执行，再以 `record-check` 记录。
 
 ### 2. 恢复与失败修复
 

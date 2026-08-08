@@ -23,9 +23,9 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 
 ### 1. Shape
 
-调查用户请求、仓库事实和通过 `.dev-docs/index.md` 路由的相关长期知识；不默认读取整个知识目录、archive 或旧聊天。定位唯一 active change；不存在时以 `create` 创建三件套草稿。补全 `change.md` 的 Goal、Context、Constraints、Non-goals、Acceptance Criteria，确保每条 Acceptance 可观察。
+调查用户请求、仓库事实和通过 `.dev-docs/index.md` 路由的相关长期知识；不默认读取整个知识目录、archive 或旧聊天。定位唯一 active change；不存在时以 `create` 创建三件套草稿。`create` 的单行参数只是种子；创建后必须重新读取并按调查事实补全 `change.md`，使其无需旧聊天也能说明 Goal、必要 Context、每项独立 Constraint/Non-goal 和可观察 Acceptance。多个独立边界使用列表，不得压成一句同义概括，也不得把实现步骤写入结果合同。
 
-展示精简结果合同并使用一次 `AskUserQuestion` 获得明确确认。只确认结果、边界和 Acceptance；不得要求用户批准 milestone、路径、实现方式、Agent 选择、commit 或普通修复。合同语义、用户可见行为、兼容性、外部副作用或不可逆结果出现新决定时，回到 Shape、提升 revision 并重新确认。
+展示精简但信息完整的结果合同并使用一次 `AskUserQuestion` 获得明确确认。精简不等于单句，只删除重复措辞和未确认的实施细节；不得省略已发现的独立边界、兼容性、外部副作用或验收结果。只确认结果、边界和 Acceptance；不得要求用户批准 milestone、路径、实现方式、Agent 选择、commit 或普通修复。合同语义、用户可见行为、兼容性、外部副作用或不可逆结果出现新决定时，回到 Shape、提升 revision 并重新确认。
 
 确认后创建或调整 `delivery.yaml`，保证 milestone 和检查覆盖全部 Acceptance，然后执行：
 
@@ -55,4 +55,4 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 
 验证通过后，先报告产品结果与最小证据。通过索引只读取受影响的知识，同时检查本次是否产生新候选以及现有知识是否失效。无候选时以 `NO_OP` 连续补全完成 section、`complete` 和 `archive`。有候选时只使用一次 `AskUserQuestion`：“如何处理以上知识候选并完成本次 change？”，选项为“写入并归档（推荐）”和“跳过并归档”。该选择同时授权知识处理、complete 和 archive；不得再次请求归档确认。
 
-按 `change-format.md` 追加非空 `Outcome`、`Validation`、`Knowledge Updates`、`Residual Risks`，再调用 `complete` 与 `archive`。只报告最终 outcome、archive 路径/commit 与剩余风险。
+按 `change-format.md` 追加信息完整的 `Outcome`、`Validation`、`Knowledge Updates`、`Residual Risks`，再调用 `complete` 与 `archive`。归档记录必须脱离聊天仍能说明实际交付范围、验证所绑定的 HEAD 与检查结果、知识处理结果和残余风险。只报告最终 outcome、archive 路径/commit 与剩余风险。

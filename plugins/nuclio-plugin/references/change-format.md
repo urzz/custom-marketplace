@@ -36,32 +36,46 @@ revision: 1
 
 ## Goal
 
-修复登录后的回跳结果。
+登录成功后安全地返回用户最初访问的受保护页面，同时保持无回跳参数时的现有行为。
 
 ## Context
 
-当前回调归一化会丢失回跳参数。
+登录拦截器会保存包含 query string 的目标页面；当前回调归一化会丢失该参数，导致密码登录和 SSO 登录都回到首页。
 
 ## Constraints
 
-保持现有会话兼容。
+- 只允许站内绝对路径作为回跳目标，非法或外站地址回退首页。
+- 保持现有会话以及无回跳参数时的登录行为兼容。
 
 ## Non-goals
 
-不重构认证框架。
+- 不重构认证框架或更换会话机制。
+- 不增加跨域登录跳转能力。
 
 ## Acceptance Criteria
 
-- AC-1: 登录后回到原始受保护页面。
+- AC-1: 密码登录后回到原始受保护页面，并保留 query string。
+- AC-2: SSO 登录后回到原始受保护页面，并保留 query string。
+- AC-3: 非法或外站回跳地址不会离开本站，而是回到首页。
+- AC-4: 无回跳参数时继续使用现有默认落点。
 
 ## Decisions
 
-仅记录用户确认的产品决定。
+非法或外站回跳地址统一回退首页，不显示额外错误。
 ```
 
 frontmatter 必须且只能包含 `schema_version`、`change_id`、`revision`；schema 为 `1`，revision 是正整数。H1、Goal、Context、Constraints、Non-goals、Acceptance Criteria 必须唯一且非空。Acceptance 使用唯一的 `AC-*` ID。`Decisions` 可选，但存在时非空。批准后的 Goal、Context、Constraints、Non-goals、Acceptance Criteria 与批准时存在的 Decisions 是冻结合同；语义改变时 revision 必须递增并重新 `approve`。
 
-完成前在原合同后按顺序追加以下非空 section：`Outcome`、`Validation`、`Knowledge Updates`、`Residual Risks`。它们不属于批准合同。
+合同必须在不读取旧聊天、`delivery.yaml` 或 archive 的情况下说明做什么、为什么、边界和可观察完成条件。精简不等于单句：Goal 可以是一句明确结果；Context 保留理解需求所需的当前事实与影响；每项独立 Constraint 和 Non-goal 分开记录，存在多项时使用列表；每条 Acceptance 只表达一个可观察结果，并覆盖与合同有关的关键正常路径和边界，不写实现步骤或臆测信息。
+
+完成前在原合同后按顺序追加以下非空 section，它们不属于批准合同：
+
+- `Outcome`：实际交付结果、覆盖的 Acceptance 和必要的变更范围摘要；
+- `Validation`：验证所绑定的 HEAD、执行的准确检查及 exit code/关键结果，并包含实际使用的手工观察或 review；
+- `Knowledge Updates`：知识结果及实际更新路径，未更新时明确记录结果；
+- `Residual Risks`：已知风险、影响条件和必要处置；没有时明确记录无已知残余风险。
+
+这些完成 section 必须脱离聊天仍可用于追溯，但不复制完整日志、diff、transcript 或 Agent 消息。
 
 ## `delivery.yaml`
 
