@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -183,10 +184,14 @@ def porcelain(root: Path) -> list[str]:
     return paths
 
 
-def require_product_clean(root: Path, change_id: str, allowed_dirty: set[str] | None = None) -> None:
+def product_dirty_paths(root: Path, change_id: str, allowed_dirty: set[str] | None = None) -> list[str]:
     active_prefix = f".dev-docs/changes/{change_id}/"
     allowed = allowed_dirty or set()
-    dirty = [path for path in porcelain(root) if not path.startswith(active_prefix) and path not in allowed]
+    return [path for path in porcelain(root) if not path.startswith(active_prefix) and path not in allowed]
+
+
+def require_product_clean(root: Path, change_id: str, allowed_dirty: set[str] | None = None) -> None:
+    dirty = product_dirty_paths(root, change_id, allowed_dirty)
     if dirty:
         raise NuclioError("DIRTY_PRODUCT_WORKTREE", "product worktree must be clean", paths=dirty)
 
@@ -286,14 +291,14 @@ def validate_check(root: Path, raw: Any, acceptance: set[str], source: str) -> d
         result["timeout_seconds"] = timeout
     if source == "change":
         covers = raw.get("covers")
-        if not isinstance(covers, list) or not covers or len(covers) != len(set(covers)) or any(item not in acceptance for item in covers):
+        if not isinstance(covers, list) or not covers or not all(isinstance(item, str) for item in covers) or len(covers) != len(set(covers)) or any(item not in acceptance for item in covers):
             raise NuclioError("INVALID_DELIVERY", "change check covers must name unique Acceptance IDs")
         result["covers"] = list(covers)
     return result
 
 
-def parse_delivery(root: Path, change_id: str, acceptance: list[str]) -> dict[str, Any]:
-    raw = read_yaml(active_dir(root, change_id) / "delivery.yaml", "delivery.yaml")
+def parse_delivery(root: Path, change_id: str, acceptance: list[str], directory: Path | None = None) -> dict[str, Any]:
+    raw = read_yaml((directory or active_dir(root, change_id)) / "delivery.yaml", "delivery.yaml")
     if not isinstance(raw, dict) or set(raw) != {"schema_version", "change_id", "milestones", "verification"}:
         raise NuclioError("INVALID_DELIVERY", "delivery.yaml schema keys mismatch")
     if raw.get("schema_version") != 1 or raw.get("change_id") != change_id:
@@ -307,7 +312,7 @@ def parse_delivery(root: Path, change_id: str, acceptance: list[str]) -> dict[st
             raise NuclioError("INVALID_DELIVERY", "milestone schema keys mismatch")
         marker = milestone["id"]
         covers = milestone["covers"]
-        if not isinstance(marker, str) or not MILESTONE_RE.fullmatch(marker) or marker in seen or milestone["kind"] not in {"delivery", "integration"} or not isinstance(milestone["outcome"], str) or not milestone["outcome"].strip() or milestone["status"] not in {"pending", "in_progress", "done"} or not isinstance(covers, list) or not covers or len(covers) != len(set(covers)) or any(ac not in acceptance for ac in covers):
+        if not isinstance(marker, str) or not MILESTONE_RE.fullmatch(marker) or marker in seen or not isinstance(milestone["kind"], str) or milestone["kind"] not in {"delivery", "integration"} or not isinstance(milestone["outcome"], str) or not milestone["outcome"].strip() or not isinstance(milestone["status"], str) or milestone["status"] not in {"pending", "in_progress", "done"} or not isinstance(covers, list) or not covers or not all(isinstance(ac, str) for ac in covers) or len(covers) != len(set(covers)) or any(ac not in acceptance for ac in covers):
             raise NuclioError("INVALID_DELIVERY", "invalid milestone")
         handoff = milestone["handoff"]
         if handoff is not None and (not isinstance(handoff, dict) or set(handoff) != {"summary", "remaining"} or not all(isinstance(handoff[key], str) and handoff[key].strip() for key in handoff)):
@@ -358,26 +363,26 @@ def validate_state(state: Any, change_id: str) -> dict[str, Any]:
     if not isinstance(state, dict) or set(state) != required or state.get("schema_version") != 1 or state.get("change_id") != change_id:
         raise NuclioError("INVALID_STATE", "state.yaml schema or identity mismatch")
     revision, phase = state["revision"], state["phase"]
-    if (revision is not None and (not isinstance(revision, int) or isinstance(revision, bool) or revision < 1)) or phase not in {"shape", "build", "verified", "complete"}:
+    if (revision is not None and (not isinstance(revision, int) or isinstance(revision, bool) or revision < 1)) or not isinstance(phase, str) or phase not in {"shape", "build", "verified", "complete"}:
         raise NuclioError("INVALID_STATE", "state.yaml revision or phase is invalid")
     if not all(valid_sha_or_null(state[key]) for key in ("base_head", "approval_head", "verified_head")):
         raise NuclioError("INVALID_STATE", "state.yaml Git identity is invalid")
     verification = state["verification"]
     if not isinstance(verification, dict) or set(verification) != {"checks", "acceptance", "manual", "review"} or not isinstance(verification["checks"], list) or not isinstance(verification["acceptance"], dict) or not isinstance(verification["manual"], list) or verification["review"] is not None and not isinstance(verification["review"], dict):
         raise NuclioError("INVALID_STATE", "state.yaml verification is invalid")
-    if any(not isinstance(ac, str) or not AC_ID_RE.fullmatch(ac) or result not in {"missing", "passed"} for ac, result in verification["acceptance"].items()):
+    if any(not isinstance(ac, str) or not AC_ID_RE.fullmatch(ac) or not isinstance(result, str) or result not in {"missing", "passed"} for ac, result in verification["acceptance"].items()):
         raise NuclioError("INVALID_STATE", "state.yaml Acceptance evidence is invalid")
     check_keys = {"id", "source", "run", "cwd", "timeout_seconds", "covers", "head", "exit_code", "summary"}
-    if any(not isinstance(item, dict) or set(item) != check_keys or not isinstance(item["id"], str) or item["source"] not in {"change", "project"} or not isinstance(item["run"], list) or not item["run"] or not all(isinstance(arg, str) and arg for arg in item["run"]) or not isinstance(item["cwd"], str) or not isinstance(item["covers"], list) or not valid_sha_or_null(item["head"]) or not isinstance(item["exit_code"], int) or isinstance(item["exit_code"], bool) or not isinstance(item["summary"], str) for item in verification["checks"]):
+    if any(not isinstance(item, dict) or set(item) != check_keys or not isinstance(item["id"], str) or not isinstance(item["source"], str) or item["source"] not in {"change", "project"} or not isinstance(item["run"], list) or not item["run"] or not all(isinstance(arg, str) and arg for arg in item["run"]) or not isinstance(item["cwd"], str) or not isinstance(item["covers"], list) or not valid_sha_or_null(item["head"]) or not isinstance(item["exit_code"], int) or isinstance(item["exit_code"], bool) or not isinstance(item["summary"], str) for item in verification["checks"]):
         raise NuclioError("INVALID_STATE", "state.yaml check evidence is invalid")
     manual_keys = {"acceptance", "steps", "result", "executor", "head"}
     if any(not isinstance(item, dict) or set(item) != manual_keys or not isinstance(item["acceptance"], str) or not AC_ID_RE.fullmatch(item["acceptance"]) or not all(isinstance(item[key], str) and item[key].strip() for key in ("steps", "result", "executor")) or not valid_sha_or_null(item["head"]) for item in verification["manual"]):
         raise NuclioError("INVALID_STATE", "state.yaml manual evidence is invalid")
     review = verification["review"]
-    if review is not None and (set(review) != {"status", "summary", "covers", "head"} or review["status"] not in {"PASS", "FAIL"} or not isinstance(review["summary"], str) or not review["summary"].strip() or not isinstance(review["covers"], list) or not all(isinstance(ac, str) and AC_ID_RE.fullmatch(ac) for ac in review["covers"]) or not valid_sha_or_null(review["head"])):
+    if review is not None and (set(review) != {"status", "summary", "covers", "head"} or not isinstance(review["status"], str) or review["status"] not in {"PASS", "FAIL"} or not isinstance(review["summary"], str) or not review["summary"].strip() or not isinstance(review["covers"], list) or not all(isinstance(ac, str) and AC_ID_RE.fullmatch(ac) for ac in review["covers"]) or not valid_sha_or_null(review["head"])):
         raise NuclioError("INVALID_STATE", "state.yaml review evidence is invalid")
     knowledge = state["knowledge"]
-    if not isinstance(knowledge, dict) or set(knowledge) != {"result", "paths"} or knowledge["result"] not in {None, *KNOWLEDGE_RESULTS} or not isinstance(knowledge["paths"], list):
+    if not isinstance(knowledge, dict) or set(knowledge) != {"result", "paths"} or knowledge["result"] is not None and (not isinstance(knowledge["result"], str) or knowledge["result"] not in KNOWLEDGE_RESULTS) or not isinstance(knowledge["paths"], list):
         raise NuclioError("INVALID_STATE", "state.yaml knowledge is invalid")
     paths = [valid_knowledge_path(path) for path in knowledge["paths"]]
     if len(paths) != len(set(paths)) or ((knowledge["result"] in {None, "NO_OP", "REJECTED"}) and paths) or (knowledge["result"] in {"APPLIED", "PARTIAL"} and not paths):
@@ -484,10 +489,15 @@ def try_recover_approval(root: Path, change_id: str, state: dict[str, Any], revi
     return True
 
 
+class Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise NuclioError("INVALID_ARGUMENTS", message)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Nuclio v3 thin Runtime")
+    parser = Parser(description="Nuclio v3 thin Runtime")
     parser.add_argument("--project-root", default=".", help="explicit project root")
-    sub = parser.add_subparsers(dest="command", metavar="{" + ",".join(COMMANDS) + "}", required=True)
+    sub = parser.add_subparsers(dest="command", metavar="{" + ",".join(COMMANDS) + "}", required=True, parser_class=Parser)
     create = sub.add_parser("create", help="create a v3 change artifact set")
     create.add_argument("--id", required=True); create.add_argument("--title", required=True); create.add_argument("--goal", required=True)
     create.add_argument("--context", default="No additional context."); create.add_argument("--constraint", default="No additional constraints.")
@@ -526,8 +536,8 @@ def cmd_create(args: argparse.Namespace, root: Path) -> int:
     if not all(isinstance(value, str) and value.strip() and "\n" not in value for value in (args.title, args.goal, args.context, args.constraint, args.non_goal)):
         raise NuclioError("INVALID_INPUT", "title and contract text must be non-empty single lines")
     acceptance = args.acceptance or [args.goal]
-    if not all(isinstance(value, str) and value.strip() for value in acceptance):
-        raise NuclioError("INVALID_INPUT", "acceptance items must be non-empty")
+    if not all(isinstance(value, str) and value.strip() and "\n" not in value and "\r" not in value for value in acceptance):
+        raise NuclioError("INVALID_INPUT", "acceptance items must be non-empty single lines")
     directory.mkdir()
     frontmatter = require_yaml().safe_dump({"schema_version": 1, "change_id": change_id, "revision": 1}, sort_keys=False, allow_unicode=True).rstrip()
     criteria = "\n".join(f"- AC-{index}: {value}" for index, value in enumerate(acceptance, 1))
@@ -545,7 +555,7 @@ def cmd_approve(args: argparse.Namespace, root: Path) -> int:
     require_clean_index(root); require_product_clean(root, change_id)
     if state.get("approval_head") and revision <= state.get("revision", 0):
         raise NuclioError("REVISION_NOT_INCREMENTED", "reapproval requires a higher change.md revision")
-    original = state_file(root, change_id).read_bytes()
+    original = copy.deepcopy(state)
     state["base_head"] = state["base_head"] or head(root)
     state.update({"revision": revision, "approval_head": None, "verified_head": None, "phase": "build", "verification": {"checks": [], "acceptance": {ac: "missing" for ac in change["acceptance"]}, "manual": [], "review": None}, "knowledge": {"result": None, "paths": []}})
     paths = sorted(approval_paths(change_id)); expected_parent = head(root)
@@ -553,9 +563,9 @@ def cmd_approve(args: argparse.Namespace, root: Path) -> int:
         write_state(root, change_id, state)
         git(root, "add", "--", *paths)
         git(root, "commit", "-m", approval_subject(change_id, revision))
-    except Exception:
+    except (NuclioError, OSError):
         git(root, "restore", "--staged", "--", *paths, allow_fail=True)
-        state_file(root, change_id).write_bytes(original)
+        write_state(root, change_id, original)
         raise
     if commit_parent(root) != expected_parent or commit_subject(root) != approval_subject(change_id, revision) or not approval_commit_paths(root, change_id) or not index_clean(root):
         raise NuclioError("APPROVAL_COMMIT_INVALID", "approval commit does not contain only required v3 artifacts")
@@ -567,19 +577,51 @@ def cmd_status(args: argparse.Namespace, root: Path) -> int:
     change_id = validate_id(args.id); require_attached_head(root); change, delivery, checks = current_definition(root, change_id); state = load_state(root, change_id)
     if state.get("approval_head"):
         require_current_contract(root, change_id, state, change)
-    records = {item.get("id"): item for item in state.get("verification", {}).get("checks", []) if isinstance(item, dict)}
     current = head(root)
-    failed = [check["id"] for check in checks if check["id"] not in records or records[check["id"]].get("head") != current or records[check["id"]].get("exit_code") != 0 or {key: records[check["id"]].get(key) for key in ("id", "source", "run", "cwd", "timeout_seconds", "covers")} != check]
+    failed, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], current)
+    missing_acceptance = sorted(set(change["acceptance"]) - passed)
     milestone = next((item for item in delivery["milestones"] if item["status"] != "done"), delivery["milestones"][-1])
     phase = state.get("phase", "shape")
-    disposition = "done" if phase == "archived" else ("await-user" if phase == "shape" else "continue")
-    return emit_ok({"change_id": change_id, "phase": phase, "disposition": disposition, "goal": change["sections"]["Goal"], "constraints": change["sections"]["Constraints"], "non_goals": change["sections"]["Non-goals"], "milestone": {"id": milestone["id"], "outcome": milestone["outcome"], "acceptance": milestone["covers"]}, "handoff": milestone["handoff"], "git": {"base_head": state.get("base_head"), "approval_head": state.get("approval_head"), "current_head": current}, "failed_checks": failed, "next_action": "confirm-contract" if phase == "shape" else ("run-required-checks" if failed else "verify")})
+    evidence_current = state.get("verified_head") == current and not failed and not stale_checks and not missing_acceptance and not review_failed
+    final = ("Outcome", "Validation", "Knowledge Updates", "Residual Risks")
+    completion_current = all(change["sections"].get(name) for name in final) and change["order"][-4:] == list(final)
+    dirty_paths = porcelain(root)
+    knowledge_dirty = {path for path in dirty_paths if path == ".dev-docs/index.md" or path.startswith(".dev-docs/knowledge/")}
+    allowed_dirty = knowledge_dirty if phase == "verified" else set(state["knowledge"]["paths"]) if phase == "complete" and state["knowledge"]["result"] in {"APPLIED", "PARTIAL"} else set()
+    dirty_product = product_dirty_paths(root, change_id, allowed_dirty)
+    dirty_index = not index_clean(root)
+    clean_gate = not dirty_index and not dirty_product
+    if phase == "shape":
+        next_action = "confirm-contract"
+    elif phase == "complete" and evidence_current:
+        next_action = "build" if not clean_gate else "archive" if completion_current else "finish"
+    elif review_failed:
+        next_action = "build"
+    elif failed:
+        next_action = "run-required-checks"
+    elif stale_checks:
+        next_action = "verify"
+    elif phase == "complete" or phase == "verified" and not evidence_current:
+        next_action = "build"
+    elif phase == "verified":
+        next_action = "finish" if clean_gate else "build"
+    else:
+        next_action = "verify"
+    review = state["verification"]["review"]
+    review_blocker = review if review_failed else None
+    return emit_ok({"change_id": change_id, "phase": phase, "disposition": "await-user" if phase == "shape" else "continue", "goal": change["sections"]["Goal"], "constraints": change["sections"]["Constraints"], "non_goals": change["sections"]["Non-goals"], "milestone": {"id": milestone["id"], "outcome": milestone["outcome"], "acceptance": milestone["covers"]}, "handoff": milestone["handoff"], "git": {"base_head": state.get("base_head"), "approval_head": state.get("approval_head"), "verified_head": state.get("verified_head"), "current_head": current}, "failed_checks": failed, "stale_checks": stale_checks, "missing_acceptance": missing_acceptance, "review_blocker": review_blocker, "clean_gate": {"index_clean": not dirty_index, "dirty_product": dirty_product, "allowed_dirty": sorted(allowed_dirty)}, "next_action": next_action})
 
 
 def cmd_record_check(args: argparse.Namespace, root: Path) -> int:
     change_id = validate_id(args.id); require_attached_head(root); change, _delivery, checks = current_definition(root, change_id); state = load_state(root, change_id)
-    require_current_contract(root, change_id, state, change); require_clean_index(root); require_product_clean(root, change_id)
     current = head(root)
+    require_current_contract(root, change_id, state, change)
+    if state.get("phase") == "complete":
+        missing, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], current)
+        if state.get("verified_head") == current and not missing and not stale_checks and passed == set(change["acceptance"]) and not review_failed:
+            raise NuclioError("CHANGE_COMPLETE", "current complete changes cannot record new check evidence")
+    allowed_dirty = set(state["knowledge"]["paths"]) if state["knowledge"]["result"] in {"APPLIED", "PARTIAL"} else set()
+    require_clean_index(root); require_product_clean(root, change_id, allowed_dirty)
     if args.head != current:
         raise NuclioError("HEAD_DRIFT", "recorded check HEAD differs from current HEAD", expected=current, actual=args.head)
     definition = next((item for item in checks if item["id"] == args.check_id), None)
@@ -597,14 +639,14 @@ def cmd_record_check(args: argparse.Namespace, root: Path) -> int:
     return emit_ok({"change_id": change_id, "check_id": definition["id"], "exit_code": args.exit_code, "head": current})
 
 
-def manual_records(args: argparse.Namespace, acceptance: set[str], current: str) -> list[dict[str, Any]]:
+def manual_records(values: list[str], acceptance: set[str], current: str) -> list[dict[str, Any]]:
     result = []
-    for item in args.manual:
+    for item in values:
         try:
             data = json.loads(item)
         except json.JSONDecodeError as exc:
             raise NuclioError("INVALID_MANUAL", "--manual must be a JSON object") from exc
-        if not isinstance(data, dict) or set(data) != {"acceptance", "steps", "result", "executor"} or data["acceptance"] not in acceptance or not all(isinstance(data[key], str) and data[key].strip() for key in ("steps", "result", "executor")):
+        if not isinstance(data, dict) or set(data) != {"acceptance", "steps", "result", "executor"} or not isinstance(data.get("acceptance"), str) or data["acceptance"] not in acceptance or not all(isinstance(data.get(key), str) and data[key].strip() for key in ("steps", "result", "executor")):
             raise NuclioError("INVALID_MANUAL", "manual observation requires acceptance, steps, result, executor")
         result.append({**data, "head": current})
     return result
@@ -612,30 +654,32 @@ def manual_records(args: argparse.Namespace, acceptance: set[str], current: str)
 
 def cmd_verify(args: argparse.Namespace, root: Path) -> int:
     change_id = validate_id(args.id); require_attached_head(root); change, _delivery, checks = current_definition(root, change_id); state = load_state(root, change_id)
-    require_current_contract(root, change_id, state, change); require_clean_index(root); require_product_clean(root, change_id)
-    current = head(root); verification = state.setdefault("verification", {"checks": [], "acceptance": {}, "manual": [], "review": None})
-    records = {item.get("id"): item for item in verification.get("checks", []) if isinstance(item, dict)}
-    passed: set[str] = set(); missing: list[str] = []
-    for definition in checks:
-        record = records.get(definition["id"])
-        if not record or record.get("head") != current or record.get("exit_code") != 0 or {key: record.get(key) for key in ("id", "source", "run", "cwd", "timeout_seconds", "covers")} != definition:
-            missing.append(definition["id"])
-        elif definition["source"] == "change":
-            passed.update(definition["covers"])
-    manual = manual_records(args, set(change["acceptance"]), current)
-    passed.update(item["acceptance"] for item in manual)
-    review = verification.get("review")
+    current = head(root)
+    require_current_contract(root, change_id, state, change)
+    if state.get("phase") == "complete":
+        missing, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], current)
+        if state.get("verified_head") == current and not missing and not stale_checks and passed == set(change["acceptance"]) and not review_failed:
+            raise NuclioError("CHANGE_COMPLETE", "current complete changes cannot be verified again")
+    allowed_dirty = set(state["knowledge"]["paths"]) if state["knowledge"]["result"] in {"APPLIED", "PARTIAL"} else set()
+    require_clean_index(root); require_product_clean(root, change_id, allowed_dirty)
+    verification = state["verification"]
+    if args.manual:
+        verification["manual"] = manual_records(args.manual, set(change["acceptance"]), current)
+    else:
+        verification["manual"] = [item for item in verification["manual"] if item["head"] == current]
+    review = verification["review"]
     if args.review_status:
-        if not args.review_summary.strip() or not args.review_cover or any(item not in change["acceptance"] for item in args.review_cover):
+        covers = args.review_cover
+        if not args.review_summary.strip() or not isinstance(covers, list) or not covers or not all(isinstance(item, str) for item in covers) or any(item not in change["acceptance"] for item in covers):
             raise NuclioError("INVALID_REVIEW", "review requires summary and covered Acceptance IDs")
-        review = {"status": args.review_status, "summary": args.review_summary.strip()[:1000], "covers": sorted(set(args.review_cover)), "head": current}
-        if args.review_status == "PASS":
-            passed.update(review["covers"])
-    elif isinstance(review, dict) and review.get("head") == current and review.get("status") == "PASS":
-        passed.update(review.get("covers", []))
-    verification["manual"], verification["review"] = manual, review
+        review = {"status": args.review_status, "summary": args.review_summary.strip()[:1000], "covers": sorted(set(covers)), "head": current}
+    verification["review"] = review
+    missing, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], verification, current)
+    if stale_checks:
+        definitions = {check["id"] for check in checks}
+        verification["checks"] = [item for item in verification["checks"] if item["id"] in definitions]
     verification["acceptance"] = {ac: "passed" if ac in passed else "missing" for ac in change["acceptance"]}
-    if not missing and len(passed) == len(change["acceptance"]):
+    if not missing and passed == set(change["acceptance"]) and not review_failed:
         state["verified_head"] = current; state["phase"] = "verified"
     else:
         state["verified_head"] = None; state["phase"] = "build"
@@ -649,8 +693,10 @@ def valid_knowledge_path(value: str) -> str:
     return value
 
 
-def current_evidence(checks: list[dict[str, Any]], acceptance: list[str], verification: dict[str, Any], current: str) -> tuple[list[str], set[str]]:
+def current_evidence(checks: list[dict[str, Any]], acceptance: list[str], verification: dict[str, Any], current: str) -> tuple[list[str], set[str], bool, list[str]]:
     records = {item.get("id"): item for item in verification["checks"]}
+    definitions = {check["id"] for check in checks}
+    stale = sorted(item["id"] for item in verification["checks"] if item["id"] not in definitions)
     missing, passed = [], set()
     for definition in checks:
         record = records.get(definition["id"])
@@ -660,16 +706,17 @@ def current_evidence(checks: list[dict[str, Any]], acceptance: list[str], verifi
             passed.update(definition["covers"])
     passed.update(item["acceptance"] for item in verification["manual"] if item["head"] == current)
     review = verification["review"]
+    review_failed = isinstance(review, dict) and review["head"] == current and review["status"] == "FAIL"
     if isinstance(review, dict) and review["head"] == current and review["status"] == "PASS":
         passed.update(review["covers"])
-    return missing, passed & set(acceptance)
+    return missing, passed & set(acceptance), review_failed, stale
 
 
 def cmd_complete(args: argparse.Namespace, root: Path) -> int:
     change_id = validate_id(args.id); require_attached_head(root); change, _delivery, checks = current_definition(root, change_id); state = load_state(root, change_id)
     require_current_contract(root, change_id, state, change); require_clean_index(root)
-    current = head(root); missing, passed = current_evidence(checks, change["acceptance"], state["verification"], current)
-    if state.get("verified_head") != current or missing or passed != set(change["acceptance"]):
+    current = head(root); missing, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], current)
+    if state.get("verified_head") != current or missing or stale_checks or passed != set(change["acceptance"]) or review_failed:
         raise NuclioError("VERIFICATION_NOT_CURRENT", "all current checks and Acceptance evidence must pass at the current HEAD", missing_checks=missing, missing_acceptance=sorted(set(change["acceptance"]) - passed))
     parse_change(active_dir(root, change_id) / "change.md", change_id, completion=True)
     knowledge = [valid_knowledge_path(item) for item in args.knowledge_path]
@@ -709,7 +756,15 @@ def cmd_archive(args: argparse.Namespace, root: Path) -> int:
             return emit_ok({"change_id": change_id, "path": rel(root, target), "recovered": True})
         if state.get("phase") != "complete" or state.get("verified_head") != head(root):
             raise NuclioError("ARCHIVE_RECOVERY_REQUIRED", "archive move exists without a recoverable terminal state")
-        parse_change(target / "change.md", change_id, completion=True)
+        change = parse_change(target / "change.md", change_id, completion=True)
+        require_current_contract(root, change_id, state, change)
+        delivery = parse_delivery(root, change_id, change["acceptance"], target)
+        checks = project_checks(root, change["acceptance"]) + delivery["checks"]
+        if len({check["id"] for check in checks}) != len(checks):
+            raise NuclioError("DUPLICATE_CHECK_ID", "project and change checks must have unique IDs")
+        missing, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], head(root))
+        if missing or stale_checks or passed != set(change["acceptance"]) or review_failed:
+            raise NuclioError("VERIFICATION_NOT_CURRENT", "all current checks and Acceptance evidence must pass at the current HEAD", missing_checks=missing, missing_acceptance=sorted(set(change["acceptance"]) - passed))
         paths = archive_paths(change_id, state)
         require_clean_index(root); require_product_clean(root, change_id, set(paths))
         git(root, "add", "-A", "--", *paths)
@@ -723,10 +778,14 @@ def cmd_archive(args: argparse.Namespace, root: Path) -> int:
         return emit_ok({"change_id": change_id, "path": rel(root, target), "archive_commit": head(root), "recovered": True})
     if target.exists() or not source.exists():
         raise NuclioError("ARCHIVE_CONFLICT", "active and archive paths conflict")
-    reject_v2_active(root, change_id); exact_artifacts(source); state = load_state(root, change_id); change, _delivery, _checks = current_definition(root, change_id)
+    reject_v2_active(root, change_id); exact_artifacts(source); state = load_state(root, change_id); change, _delivery, checks = current_definition(root, change_id)
     require_current_contract(root, change_id, state, change); parse_change(source / "change.md", change_id, completion=True)
-    if state.get("phase") != "complete" or state.get("verified_head") != head(root):
+    current = head(root)
+    if state.get("phase") != "complete" or state.get("verified_head") != current:
         raise NuclioError("CHANGE_NOT_COMPLETE", "archive requires a current completed and verified change")
+    missing, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], current)
+    if missing or stale_checks or passed != set(change["acceptance"]) or review_failed:
+        raise NuclioError("VERIFICATION_NOT_CURRENT", "all current checks and Acceptance evidence must pass at the current HEAD", missing_checks=missing, missing_acceptance=sorted(set(change["acceptance"]) - passed))
     require_clean_index(root); require_product_clean(root, change_id, set(state["knowledge"]["paths"]))
     target.parent.mkdir(parents=True, exist_ok=True); source.rename(target)
     paths = archive_paths(change_id, state)
@@ -742,8 +801,8 @@ def cmd_archive(args: argparse.Namespace, root: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
     try:
+        args = build_parser().parse_args(argv)
         return args.func(args, root_path(args.project_root))
     except NuclioError as error:
         return emit_error(error)

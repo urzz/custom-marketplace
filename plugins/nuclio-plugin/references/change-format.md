@@ -104,12 +104,14 @@ State 不保存合同正文、content hash、完整命令输出、diff、Agent/t
 
 ## Runtime commands and gates
 
-CLI 仅有 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令，成功和失败均以 JSON 表达。`record-check` 只比较调用方给出的 argv、HEAD、exit code 与当前定义并记录结果，绝不执行 argv。
+CLI 仅有 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令；成功、参数错误和 schema 错误均以 JSON 表达。`record-check` 只比较调用方给出的 argv、HEAD、exit code 与当前定义并记录结果，绝不执行 argv。
 
 `approve` 要求完整合同、完整 delivery、附着 HEAD、空 index 和干净产品工作区；它只提交三件套，subject 为 `approve(<id>): confirm revision <n>`。提交成功但 State 回写中断时，重跑可恢复该提交。重新批准保留首次 `base_head`，替换 approval HEAD，并清空旧验证。
 
-`verify` 要求批准合同未漂移、delivery 覆盖完整、产品工作区干净，且所有当前定义的项目与 change checks 都在当前 HEAD 通过。HEAD、合同或 check 的 `source`、`id`、`run`、`cwd`、`timeout_seconds`、`covers` 任一漂移都会使旧依据失效。`complete` 还要求每条 Acceptance 有当前依据、当前 HEAD 等于 `verified_head`、完成 section 已写入，以及明确且精确的知识结果。
+正常 `verify` 要求批准合同未漂移、delivery 覆盖完整、产品工作区干净，且所有当前定义的项目与 change checks 都在当前 HEAD 通过；stale complete 恢复时仅允许 State 已精确登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty，其他 dirty 路径仍被拒绝。HEAD、合同或 check 的 `source`、`id`、`run`、`cwd`、`timeout_seconds`、`covers` 任一漂移（包括新增或删除 check ID）都会使旧依据失效；重跑 `verify` 会移除已不在当前定义中的旧记录。当前 HEAD 上显式 reviewer `FAIL` 会阻断 `verify` 和 `complete`；同一 HEAD 的 `PASS` 可解除该阻断。未提供 `--manual` 时保留同一 HEAD 的已有手工依据；提供 `--manual` 时以该次完整批次替换，旧 HEAD 依据自然失效。`complete` 还要求每条 Acceptance 有当前依据、当前 HEAD 等于 `verified_head`、完成 section 已写入，以及明确且精确的知识结果；terminal evidence 仍为当前时 `verify` 不会降级 complete State，stale complete 恢复时可按验证结果转为 `verified|build`。
 
-知识结果为 `NO_OP|APPLIED|PARTIAL|REJECTED`。前两种无路径；`APPLIED|PARTIAL` 必须给出与当前 dirty knowledge 路径精确一致的 `.dev-docs/knowledge/**` 或 `.dev-docs/index.md` 路径。
+`status.next_action` 按当前事实恢复，并在工作包中返回 index 与 dirty-product clean gate：`shape` 为 `confirm-contract`；当前 reviewer `FAIL` 优先为 `build`；检查缺失、失败或过期为 `run-required-checks`；verified evidence 因 HEAD 漂移失效为 `build`；其余尚未绑定的证据为 `verify`；当前 `verified` 仅在 index 为空且除 Finish 可确认的 knowledge 候选外无产品 dirty 时为 `finish`。`complete` 仅在 terminal evidence、完成章节与 clean gate 均当前时为 `archive`；clean gate 只允许 State 已登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty。完成章节缺失为 `finish`，证据或 clean gate 漂移按相同规则回到 Build/检查并允许 `record-check`、`verify` 重建依据，不重新确认未变化的合同。工作包同时返回 `verified_head`、缺失 Acceptance 和当前 reviewer blocker。
 
-`archive` 只处理已完成的显式 change，完整保留三件套，subject 为 `archive(<id>): retain complete change record`。它只暂存 active/archive 三件套和确认的知识路径，不吸收无关修改；移动或提交中断可重跑恢复，成功重跑幂等。Runtime 不 push、merge、stash、reset、clean、切换分支或改写历史。
+知识结果为 `NO_OP|APPLIED|PARTIAL|REJECTED`。`NO_OP|REJECTED` 不带路径；`APPLIED|PARTIAL` 必须给出与当前 dirty knowledge 路径精确一致的 `.dev-docs/knowledge/**` 或 `.dev-docs/index.md` 路径。
+
+`archive` 只处理已完成的显式 change，完整保留三件套，subject 为 `archive(<id>): retain complete change record`。正常归档及移动/提交中断恢复都重新验证批准合同、完整 delivery、当前 check 定义和 terminal evidence；它只暂存 active/archive 三件套和确认的知识路径，不吸收无关修改。成功重跑幂等。terminal evidence 仍为当前的完成态拒绝新的 `record-check`，避免 State 被无条件降级；证据漂移后的完成态可按恢复路由重建依据。Runtime 不 push、merge、stash、reset、clean、切换分支或改写历史。

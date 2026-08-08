@@ -63,6 +63,15 @@ class V3RuntimeContracts(unittest.TestCase):
         self.assertIn('NuclioError("V2_ACTIVE_UNSUPPORTED"', source)
         self.assertNotIn("legacy compatibility", source.lower())
 
+    def test_knowledge_result_paths_have_exact_contract(self):
+        change_format = read(REFERENCES / "change-format.md")
+        self.assertIn("`NO_OP|REJECTED` 不带路径", change_format)
+        self.assertIn("`APPLIED|PARTIAL` 必须给出与当前 dirty knowledge 路径精确一致", change_format)
+        self.assertNotIn("前两种无路径", change_format)
+        source = read(RUNTIME)
+        self.assertIn('args.knowledge_result in {"NO_OP", "REJECTED"} and knowledge', source)
+        self.assertIn('args.knowledge_result in {"APPLIED", "PARTIAL"} and not knowledge', source)
+
 
 class ClaudeCodeContracts(unittest.TestCase):
     def test_skills_are_explicit_and_work_uses_portable_paths(self):

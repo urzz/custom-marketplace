@@ -24,11 +24,11 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 
 调用。`${CLAUDE_SKILL_DIR}` 只定位 bundled script；`${CLAUDE_PROJECT_DIR}` 是唯一写入根目录。插件源码和 Marketplace cache 只读。
 
-`status --json` 是恢复入口：读取其紧凑工作包，再读当前合同、milestone/handoff、由索引路由的相关知识及相关代码/测试。不要以旧聊天、全部 archive 或整个知识库恢复工作。v2 active 输入（包括 `plan.yaml`）必须 fail closed；旧 archive 不扫描、不解析、不修改。
+`status --json` 是恢复入口：读取其紧凑工作包，再读当前合同、milestone/handoff、由索引路由的相关知识及相关代码/测试，并按当前 evidence 计算的 `next_action` 恢复到合同确认、Build、Verify、Finish 或 archive；`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。不要以旧聊天、全部 archive 或整个知识库恢复工作。v2 active 输入（包括 `plan.yaml`）必须 fail closed；旧 archive 不扫描、不解析、不修改。
 
 ## Verification and review
 
-`delivery.yaml` 定义 check argv；Claude Code 直接运行它们，Runtime 的 `record-check` 绝不执行 argv。合同、HEAD、check 定义或产品工作区漂移均使旧验证失效。`verify` 要求当前合同、完整覆盖、当前检查和干净产品工作区；`complete` 还要求完成 section 与明确知识结果。
+`delivery.yaml` 定义 check argv；Claude Code 直接运行它们，Runtime 的 `record-check` 绝不执行 argv。合同、HEAD、check 定义或未登记的产品工作区漂移均使旧验证失效。正常 `verify` 要求当前合同、完整覆盖、当前检查和干净产品工作区；stale complete 恢复仅允许 State 已精确登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty，其他 dirty 路径继续 fail closed。`complete` 还要求完成 section 与明确知识结果。
 
 主会话始终 self-review。独立审查只在用户/项目要求或安全、权限、迁移、并发、公共 API、不可逆行为或弱 oracle 等实际需要时使用。可选 `nuclio:readonly-reviewer` 只能读文件并返回 findings；它不运行 shell、不写文件、不调用 Skill 或 Agent，不决定 Runtime。
 

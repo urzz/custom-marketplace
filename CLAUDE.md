@@ -70,7 +70,7 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 - active change 与新 archive 都完整保留 `change.md`、`delivery.yaml`、`state.yaml`。主会话是唯一控制器；`change.py` 是唯一 State writer，只提供 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令。
 - 用户只确认结果合同。主会话自主维护 delivery milestone、实施方式、检查和合同不变的修复；只有产品语义、兼容性、外部副作用或不可逆结果变化才重新确认。
 - bundled Runtime 通过 `${CLAUDE_SKILL_DIR}` 定位，并显式传入 `${CLAUDE_PROJECT_DIR}`；插件源码和 Marketplace cache 始终只读，运行时写入只落在项目 `.dev-docs/**`。
-- `record-check` 只校验并记录 Claude Code 直接运行的 exact argv，不执行命令。合同、HEAD、检查定义或产品工作区漂移必须使旧验证失效；失败、缺失或过期依据回到 Build 修复。
+- `record-check` 只校验并记录 Claude Code 直接运行的 exact argv，不执行命令。合同、HEAD、检查定义或未登记的产品工作区漂移必须使旧验证失效；stale complete 恢复仅可保留 State 已精确登记的 `APPLIED|PARTIAL` knowledge dirty 路径，详细例外以 Runtime reference 为准。失败、缺失或过期依据回到 Build 修复。
 - 主会话始终自检；独立审查仅按需要使用 `nuclio:readonly-reviewer`。其工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings，不运行 shell、不写文件、不调用 Skill 或 Agent，也不接管 Runtime。
 - Shape、Build、恢复、Verify 与 Finish 均从 `.dev-docs/index.md` 路由相关知识；不默认读取全部知识或 archive。Finish 同时检查新增候选和既有知识失效，无候选记录 `NO_OP`，有候选只询问一次“写入并归档（推荐）/跳过并归档”。
 - v2 active 输入必须 fail closed；旧 archive 不扫描、解析、修改或删除。archive 只处理显式已完成 change，完整保留三件套且可恢复重跑，不吸收无关 dirty work。

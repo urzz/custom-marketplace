@@ -49,7 +49,7 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_PROJECT_DIR}" verify --id <change-id>
 ```
 
-Verify FAIL、缺失或过期依据时回到 Build 自主修复；HEAD、合同或 check 定义变化会使旧依据失效。先进行主会话整体自检；用户或项目要求、较高后果或验证不足时，可选用 fresh `nuclio:readonly-reviewer`。reviewer 只返回 findings，主会话自行决定后续工作和 Runtime 输入。
+恢复时按 `status --json` 基于当前 evidence 给出的 `next_action` 继续到合同确认、Build、Verify、Finish 或 archive；`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。Verify FAIL、缺失或过期依据时回到 Build 自主修复；向 Runtime 提交当前 reviewer `FAIL` 同样回到 Build。HEAD、合同或 check 定义变化会使旧依据失效。先进行主会话整体自检；用户或项目要求、较高后果或验证不足时，可选用 fresh `nuclio:readonly-reviewer`。reviewer 只返回 findings，主会话自行决定后续工作和 Runtime 输入。
 
 ### 4. Finish
 
