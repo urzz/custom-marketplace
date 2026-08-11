@@ -1,7 +1,7 @@
 {
   "name": "nuclio",
-  "description": "Use when a project needs Nuclio v3 5.0.0 for explicit /nuclio:init knowledge skeleton setup or /nuclio:work delivery: one user-confirmed result contract in change.md, Agent-maintained delivery.yaml, Runtime-owned state.yaml, seven Runtime commands, index-first knowledge, current verification, optional read-only reviewer, and recoverable complete archive.",
-  "version": "5.0.0",
+  "description": "Use when a project needs Nuclio v3 5.1.0 for explicit /nuclio:init knowledge setup or /nuclio:work delivery, including optional read-only Open Design MCP intake from a project binding followed by a repository design snapshot; provides one user-confirmed result contract, file-first delivery state, current verification, optional read-only review, and recoverable archive.",
+  "version": "5.1.0",
   "author": {
     "name": "Jade Liu",
     "email": "[redacted-email]"

@@ -1,6 +1,6 @@
 ---
 name: work
-description: "仅在用户显式要求以 Nuclio v3 创建、恢复或交付一个 change 时使用。"
+description: "仅在用户显式要求以 Nuclio v3 创建、恢复或交付一个 change 时使用；可按项目绑定读取 Open Design 设计交付。"
 disable-model-invocation: true
 ---
 # Nuclio Work
@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 ## Read first
 
-按当前阶段读取一层 reference：[workflow](../../references/workflow.md)、[change format](../../references/change-format.md)、[knowledge](../../references/knowledge.md)、[context hygiene](../../references/context-hygiene.md)。
+按当前阶段读取一层 reference：[workflow](../../references/workflow.md)、[change format](../../references/change-format.md)、[knowledge](../../references/knowledge.md)、[context hygiene](../../references/context-hygiene.md)。仅当请求明确使用 Open Design 且用户请求或索引路由的项目知识提供绑定 `project-id` 时，读取 [Open Design handoff](../../references/open-design-handoff.md)。
 
 所有 Runtime 调用使用 bundled script 与显式项目根目录，绝不依赖当前目录或插件源码路径：
 
@@ -25,6 +25,8 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 
 调查用户请求、仓库事实和通过 `.dev-docs/index.md` 路由的相关长期知识；不默认读取整个知识目录、archive 或旧聊天。定位唯一 active change；不存在时以 `create` 创建三件套草稿。`create` 的单行参数只是种子；创建后必须重新读取并按调查事实补全 `change.md`，使其无需旧聊天也能说明 Goal、必要 Context、每项独立 Constraint/Non-goal 和可观察 Acceptance。多个独立边界使用列表，不得压成一句同义概括，也不得把实现步骤写入结果合同。
 
+Open Design 输入在 Shape 只通过用户已配置的 MCP 读取；显式绑定优先于活动页面，不得猜测项目。合同批准前不把设计文件写入产品仓库；MCP 不可用、绑定无效或交付不完整时按 reference 报告 blocker。
+
 展示精简但信息完整的结果合同并使用一次 `AskUserQuestion` 获得明确确认。精简不等于单句，只删除重复措辞和未确认的实施细节；不得省略已发现的独立边界、兼容性、外部副作用或验收结果。只确认结果、边界和 Acceptance；不得要求用户批准 milestone、路径、实现方式、Agent 选择、commit 或普通修复。合同语义、用户可见行为、兼容性、外部副作用或不可逆结果出现新决定时，回到 Shape、提升 revision 并重新确认。
 
 确认后创建或调整 `delivery.yaml`，保证 milestone 和检查覆盖全部 Acceptance，然后执行：
@@ -36,6 +38,8 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 ### 2. Build
 
 主会话自主维护 milestone、状态和短 handoff；合同不变时可重排、拆分或合并 milestone，并可直接实现或按需委派 Claude Code Agent。每次仅从索引读取与当前 milestone 有关的知识，再读取相关代码、测试和配置。agent dispatch 只提供当前 milestone、相关 Acceptance、Constraints/Non-goals、handoff、相关知识路径及读取理由、必要范围和预期检查；不得复制完整知识正文。
+
+Open Design change 在批准后的首个相关 milestone 中固化已接受的设计交付，随后只以仓库快照恢复和实施；不得在同一合同下静默拉取更新后的外部设计。
 
 普通检查失败、实现缺陷或检查定义调整时，继续 Build 自主修复；不引入旧的修复审批、固定实现流水线、任务级提交或证据协议。只有真实产品语义变化、用户独有环境、无法形成新假设或环境阻塞才中断用户。
 

@@ -8,9 +8,9 @@
 |---|---|---|
 | `openclaw-plugin` | `/openclaw-skill-creator` | 起草和维护 OpenClaw skill |
 | `dev-stack` | `/skill-forge`、`/commit` | 创建、修改或审查 Claude Code skill；基于当前 staged diff 生成 Conventional Commit |
-| `nuclio` | `/nuclio:init`、`/nuclio:work` | Nuclio v3 5.0.0 的 `.dev-docs` 知识骨架与 file-first change 交付工作流 |
+| `nuclio` | `/nuclio:init`、`/nuclio:work` | Nuclio v3 5.1.0 的 `.dev-docs` 知识骨架与 file-first change 交付工作流 |
 
-Nuclio v3 5.0.0 的 active change 和新 archive 都完整保留 `change.md`、`delivery.yaml`、`state.yaml`。用户只确认一次结果合同；Claude Code 主会话自主维护 delivery milestone、直接实施或按需使用有界 Agent，并直接运行定义的检查，再由 Runtime 记录和验证当前依据。可选 `nuclio:readonly-reviewer` 的工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings。Runtime 只提供 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令；工作流采用 index-first 知识读取、一次知识决定、明确知识结果与可恢复完整 archive。
+Nuclio v3 5.1.0 的 active change 和新 archive 都完整保留 `change.md`、`delivery.yaml`、`state.yaml`。用户只确认一次结果合同；Claude Code 主会话自主维护 delivery milestone、直接实施或按需使用有界 Agent，并直接运行定义的检查，再由 Runtime 记录和验证当前依据。项目知识绑定 Open Design `project-id` 时，`/nuclio:work` 可在 Shape 通过用户已配置的 MCP 只读获取设计，批准后将交付固化为仓库快照再实施。可选 `nuclio:readonly-reviewer` 的工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings。Runtime 仍只提供 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令；工作流采用 index-first 知识读取、一次知识决定、明确知识结果与可恢复完整 archive。
 
 ## 仓库结构
 

@@ -14,6 +14,7 @@ WORK = PLUGIN / "skills" / "work" / "SKILL.md"
 INIT = PLUGIN / "skills" / "init" / "SKILL.md"
 REVIEWER = PLUGIN / "agents" / "readonly-reviewer.md"
 REFERENCES = PLUGIN / "references"
+OPEN_DESIGN_HANDOFF = REFERENCES / "open-design-handoff.md"
 AUTHORITY = (
     RUNTIME,
     WORK,
@@ -24,6 +25,7 @@ AUTHORITY = (
     REFERENCES / "knowledge.md",
     REFERENCES / "context-hygiene.md",
     REFERENCES / "eval-prompts.md",
+    OPEN_DESIGN_HANDOFF,
 )
 
 
@@ -117,6 +119,24 @@ class ClaudeCodeContracts(unittest.TestCase):
         self.assertIn("验证所绑定的 HEAD", change_format)
         self.assertIn("不直接批准只有单句概括的草稿", eval_prompts)
 
+    def test_open_design_handoff_is_conditional_read_only_intake(self):
+        work = read(WORK)
+        handoff = read(OPEN_DESIGN_HANDOFF)
+        eval_prompts = read(REFERENCES / "eval-prompts.md")
+        self.assertIn("[Open Design handoff]", work)
+        for required in ('`project-id`', '`get_project`', '`get_artifact`', '`include="all"`'):
+            self.assertIn(required, handoff)
+        for boundary in (
+            "合同批准前不得把设计文件写入产品仓库",
+            "不得调用 `get_active_context`",
+            "跳过 `*.artifact.json`",
+            "通过 `verify --manual` 绑定到当前 HEAD",
+        ):
+            self.assertIn(boundary, handoff)
+        self.assertIn("Open Design 绑定交付", eval_prompts)
+        self.assertIn("Open Design 输入不可用", eval_prompts)
+        self.assertFalse((PLUGIN / "skills" / "open-design-handoff").exists())
+
 
 class PackageSyncContracts(unittest.TestCase):
     def test_v3_metadata_and_repository_docs_are_synced(self):
@@ -124,19 +144,20 @@ class PackageSyncContracts(unittest.TestCase):
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
         self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "5.0.0")
+        self.assertEqual(plugin["version"], "5.1.0")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         self.assertEqual(entry["description"], plugin["description"])
         readme = read(ROOT / "README.md")
-        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.0.0 约束", 1)[1].split("## 验证命令", 1)[0]
-        self.assertIn("Nuclio v3 5.0.0", readme)
-        self.assertIn("Nuclio v3 5.0.0", read(ROOT / "CLAUDE.md"))
+        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.1.0 约束", 1)[1].split("## 验证命令", 1)[0]
+        self.assertIn("Nuclio v3 5.1.0", readme)
+        self.assertIn("Nuclio v3 5.1.0", read(ROOT / "CLAUDE.md"))
         for text in (readme, nuclio_rules):
             self.assertIn("delivery.yaml", text)
             self.assertIn("state.yaml", text)
             self.assertNotIn("plan.yaml", text)
             self.assertNotIn("task-implementer", text)
             self.assertIn("docs/research/", text)
+            self.assertIn("Open Design", text)
 
 
 if __name__ == "__main__":
