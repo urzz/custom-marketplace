@@ -39,7 +39,7 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 
 主会话自主维护 milestone、状态和短 handoff；合同不变时可重排、拆分或合并 milestone，并可直接实现或按需委派 Claude Code Agent。每次仅从索引读取与当前 milestone 有关的知识，再读取相关代码、测试和配置。agent dispatch 只提供当前 milestone、相关 Acceptance、Constraints/Non-goals、handoff、相关知识路径及读取理由、必要范围和预期检查；不得复制完整知识正文。
 
-Open Design change 在批准后的首个相关 milestone 中把已接受的设计交付固化到 `.dev-docs/artifacts/open-design/<project-id>/`，随后只以仓库快照恢复和实施；不得把完整交付写入 knowledge，也不得在同一合同下静默拉取更新后的外部设计。
+Open Design change 在批准后的首个相关 milestone 中把已接受的设计交付固化到固定目录 `.dev-docs/artifacts/open-design/`，随后只以仓库快照恢复和实施；不得按 UUID 分层、把完整交付写入 knowledge，也不得在同一合同下静默拉取更新后的外部设计。
 
 普通检查失败、实现缺陷或检查定义调整时，继续 Build 自主修复；不引入旧的修复审批、固定实现流水线、任务级提交或证据协议。只有真实产品语义变化、用户独有环境、无法形成新假设或环境阻塞才中断用户。
 

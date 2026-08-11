@@ -53,7 +53,7 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 修改 `/commit` 时同步 `plugins/dev-stack/skills/commit/SKILL.md`、其一层 `references/`、插件 metadata、Marketplace、README 和本文件。
 
-## Nuclio v3 5.1.1 约束
+## Nuclio v3 5.1.2 约束
 
 Nuclio 当前权威文件：
 
@@ -73,7 +73,7 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 - `record-check` 只校验并记录 Claude Code 直接运行的 exact argv，不执行命令。合同、HEAD、检查定义或未登记的产品工作区漂移必须使旧验证失效；stale complete 恢复仅可保留 State 已精确登记的 `APPLIED|PARTIAL` knowledge dirty 路径，详细例外以 Runtime reference 为准。失败、缺失或过期依据回到 Build 修复。
 - 主会话始终自检；独立审查仅按需要使用 `nuclio:readonly-reviewer`。其工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings，不运行 shell、不写文件、不调用 Skill 或 Agent，也不接管 Runtime。
 - Shape、Build、恢复、Verify 与 Finish 均从 `.dev-docs/index.md` 路由相关知识；不默认读取全部知识或 archive。Finish 同时检查新增候选和既有知识失效，无候选记录 `NO_OP`，有候选只询问一次“写入并归档（推荐）/跳过并归档”。
-- Open Design 能力只在显式 `/nuclio:work` 请求且当前请求或已加载项目上下文提供绑定 `project-id` 时启用。主会话仅使用用户已配置 MCP 的只读工具；Shape 不写产品文件，批准后将完整交付固化到 `.dev-docs/artifacts/open-design/<project-id>/`，knowledge 只接收提炼后的稳定项目事实，随后不静默刷新外部设计。
+- Open Design 能力只在显式 `/nuclio:work` 请求且当前请求或已加载项目上下文提供绑定 `project-id` 时启用。主会话仅使用用户已配置 MCP 的只读工具；Shape 不写产品文件，批准后将完整交付固化到固定目录 `.dev-docs/artifacts/open-design/`，knowledge 只接收提炼后的稳定项目事实，随后不静默刷新外部设计。
 - v2 active 输入必须 fail closed；旧 archive 不扫描、解析、修改或删除。archive 只处理显式已完成 change，完整保留三件套且可恢复重跑，不吸收无关 dirty work。
 - Runtime 不执行项目检查，不复制 Claude Code 权限、sandbox、Agent 或 worktree 能力；不自动 push、merge、stash、reset、clean、切换分支或改写历史，不托管或新增 daemon、MCP、网络服务、第二 State writer、DAG 或双栈 Runtime。可选 Open Design MCP 只由主会话消费，不进入 Runtime。
 

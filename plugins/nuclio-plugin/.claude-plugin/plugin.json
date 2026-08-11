@@ -1,7 +1,7 @@
 {
   "name": "nuclio",
-  "description": "Use when a project needs Nuclio v3 5.1.1 for explicit /nuclio:init knowledge setup or /nuclio:work delivery, including optional read-only Open Design MCP intake from the current request or loaded project context followed by a .dev-docs artifact snapshot; provides one user-confirmed result contract, file-first delivery state, current verification, optional read-only review, and recoverable archive.",
-  "version": "5.1.1",
+  "description": "Use when a project needs Nuclio v3 5.1.2 for explicit /nuclio:init knowledge setup or /nuclio:work delivery, including optional read-only Open Design MCP intake from the current request or loaded project context followed by a readable .dev-docs artifact snapshot; provides one user-confirmed result contract, file-first delivery state, current verification, optional read-only review, and recoverable archive.",
+  "version": "5.1.2",
   "author": {
     "name": "Jade Liu",
     "email": "[redacted-email]"

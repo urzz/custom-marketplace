@@ -35,7 +35,7 @@
 
 ### Build
 
-批准后在首个相关 milestone 中把接受的交付固化到 `.dev-docs/artifacts/open-design/<project-id>/`。只写 `design-handoff.md` 声明的用户交付文件及其必要依赖，跳过 `*.artifact.json`，不删除目标目录中来源不明的文件。不得把完整 HTML/CSS 交付写入 `.dev-docs/knowledge/`，也不得默认写入项目的 `docs/`。
+批准后在首个相关 milestone 中把接受的交付固化到固定目录 `.dev-docs/artifacts/open-design/`。每个代码仓库只维护一个由项目上下文绑定的 Open Design 交付，不再按 UUID 或其他内部 ID 分层。只写 `design-handoff.md` 声明的用户交付文件及其必要依赖，跳过 `*.artifact.json`，不删除目标目录中来源不明的文件。不得把完整 HTML/CSS 交付写入 `.dev-docs/knowledge/`，也不得默认写入项目的 `docs/`。
 
 固化后以仓库快照作为当前 change 的恢复输入，不在 Build 中静默重新拉取 Open Design。需要刷新设计时重新调用 MCP；若变化影响合同语义、兼容性或 Acceptance，回到 Shape 提升 revision。
 
