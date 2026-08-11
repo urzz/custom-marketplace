@@ -18,7 +18,7 @@
     {
       "name": "nuclio",
       "source": "./plugins/nuclio-plugin",
-      "description": "Use when a project needs Nuclio v3 5.1.0 for explicit /nuclio:init knowledge setup or /nuclio:work delivery, including optional read-only Open Design MCP intake from a project binding followed by a repository design snapshot; provides one user-confirmed result contract, file-first delivery state, current verification, optional read-only review, and recoverable archive."
+      "description": "Use when a project needs Nuclio v3 5.1.1 for explicit /nuclio:init knowledge setup or /nuclio:work delivery, including optional read-only Open Design MCP intake from the current request or loaded project context followed by a .dev-docs artifact snapshot; provides one user-confirmed result contract, file-first delivery state, current verification, optional read-only review, and recoverable archive."
     }
   ]
 }

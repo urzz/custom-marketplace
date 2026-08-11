@@ -124,15 +124,23 @@ class ClaudeCodeContracts(unittest.TestCase):
         handoff = read(OPEN_DESIGN_HANDOFF)
         eval_prompts = read(REFERENCES / "eval-prompts.md")
         self.assertIn("[Open Design handoff]", work)
+        self.assertNotIn("CLAUDE.md", work)
+        self.assertNotIn("AGENTS.md", work)
         for required in ('`project-id`', '`get_project`', '`get_artifact`', '`include="all"`'):
             self.assertIn(required, handoff)
         for boundary in (
             "合同批准前不得把设计文件写入产品仓库",
             "不得调用 `get_active_context`",
             "跳过 `*.artifact.json`",
+            "`.dev-docs/artifacts/open-design/<project-id>/`",
+            "不得把完整 HTML/CSS 交付写入 `.dev-docs/knowledge/`",
             "通过 `verify --manual` 绑定到当前 HEAD",
         ):
             self.assertIn(boundary, handoff)
+        self.assertIn("已加载的项目上下文", handoff)
+        self.assertNotIn("项目根目录", handoff)
+        self.assertNotIn("docs/design/open-design/", handoff)
+        self.assertNotIn(".dev-docs/knowledge/project.md", handoff)
         self.assertIn("Open Design 绑定交付", eval_prompts)
         self.assertIn("Open Design 输入不可用", eval_prompts)
         self.assertFalse((PLUGIN / "skills" / "open-design-handoff").exists())
@@ -144,13 +152,13 @@ class PackageSyncContracts(unittest.TestCase):
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
         self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "5.1.0")
+        self.assertEqual(plugin["version"], "5.1.1")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         self.assertEqual(entry["description"], plugin["description"])
         readme = read(ROOT / "README.md")
-        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.1.0 约束", 1)[1].split("## 验证命令", 1)[0]
-        self.assertIn("Nuclio v3 5.1.0", readme)
-        self.assertIn("Nuclio v3 5.1.0", read(ROOT / "CLAUDE.md"))
+        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.1.1 约束", 1)[1].split("## 验证命令", 1)[0]
+        self.assertIn("Nuclio v3 5.1.1", readme)
+        self.assertIn("Nuclio v3 5.1.1", read(ROOT / "CLAUDE.md"))
         for text in (readme, nuclio_rules):
             self.assertIn("delivery.yaml", text)
             self.assertIn("state.yaml", text)

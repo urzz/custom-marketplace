@@ -18,10 +18,10 @@
 
 ### 3. Open Design 绑定交付
 
-- **Setup**：`.dev-docs/index.md` 路由的项目知识保存有效 Open Design `project-id`，用户已配置对应 MCP。
+- **Setup**：已加载的项目上下文保存一致且有效的 Open Design `project-id`，用户已配置对应 MCP。
 - **User Prompt**：`/nuclio:work 按项目绑定的 Open Design 最终设计实现前端`
-- **Expected**：Shape 条件读取 `open-design-handoff.md`，使用显式 ID 调用只读 `get_project` 与 `get_artifact(include="all")`，结合仓库事实形成结果合同；批准后才把交付固化到仓库并实施。
-- **Assertions**：不使用 active context 或项目名猜测；不调用 Open Design 写入/生成工具；原型数据不成为生产事实；固化后恢复只读取仓库快照；视觉观察作为当前 HEAD 的 manual evidence。
+- **Expected**：Shape 条件读取 `open-design-handoff.md`，使用显式 ID 调用只读 `get_project` 与 `get_artifact(include="all")`，结合仓库事实形成结果合同；批准后才把交付固化到 `.dev-docs/artifacts/open-design/<project-id>/` 并实施。
+- **Assertions**：不从 `.dev-docs/knowledge/`、active context 或项目名猜测绑定；不调用 Open Design 写入/生成工具；完整交付不进入 knowledge；原型数据不成为生产事实；固化后恢复只读取仓库快照；视觉观察作为当前 HEAD 的 manual evidence。
 
 ### 4. 首次初始化
 
@@ -64,7 +64,7 @@
 
 ### 10. Open Design 输入不可用
 
-- **Setup**：项目知识存在绑定，但 MCP 未配置、workspace 授权失败、返回截断且无法补齐，或二进制依赖没有内容。
+- **Setup**：项目上下文绑定缺失或冲突、MCP 未配置、workspace 授权失败、返回截断且无法补齐，或二进制依赖没有内容。
 - **User Prompt**：`/nuclio:work 实现已绑定的 Open Design 设计`
 - **Expected**：Shape 报告 blocker，并要求修复 MCP 或提供显式导出目录。
 - **Assertions**：不扫描 `.od`，不退回 active context，不创建产品快照，不开始实现，也不调用任何 Open Design 写入工具。

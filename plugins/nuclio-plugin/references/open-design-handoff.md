@@ -1,10 +1,10 @@
 # Open Design MCP Handoff
 
-仅当用户显式通过 `/nuclio:work` 要求同步、实现或审查 Open Design 交付，且请求或 `.dev-docs/index.md` 路由的项目知识提供稳定 `project-id` 时读取本文件。Open Design MCP 只是 Shape/Build 的只读输入通道；Nuclio Runtime 不托管 MCP，也不把外部状态当作可恢复事实。
+仅当用户显式通过 `/nuclio:work` 要求同步、实现或审查 Open Design 交付，且当前请求或已加载的项目上下文提供稳定 `project-id` 时读取本文件。Open Design MCP 只是 Shape/Build 的只读输入通道；Nuclio Runtime 不托管 MCP，也不把外部状态当作可恢复事实。
 
 ## Binding and intake
 
-按以下优先级确定项目：用户本轮明确给出的 `project-id`，其次是索引路由到的 `.dev-docs/knowledge/project.md` 等项目知识。不得调用 `get_active_context`，不要按最近活动、项目名或列表顺序猜测项目。
+按以下优先级确定项目：用户本轮明确给出的 `project-id`，其次是已加载项目上下文中的绑定。项目上下文缺失绑定、出现冲突或只有项目名时，在 Shape 报告 blocker。不得从 `.dev-docs/knowledge/` 推断工具绑定，不得调用 `get_active_context`，不要按最近活动、项目名或列表顺序猜测项目。
 
 只使用用户已经配置的 Open Design MCP，并只调用读取工具：
 
@@ -20,7 +20,7 @@
 
 按以下顺序解决冲突：
 
-1. 当前仓库的产品文档、真实 API、代码与安全约束；
+1. 当前代码、测试、真实 API、安全约束和 `.dev-docs/knowledge/` 中的项目事实；
 2. `design-handoff.md` 的页面职责、交互和状态覆盖；
 3. `DESIGN.md` 与 `brand-spec.md` 的视觉规范；
 4. HTML/CSS/JavaScript 原型的表现细节。
@@ -35,7 +35,7 @@
 
 ### Build
 
-批准后在首个相关 milestone 中把接受的交付固化为仓库快照。优先遵循项目已有设计文档目录；没有约定时使用 `docs/design/open-design/`。只写 `design-handoff.md` 声明的用户交付文件及其必要依赖，跳过 `*.artifact.json`，不删除目标目录中来源不明的文件。
+批准后在首个相关 milestone 中把接受的交付固化到 `.dev-docs/artifacts/open-design/<project-id>/`。只写 `design-handoff.md` 声明的用户交付文件及其必要依赖，跳过 `*.artifact.json`，不删除目标目录中来源不明的文件。不得把完整 HTML/CSS 交付写入 `.dev-docs/knowledge/`，也不得默认写入项目的 `docs/`。
 
 固化后以仓库快照作为当前 change 的恢复输入，不在 Build 中静默重新拉取 Open Design。需要刷新设计时重新调用 MCP；若变化影响合同语义、兼容性或 Acceptance，回到 Shape 提升 revision。
 
@@ -45,4 +45,4 @@
 
 用 delivery 中的 exact argv 验证构建、lint 和测试。视觉、交互、响应式与无障碍观察通过 `verify --manual` 绑定到当前 HEAD；记录视口、步骤和结果，不把截图或完整日志写入 State。
 
-Finish 时把版本化设计快照视为产品文档。只有 Open Design 绑定或跨 change 稳定的设计规则新建、变化或失效时，才按知识流程提出候选；不要把本次同步记录复制进长期知识。
+Finish 时把版本化设计快照视为当前 change 的可恢复输入，而不是项目事实。Open Design 绑定继续归属 `CLAUDE.md` 或 `AGENTS.md`；只有从设计中提炼出的跨 change 稳定规则新建、变化或失效时，才按知识流程提出候选，不要把完整交付或本次同步记录复制进长期知识。
