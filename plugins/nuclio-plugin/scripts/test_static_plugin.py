@@ -87,6 +87,29 @@ class ClaudeCodeContracts(unittest.TestCase):
         self.assertIn('"${CLAUDE_PROJECT_DIR}"', work)
         self.assertIn("Marketplace cache 始终只读", work)
 
+    def test_nuclio_never_enters_or_exits_claude_plan_mode(self):
+        for path in (INIT, WORK):
+            skill = read(path)
+            self.assertIn("始终在当前模式执行", skill)
+            self.assertIn("`EnterPlanMode` 或 `ExitPlanMode`", skill)
+            self.assertIn("已处于 Claude Code Plan Mode", skill)
+            self.assertIn("立即 fail closed", skill)
+            self.assertIn("不自行调用 `ExitPlanMode`", skill)
+        init = read(INIT)
+        self.assertIn("不创建或恢复 change", init)
+        self.assertIn("不写入知识骨架", init)
+        self.assertIn("不调用 Runtime", init)
+        work = read(WORK)
+        self.assertIn("不创建或恢复 change", work)
+        self.assertIn("不调用 Runtime", work)
+        workflow = read(REFERENCES / "workflow.md")
+        self.assertIn("Nuclio 生命周期始终在调用开始时的当前模式内运行", workflow)
+        self.assertIn("不调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`", workflow)
+        self.assertIn("delivery milestone 是 Nuclio 的交付跟踪，不等于也不触发 Claude Code Plan Mode", workflow)
+        eval_prompts = read(REFERENCES / "eval-prompts.md")
+        self.assertIn("已处于 Plan Mode", eval_prompts)
+        self.assertIn("不调用 `EnterPlanMode` 或 `ExitPlanMode`", eval_prompts)
+
     def test_reviewer_is_the_only_agent_and_is_exactly_read_only(self):
         self.assertFalse((PLUGIN / "agents" / "task-implementer.md").exists())
         metadata = frontmatter(REVIEWER)
@@ -153,14 +176,16 @@ class PackageSyncContracts(unittest.TestCase):
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
         self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "5.1.2")
+        self.assertEqual(plugin["version"], "5.1.3")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         self.assertEqual(entry["description"], plugin["description"])
+        self.assertIn("without entering or exiting Claude Code Plan Mode", plugin["description"])
         readme = read(ROOT / "README.md")
-        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.1.2 约束", 1)[1].split("## 验证命令", 1)[0]
-        self.assertIn("Nuclio v3 5.1.2", readme)
-        self.assertIn("Nuclio v3 5.1.2", read(ROOT / "CLAUDE.md"))
+        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.1.3 约束", 1)[1].split("## 验证命令", 1)[0]
+        self.assertIn("Nuclio v3 5.1.3", readme)
+        self.assertIn("Nuclio v3 5.1.3", read(ROOT / "CLAUDE.md"))
         for text in (readme, nuclio_rules):
+            self.assertIn("Claude Code Plan Mode", text)
             self.assertIn("delivery.yaml", text)
             self.assertIn("state.yaml", text)
             self.assertNotIn("plan.yaml", text)

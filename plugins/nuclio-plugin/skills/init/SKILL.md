@@ -7,6 +7,10 @@ disable-model-invocation: true
 
 `/nuclio:init` 只能由用户显式调用。它只直接创建或安全修复 Nuclio v3 项目知识骨架，成功后立即停止；不调用 Runtime，也不处理任何 change 生命周期。
 
+## Plan Mode 边界
+
+从显式调用开始直到停止，始终在当前模式执行，不得调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若调用开始时已处于 Claude Code Plan Mode，立即 fail closed：不创建或恢复 change，也不写入知识骨架、不自行调用 `ExitPlanMode`；报告阻塞，并要求用户先退出 Plan Mode 后重新显式调用 `/nuclio:init`。
+
 ## Read first
 
 按需读取一层 reference：[workflow](../../references/workflow.md)、[change format](../../references/change-format.md)、[context hygiene](../../references/context-hygiene.md)。

@@ -7,6 +7,10 @@ disable-model-invocation: true
 
 `/nuclio:work` 只能由用户显式调用。Claude Code 主会话是唯一控制器：只有主会话处理用户 Gate、调用 Runtime、维护 `delivery.yaml`，并决定是否使用 Claude Code `Agent`。被委派 agent 只完成有界工作、不得调用 Skill 或继续委派，也不接管 Runtime 状态。
 
+## Plan Mode 边界
+
+从显式调用开始直到完成或停止，Shape、Build、Verify 和 Finish 始终在当前模式执行，不得调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若调用开始时已处于 Claude Code Plan Mode，立即 fail closed：不创建或恢复 change，不调用 Runtime、不自行调用 `ExitPlanMode`；报告阻塞，并要求用户先退出 Plan Mode 后重新显式调用 `/nuclio:work`。
+
 ## Read first
 
 按当前阶段读取一层 reference：[workflow](../../references/workflow.md)、[change format](../../references/change-format.md)、[knowledge](../../references/knowledge.md)、[context hygiene](../../references/context-hygiene.md)。仅当请求明确使用 Open Design 且当前请求或已加载的项目上下文提供绑定 `project-id` 时，读取 [Open Design handoff](../../references/open-design-handoff.md)。

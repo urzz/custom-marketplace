@@ -2,6 +2,10 @@
 
 Nuclio v3 是面向 Claude Code 的薄 Runtime。主会话是唯一控制器；`change.py` 是唯一 State writer。用户确认结果合同，主会话管理交付，Runtime 只保存可恢复事实、绑定当前验证并判断是否可完成。
 
+## Plan Mode 边界
+
+Nuclio 生命周期始终在调用开始时的当前模式内运行，不调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若显式调用 `/nuclio:init` 或 `/nuclio:work` 时已处于 Claude Code Plan Mode，立即 fail closed：不创建或恢复 change，不执行 Runtime，也不自行退出；要求用户先退出 Plan Mode 后重新显式调用。`delivery.yaml` 的 delivery milestone 是 Nuclio 的交付跟踪，不等于也不触发 Claude Code Plan Mode。
+
 ## Lifecycle
 
 ```text

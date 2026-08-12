@@ -53,7 +53,7 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 修改 `/commit` 时同步 `plugins/dev-stack/skills/commit/SKILL.md`、其一层 `references/`、插件 metadata、Marketplace、README 和本文件。
 
-## Nuclio v3 5.1.2 约束
+## Nuclio v3 5.1.3 约束
 
 Nuclio 当前权威文件：
 
@@ -67,6 +67,7 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 `docs/research/` 仅是历史设计输入，不是 Runtime 权威。维护时遵守以下边界：
 
 - `/nuclio:init` 与 `/nuclio:work` 都只能由用户显式调用；init 只在 `${CLAUDE_PROJECT_DIR}/.dev-docs/` 创建或安全修复知识骨架后停止，普通 change 只通过 work。
+- 两个 Skill 始终在调用开始时的当前模式内运行，不调用 `EnterPlanMode` 或 `ExitPlanMode`；若调用时已处于 Claude Code Plan Mode，则立即停止，不创建或恢复 change、不执行 Runtime，并要求用户退出后重新显式调用。`delivery.yaml` milestone 不等于 Claude Code Plan Mode。
 - active change 与新 archive 都完整保留 `change.md`、`delivery.yaml`、`state.yaml`。主会话是唯一控制器；`change.py` 是唯一 State writer，只提供 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令。
 - 用户只确认结果合同。主会话自主维护 delivery milestone、实施方式、检查和合同不变的修复；只有产品语义、兼容性、外部副作用或不可逆结果变化才重新确认。
 - bundled Runtime 通过 `${CLAUDE_SKILL_DIR}` 定位，并显式传入 `${CLAUDE_PROJECT_DIR}`；插件源码和 Marketplace cache 始终只读，运行时写入只落在项目 `.dev-docs/**`。
