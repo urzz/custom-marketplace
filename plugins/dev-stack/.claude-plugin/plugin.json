@@ -1,7 +1,7 @@
 {
   "name": "dev-stack",
-  "description": "Use when teams need explicit /skill-forge for spec-first Claude Code skill creation, modification, or read-only audit with focused/grill clarification and deterministic validation, plus /commit for self-contained Conventional Commits.",
-  "version": "0.3.0",
+  "description": "Use when teams need explicit /skill-forge for spec-first Claude Code skill creation, modification, or read-only audit with focused/grill clarification and deterministic validation, plus /commit for self-contained Conventional Commits and /commit-and-push for one safe commit followed by a normal push.",
+  "version": "0.4.0",
   "author": {
     "name": "Jade Liu",
     "email": "[redacted-email]"

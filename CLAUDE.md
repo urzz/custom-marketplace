@@ -45,13 +45,15 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 修改 `/skill-forge` 时同步其 `SKILL.md`、一层 `references/`、`plan_contract.py`、测试、插件 metadata、Marketplace、README 和本文件。
 
-### commit
+### commit 与 commit-and-push
 
-- `/commit` 是自包含 Conventional Commit 流程，不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务。
-- commit type、scope、summary 与 body 的唯一语义来源是选择性暂存后重新读取的最终 staged diff；未暂存内容不得影响最终消息。
-- 不绑定 skill-forge 的 agent/script，不引入 runtime hook、daemon 或本地状态机制。
+- `/commit` 是自包含 Conventional Commit 流程，不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，也不执行 push。
+- `/commit-and-push` 复用 `/commit` 的 references 与完整提交合同，仅在提交 Git truth 验证通过后普通推送当前分支；无 upstream 时只通过既有 `origin` 建立 upstream。
+- 两者的 commit type、scope、summary 与 body 唯一语义来源都是选择性暂存后重新读取的最终 staged diff；未暂存内容不得影响最终消息。
+- `/commit-and-push` 禁止 force push、自动处理分叉和历史改写；push 失败时保留本地 commit 并报告部分成功。
+- 两者都不绑定 skill-forge 的 agent/script，不引入 runtime hook、daemon 或本地状态机制。
 
-修改 `/commit` 时同步 `plugins/dev-stack/skills/commit/SKILL.md`、其一层 `references/`、插件 metadata、Marketplace、README 和本文件。
+修改 `/commit` 或 `/commit-and-push` 时同步两者共享的提交合同、新 Skill、插件 metadata、Marketplace、README 和本文件。
 
 ## Nuclio v3 5.1.3 约束
 

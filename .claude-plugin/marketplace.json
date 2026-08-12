@@ -13,7 +13,7 @@
     {
       "name": "dev-stack",
       "source": "./plugins/dev-stack",
-      "description": "Adds explicit /skill-forge for spec-first Claude Code skill creation, modification, read-only audit, focused/grill clarification, and deterministic validation, plus /commit for self-contained Conventional Commits"
+      "description": "Adds explicit /skill-forge for spec-first Claude Code skill creation, modification, read-only audit, focused/grill clarification, and deterministic validation, plus /commit for self-contained Conventional Commits and /commit-and-push for one safe commit followed by a normal push"
     },
     {
       "name": "nuclio",
