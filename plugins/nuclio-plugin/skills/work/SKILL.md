@@ -27,7 +27,7 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 
 ### 1. Shape
 
-调查用户请求、仓库事实和通过 `.dev-docs/index.md` 路由的相关长期知识；不默认读取整个知识目录、archive 或旧聊天。定位唯一 active change；不存在时以 `create` 创建三件套草稿。`create` 的单行参数只是种子；创建后必须重新读取并按调查事实补全 `change.md`，使其无需旧聊天也能说明 Goal、必要 Context、每项独立 Constraint/Non-goal 和可观察 Acceptance。多个独立边界使用列表，不得压成一句同义概括，也不得把实现步骤写入结果合同。
+通过 Plan Mode 边界后，先仅检查 `${CLAUDE_PROJECT_DIR}/.dev-docs/changes/` 的直接子目录，排除 `archive/`，以发现 active change 候选；不得扫描、读取或猜测 archive。无候选时不调用 `status`，直接调查用户请求、仓库事实和通过 `.dev-docs/index.md` 路由的相关长期知识，并在需要时以 `create` 创建三件套草稿。恰有一个候选时，以其目录名作为 change ID 调用 `status --id <change-id> --json`，再按 `next_action` 恢复。多个候选时立即 fail closed：不调用 Runtime、不猜测目标，报告候选目录并要求用户先解决歧义。`create` 的单行参数只是种子；创建后必须重新读取并按调查事实补全 `change.md`，使其无需旧聊天也能说明 Goal、必要 Context、每项独立 Constraint/Non-goal 和可观察 Acceptance。多个独立边界使用列表，不得压成一句同义概括，也不得把实现步骤写入结果合同。
 
 Open Design 输入在 Shape 只通过用户已配置的 MCP 读取；当前请求中的显式绑定优先，其次使用已加载项目上下文中的绑定，不得从知识库或活动页面猜测项目。合同批准前不把设计文件写入产品仓库；MCP 不可用、绑定无效、项目上下文冲突或交付不完整时按 reference 报告 blocker。
 

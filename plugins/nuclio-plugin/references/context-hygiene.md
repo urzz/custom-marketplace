@@ -11,15 +11,20 @@
 
 除非问题明确需要，不读取整个 `.dev-docs/knowledge/**`、archive、legacy、全部 State 或完整 Git diff。先使用 `status --json`，只在漂移或诊断时扩展到精确 Git 状态和相关 artifact。
 
-## Recovery
+## Shape 与 recovery 路由
 
-fresh session 先运行：
+通过 Plan Mode 边界后，fresh session 先仅检查 `${CLAUDE_PROJECT_DIR}/.dev-docs/changes/` 的直接子目录并排除 `archive/`：
 
-```bash
-python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_PROJECT_DIR}" status --id <change-id> --json
-```
+- 无候选：不存在 active change 时，不调用 `status`，继续 Shape 调查并在需要时 `create`。
+- 恰有一个候选：以其目录名作为 `<change-id>`，再运行：
 
-随后核对当前合同、milestone/handoff、HEAD、工作区和相关检查。Runtime 工作包、Git、代码、合同和长期知识各自回答不同问题；冲突时回到对应权威，而非采信旧消息。
+  ```bash
+  python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_PROJECT_DIR}" status --id <change-id> --json
+  ```
+
+- 多个候选：fail closed，报告候选目录并要求用户解决歧义；不得猜测 ID、调用 Runtime 或读取 archive。
+
+唯一候选的 `status` 返回后，再核对当前合同、milestone/handoff、HEAD、工作区和相关检查。Runtime 工作包、Git、代码、合同和长期知识各自回答不同问题；冲突时回到对应权威，而非采信旧消息。
 
 ## Agent and reviewer
 

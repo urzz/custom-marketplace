@@ -28,7 +28,7 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 
 调用。`${CLAUDE_SKILL_DIR}` 只定位 bundled script；`${CLAUDE_PROJECT_DIR}` 是唯一写入根目录。插件源码和 Marketplace cache 只读。
 
-`status --json` 是恢复入口：读取其紧凑工作包，再读当前合同、milestone/handoff、由索引路由的相关知识及相关代码/测试，并按当前 evidence 计算的 `next_action` 恢复到合同确认、Build、Verify、Finish 或 archive；`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。不要以旧聊天、全部 archive 或整个知识库恢复工作。v2 active 输入（包括 `plan.yaml`）必须 fail closed；旧 archive 不扫描、不解析、不修改。
+`status --id <change-id> --json` 是已知唯一 active change 的恢复入口：先仅检查 `.dev-docs/changes/` 的直接子目录并排除 `archive/`。无候选时不调用 `status`，进入 Shape；恰有一个候选时，以目录名作为 change ID 调用 `status`；多个候选时 fail closed，报告歧义而不猜测或调用 Runtime。随后读取紧凑工作包、当前合同、milestone/handoff、由索引路由的相关知识及相关代码/测试，并按当前 evidence 计算的 `next_action` 恢复到合同确认、Build、Verify、Finish 或 archive；`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。不要以旧聊天、全部 archive 或整个知识库恢复工作。v2 active 输入（包括 `plan.yaml`）必须 fail closed；旧 archive 不扫描、不解析、不修改。
 
 ## Verification and review
 

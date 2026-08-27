@@ -125,6 +125,27 @@ class ClaudeCodeContracts(unittest.TestCase):
         for forbidden in ("allowed_paths", "execution.mode", "task-implementer", "validate-plan", "init-state", "record-task", "supersede"):
             self.assertNotIn(forbidden, combined)
 
+    def test_active_change_discovery_routes_before_status(self):
+        work = read(WORK)
+        workflow = read(REFERENCES / "workflow.md")
+        context = read(REFERENCES / "context-hygiene.md")
+        eval_prompts = read(REFERENCES / "eval-prompts.md")
+        authority = "\n".join((work, workflow, context, eval_prompts))
+        for text in (work, workflow, context):
+            self.assertIn("archive", text)
+            self.assertIn("无候选", text)
+            self.assertIn("恰有一个候选", text)
+            self.assertIn("多个候选", text)
+            self.assertIn("status --id <change-id> --json", text)
+        self.assertIn("不调用 `status`", work)
+        self.assertIn("不猜测", work)
+        self.assertIn("不调用 Runtime", work)
+        self.assertNotRegex(authority, r"(?m)^python3 .*?\bstatus --json(?:\s|$)")
+        for heading in ("无 active change 的 Shape", "恢复与失败修复", "多个 active change"):
+            self.assertIn(heading, eval_prompts)
+        source = read(RUNTIME)
+        self.assertIn('status.add_argument("--id", required=True)', source)
+
     def test_knowledge_is_index_first_in_each_lifecycle_phase(self):
         for path in (WORK, REFERENCES / "workflow.md", REFERENCES / "knowledge.md", REFERENCES / "context-hygiene.md"):
             self.assertIn(".dev-docs/index.md", read(path))
@@ -176,14 +197,14 @@ class PackageSyncContracts(unittest.TestCase):
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
         self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "5.1.3")
+        self.assertEqual(plugin["version"], "5.1.4")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         self.assertEqual(entry["description"], plugin["description"])
         self.assertIn("without entering or exiting Claude Code Plan Mode", plugin["description"])
         readme = read(ROOT / "README.md")
-        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.1.3 约束", 1)[1].split("## 验证命令", 1)[0]
-        self.assertIn("Nuclio v3 5.1.3", readme)
-        self.assertIn("Nuclio v3 5.1.3", read(ROOT / "CLAUDE.md"))
+        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.1.4 约束", 1)[1].split("## 验证命令", 1)[0]
+        self.assertIn("Nuclio v3 5.1.4", readme)
+        self.assertIn("Nuclio v3 5.1.4", read(ROOT / "CLAUDE.md"))
         for text in (readme, nuclio_rules):
             self.assertIn("Claude Code Plan Mode", text)
             self.assertIn("delivery.yaml", text)
