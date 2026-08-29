@@ -5,7 +5,7 @@ disable-model-invocation: true
 ---
 # Nuclio Work
 
-`/nuclio:work` 只能由用户显式调用。Claude Code 主会话是唯一控制器：只有主会话处理用户 Gate、调用 Runtime、维护 `delivery.yaml`，并决定是否使用 Claude Code `Agent`。被委派 agent 只完成有界工作、不得调用 Skill 或继续委派，也不接管 Runtime 状态。
+`/nuclio:work` 只能由用户显式调用。Claude Code 主会话是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`，并决定是否使用 Claude Code `Agent`。被委派 agent 只完成有界工作、不得调用 Skill 或继续委派，也不接管 Runtime 状态。
 
 ## Plan Mode 边界
 
@@ -41,7 +41,7 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 
 ### 2. Build
 
-主会话自主维护 milestone、状态和短 handoff；合同不变时可重排、拆分或合并 milestone，并可直接实现或按需委派 Claude Code Agent。每次仅从索引读取与当前 milestone 有关的知识，再读取相关代码、测试和配置。agent dispatch 只提供当前 milestone、相关 Acceptance、Constraints/Non-goals、handoff、相关知识路径及读取理由、必要范围和预期检查；不得复制完整知识正文。
+主会话自主维护 milestone、状态和短 handoff；合同不变时可重排、拆分或合并 milestone。开始当前 milestone 时，主会话先保留或读取紧凑控制信息：`status --id <change-id> --json` 工作包、当前合同、milestone/handoff，以及经 `.dev-docs/index.md` 路由的相关知识；派发时仅将当前控制信息、相关知识路径及读取理由和必要范围交给 Agent，不复制知识正文。随后以读取广度、预期实现/诊断迭代、原始命令输出体量、必要范围能否清楚界定和已确认结果合同是否保持不变为启发式，先作出派发判断。保护主会话上下文是优先使用一个有界 Claude Code Agent 的判断条件，不使用 token 或 ctx 数值硬阈值。阅读或诊断密集、合同稳定、范围清晰且可由预期检查验证的局部工作优先派发 Agent；若派发，主会话不预读该委派范围的局部代码、测试、配置或测试诊断，Agent 在必要范围内读取代码、测试和配置，并吸收局部探索、测试诊断和原始输出；主会话只处理短回传、milestone/handoff、Runtime 和 Verify。极小、单一且实现路径明确的工作，以及产品语义、兼容性、权限、外部副作用、不可逆结果、跨 milestone 架构取舍、用户交互、Runtime、Verify、Finish 等控制决定，仍由主会话直接处理，不为形式而派发；若直接实施，主会话才读取相关代码、测试和配置并完成实现和检查。agent dispatch 只提供当前 milestone、相关 Acceptance、Constraints/Non-goals、handoff、相关知识路径及读取理由、必要范围和预期检查；不得复制完整知识正文。agent 只短回传改动、检查和未完成项，不调用 Skill、不继续委派、不接管 Runtime。
 
 Open Design change 在批准后的首个相关 milestone 中把已接受的设计交付固化到固定目录 `.dev-docs/artifacts/open-design/`，随后只以仓库快照恢复和实施；不得按 UUID 分层、把完整交付写入 knowledge，也不得在同一合同下静默拉取更新后的外部设计。
 

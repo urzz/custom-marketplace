@@ -120,6 +120,63 @@ class ClaudeCodeContracts(unittest.TestCase):
         for boundary in ("不运行 shell", "不创建、编辑、删除", "不调用 Skill、Agent、Task、Workflow", "只返回 findings"):
             self.assertIn(boundary, reviewer)
 
+    def test_build_agent_dispatch_is_context_aware_and_bounded(self):
+        build_guides = (
+            read(WORK),
+            read(REFERENCES / "workflow.md"),
+            read(REFERENCES / "context-hygiene.md"),
+        )
+        for guide in build_guides:
+            self.assertRegex(guide, r"主会话(?:仍)?是唯一控制器")
+            for required in (
+                "保护主会话上下文是优先使用一个有界 Claude Code Agent 的判断条件",
+                "读取广度",
+                "预期实现/诊断迭代",
+                "原始命令输出体量",
+                "必要范围能否清楚界定",
+                "已确认结果合同是否保持不变",
+                "不使用 token 或 ctx 数值硬阈值",
+                "阅读或诊断密集、合同稳定、范围清晰且可由预期检查验证",
+                "极小、单一且实现路径明确",
+                "仍由主会话直接处理",
+                "不为形式而派发",
+                "短回传改动、检查和未完成项",
+            ):
+                self.assertIn(required, guide)
+            self.assertRegex(guide, r"(?:不得|不)复制完整知识正文")
+            for required in (
+                "先保留或读取紧凑控制信息",
+                "`status --id <change-id> --json` 工作包",
+                "当前合同",
+                "milestone/handoff",
+                "相关知识",
+                "先作出派发判断",
+                "仅将当前控制信息、相关知识路径及读取理由和必要范围交给 Agent",
+                "主会话不预读该委派范围的局部代码、测试、配置或测试诊断",
+                "Agent 在必要范围内读取代码、测试和配置",
+                "吸收局部探索、测试诊断和原始输出",
+                "主会话只处理短回传、milestone/handoff、Runtime 和 Verify",
+                "主会话才读取相关代码、测试和配置",
+            ):
+                self.assertIn(required, guide)
+        self.assertIn("不新增专用 implementer、固定任务流水线", build_guides[2])
+        self.assertIn("固定实现流水线", build_guides[0])
+
+    def test_fresh_session_eval_prompts_cover_dispatch_reading_roles(self):
+        eval_prompts = read(REFERENCES / "eval-prompts.md")
+        for required in (
+            "多文件阅读与测试诊断的 Build 派发",
+            "多个回调、服务、配置和测试文件",
+            "主会话不预读委派范围的局部材料",
+            "agent 在支付子系统必要范围内吸收局部探索、测试诊断和原始输出",
+            "不以 token 或 ctx 数值硬阈值决定派发",
+            "单文件确定性 Build 不机械派发",
+            "不因进入 Build 或存在 Agent 能力而机械委派",
+            "主会话直接完成改动和检查",
+            "直接实施时主会话才读取相关代码、测试和配置",
+        ):
+            self.assertIn(required, eval_prompts)
+
     def test_authority_has_no_v2_execution_protocol(self):
         combined = "\n".join(read(path) for path in AUTHORITY)
         for forbidden in ("allowed_paths", "execution.mode", "task-implementer", "validate-plan", "init-state", "record-task", "supersede"):
@@ -197,14 +254,17 @@ class PackageSyncContracts(unittest.TestCase):
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
         self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "5.1.4")
+        self.assertEqual(plugin["version"], "5.1.5")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         self.assertEqual(entry["description"], plugin["description"])
         self.assertIn("without entering or exiting Claude Code Plan Mode", plugin["description"])
+        self.assertIn("context-aware bounded Agent dispatch", plugin["description"])
         readme = read(ROOT / "README.md")
-        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.1.4 约束", 1)[1].split("## 验证命令", 1)[0]
-        self.assertIn("Nuclio v3 5.1.4", readme)
-        self.assertIn("Nuclio v3 5.1.4", read(ROOT / "CLAUDE.md"))
+        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.1.5 约束", 1)[1].split("## 验证命令", 1)[0]
+        self.assertIn("Nuclio v3 5.1.5", readme)
+        self.assertIn("Nuclio v3 5.1.5", read(ROOT / "CLAUDE.md"))
+        self.assertIn("主会话基于上下文负担按需有界委派 Agent", readme)
+        self.assertIn("主会话基于上下文负担按需有界委派 Agent", nuclio_rules)
         for text in (readme, nuclio_rules):
             self.assertIn("Claude Code Plan Mode", text)
             self.assertIn("delivery.yaml", text)

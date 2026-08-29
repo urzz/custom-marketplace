@@ -55,7 +55,7 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 修改 `/commit` 或 `/commit-and-push` 时同步两者共享的提交合同、新 Skill、插件 metadata、Marketplace、README 和本文件。
 
-## Nuclio v3 5.1.4 约束
+## Nuclio v3 5.1.5 约束
 
 Nuclio 当前权威文件：
 
@@ -71,7 +71,7 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 - `/nuclio:init` 与 `/nuclio:work` 都只能由用户显式调用；init 只在 `${CLAUDE_PROJECT_DIR}/.dev-docs/` 创建或安全修复知识骨架后停止，普通 change 只通过 work。
 - 两个 Skill 始终在调用开始时的当前模式内运行，不调用 `EnterPlanMode` 或 `ExitPlanMode`；若调用时已处于 Claude Code Plan Mode，则立即停止，不创建或恢复 change、不执行 Runtime，并要求用户退出后重新显式调用。`delivery.yaml` milestone 不等于 Claude Code Plan Mode。
 - active change 与新 archive 都完整保留 `change.md`、`delivery.yaml`、`state.yaml`。主会话是唯一控制器；`change.py` 是唯一 State writer，只提供 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令。
-- 用户只确认结果合同。主会话自主维护 delivery milestone、实施方式、检查和合同不变的修复；只有产品语义、兼容性、外部副作用或不可逆结果变化才重新确认。
+- 用户只确认结果合同。主会话基于上下文负担按需有界委派 Agent：仅将合同不变、范围清晰且可验证的阅读或诊断密集局部工作交给 Agent；小型确定性工作、产品语义、兼容性、权限、外部副作用、不可逆结果、架构取舍、用户交互和 Runtime/Verify/Finish 决策仍由主会话直接处理。主会话自主维护 delivery milestone、实施方式、检查和合同不变的修复；只有产品语义、兼容性、外部副作用或不可逆结果变化才重新确认。
 - bundled Runtime 通过 `${CLAUDE_SKILL_DIR}` 定位，并显式传入 `${CLAUDE_PROJECT_DIR}`；插件源码和 Marketplace cache 始终只读，运行时写入只落在项目 `.dev-docs/**`。
 - `record-check` 只校验并记录 Claude Code 直接运行的 exact argv，不执行命令。合同、HEAD、检查定义或未登记的产品工作区漂移必须使旧验证失效；stale complete 恢复仅可保留 State 已精确登记的 `APPLIED|PARTIAL` knowledge dirty 路径，详细例外以 Runtime reference 为准。失败、缺失或过期依据回到 Build 修复。
 - 主会话始终自检；独立审查仅按需要使用 `nuclio:readonly-reviewer`。其工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings，不运行 shell、不写文件、不调用 Skill 或 Agent，也不接管 Runtime。
