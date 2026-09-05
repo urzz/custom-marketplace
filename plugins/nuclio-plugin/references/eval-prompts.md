@@ -7,29 +7,29 @@
 ### 1. 普通 change
 
 - **User Prompt**：`/nuclio:work 修复登录回跳并补测试`
-- **Expected**：在当前模式直接进入 Shape，索引优先读取相关知识；把 `create` 的单行种子补全为无需旧聊天也能理解、精简但信息完整的 `change.md`，再用一次 `AskUserQuestion` 确认结果合同；随后主会话自主 Build/Verify。
+- **Expected**：在当前模式直接进入 Shape；无 active change 的新建路径先按场景 2 完成调用起点快照、只读分析与分支隔离，才把 `create` 的单行种子补全为无需旧聊天也能理解、精简但信息完整的 `change.md`，再用一次 `AskUserQuestion` 确认结果合同；随后主会话自主 Build/Verify。
 - **Assertions**：不调用 `EnterPlanMode` 或 `ExitPlanMode`；不直接批准只有单句概括的草稿；多个独立边界分别记录、Acceptance 原子且可观察；不要求批准 milestone、路径、Agent 或普通失败修复；检查由 Claude Code 直接执行，再以 `record-check` 记录。
 
-### 2. 无 active change 的 Shape
+### 2. 无 active change 的 Shape 与新建分支
 
-- **Setup**：`.dev-docs/changes/` 不存在 active change 目录，或只存在 `archive/`。
+- **Setup**：fresh-session；`.dev-docs/changes/` 不存在 active change 目录，或只存在 `archive/`；项目是 Git 仓库，当前 `main` 为 attached HEAD，调用起点 staged、unstaged 与 untracked 均为空，且本地和所有已配置 remote 的缓存 remote-tracking ref 均不存在 `fix/auth-redirect`。
 - **User Prompt**：`/nuclio:work 修复登录回跳并补测试`
-- **Expected**：通过 Plan Mode 边界后，仅发现 active change 候选；不调用 `status`，直接进入 Shape 调查并在需要时 `create`。
-- **Assertions**：不发起无 `--id` 的 `status --json`；不扫描或读取 archive；不依赖旧聊天或全量知识。
+- **Expected**：通过 Plan Mode 边界后、discovery 前，主会话只读尝试捕获 Git/attached HEAD、`start_branch`、`start_head` 及调用起点三类 dirty 状态；不写入、不调用 Runtime、不做分支操作或联网。仅 discovery 确认无候选时，才要求该 snapshot 有效且起点 clean。随后只读调查请求、索引路由知识和仓库事实，确定合法 change ID `auth-redirect` 及 `fix` 类型；Shape 后复核当前 branch/HEAD 分别未偏离 `start_branch`/`start_head`，且工作区仍 clean。精确查询本地 `refs/heads/fix/auth-redirect`，列出全部本地配置 remote 并逐个精确查询 `refs/remotes/<remote>/fix/auth-redirect`，同时只读当前本地 `refs/remotes/**` 缓存快照；不得只查 `origin`、fetch、`ls-remote`、联网或刷新 refs。全部通过后执行：`git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`。仅 post-switch 复核 branch 为 `fix/auth-redirect`、HEAD 为 `start_head` 且工作区 clean 成功后，才调用 Runtime `create`、生成并补全 `change.md`，再以一次 `AskUserQuestion` 确认结果合同；最终成功报告包含创建的分支名。
+- **Assertions**：该 `git -C` switch 命令可观察地早于 Runtime `create` 和任何本次 change 或产品文件写入；不发起无 `--id` 的 `status --json`；不扫描或读取 archive；不依赖旧聊天或全量知识。
 
 ### 3. 恢复与失败修复
 
-- **Setup**：`.dev-docs/changes/` 恰有一个 active change 目录。
+- **Setup**：fresh-session；`.dev-docs/changes/` 恰有一个 active change 目录；调用起点的 Git snapshot unavailable、detached HEAD 或工作区 dirty 均可分别覆盖。
 - **User Prompt**：`/nuclio:work 恢复当前 change，检查失败则修好后完成`
-- **Expected**：以唯一目录名作为 change ID，先运行 `status --id <change-id> --json`，读取当前合同、milestone/handoff 和索引路由的相关知识；失败回到 Build。
-- **Assertions**：不依赖旧聊天或全量知识；合同不变的修复不再询问用户；合同语义变化才重新 AskUserQuestion。
+- **Expected**：即使 snapshot unavailable、detached 或 dirty，也不在 discovery 前阻止恢复；以唯一目录名作为 change ID，先运行 `status --id <change-id> --json`，读取当前合同、milestone/handoff 和索引路由的相关知识；失败回到 Build。
+- **Assertions**：不创建、不切换任何分支，不再次调用 `create`；不依赖旧聊天或全量知识；合同不变的修复不再询问用户；合同语义变化才重新 AskUserQuestion。
 
 ### 4. 多个 active change
 
-- **Setup**：`.dev-docs/changes/` 存在多个非 `archive/` 的 active change 目录。
+- **Setup**：fresh-session；`.dev-docs/changes/` 存在多个非 `archive/` 的 active change 目录；调用起点 snapshot unavailable、detached 或 dirty 不影响该场景。
 - **User Prompt**：`/nuclio:work 继续交付`
-- **Expected**：报告候选目录并 fail closed。
-- **Assertions**：不猜测 change ID、不调用 Runtime、不读取或修改 archive；要求用户先解决歧义。
+- **Expected**：discovery 后报告候选目录并 fail closed。
+- **Assertions**：不猜测 change ID、不调用 Runtime、不读取或修改 archive；不创建或切换分支；要求用户先解决歧义。
 
 ### 5. Open Design 绑定交付
 
@@ -42,7 +42,7 @@
 
 - **User Prompt**：`/nuclio:init 为这个项目建立 Nuclio 文档骨架`
 - **Expected**：在当前模式仅在 `${CLAUDE_PROJECT_DIR}/.dev-docs/` 创建或安全修复索引、三个知识入口和 `changes/archive`。
-- **Assertions**：不调用 `EnterPlanMode` 或 `ExitPlanMode`；不调用 Runtime，不创建 change 三件套，不实现功能；完成后停止并建议显式使用 `/nuclio:work`。
+- **Assertions**：不调用 `EnterPlanMode` 或 `ExitPlanMode`；不做调用起点 snapshot 或分支检查/创建，不调用 Runtime，不创建 change 三件套，不实现功能；完成后停止并建议显式使用 `/nuclio:work`。
 
 ### 7. 多文件阅读与测试诊断的 Build 派发
 
@@ -83,7 +83,7 @@
 - **Setup**：Claude Code 已处于 Plan Mode。
 - **User Prompt**：`/nuclio:work 修复登录回跳并补测试`，或 `/nuclio:init 为这个项目建立 Nuclio 文档骨架`。
 - **Expected**：立即 fail closed，要求用户先退出 Plan Mode 后重新显式调用对应 Nuclio Skill。
-- **Assertions**：不调用 `EnterPlanMode` 或 `ExitPlanMode`；work 不创建或恢复 change、不调用 Runtime；init 不写入知识骨架。
+- **Assertions**：不调用 `EnterPlanMode` 或 `ExitPlanMode`；work 不做调用起点 snapshot、不创建或恢复 change、不调用 Runtime、不检查或创建分支；init 不做 snapshot/分支操作，也不写入知识骨架。
 
 ## Boundary checks
 
@@ -104,3 +104,24 @@
 - **User Prompt**：`/nuclio:work 实现已绑定的 Open Design 设计`
 - **Expected**：Shape 报告 blocker，并要求修复 MCP 或提供显式导出目录。
 - **Assertions**：不扫描 `.od`，不退回 active context，不创建产品快照，不开始实现，也不调用任何 Open Design 写入工具。
+
+### 16. 调用起点 dirty 即使随后清理仍阻塞新建
+
+- **Setup**：fresh-session；调用起点不存在 active change；attached HEAD 下 staged、unstaged、untracked 中任一项存在改动，但外部在 Shape 期间将工作区清理。
+- **User Prompt**：`/nuclio:work 修复登录回跳并补测试`
+- **Expected**：Plan Mode 通过后、discovery 前只读 snapshot 捕获调用起点 dirty；discovery 确认无候选后，仍以起点 dirty 报告阻塞并 fail closed，不因当前工作区后来 clean 而继续 Shape 或新建。
+- **Assertions**：覆盖 staged、unstaged、untracked 三种独立合同；不执行 `git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`，不调用 Runtime `create`，不写入本次 `change.md`、三件套或产品文件；不自动 stash、commit、reset 或 clean。
+
+### 17. Shape 期间起点漂移与 switch 后异常
+
+- **Setup**：fresh-session；调用起点无 active change、attached HEAD 且 clean，已捕获 `start_branch`/`start_head`。子场景 A：只读 Shape 期间当前 branch 或 HEAD 被外部改变。子场景 B：switch 成功后当前 branch、HEAD 或任一 dirty 类别异常。
+- **User Prompt**：`/nuclio:work 修复登录回跳并补测试`
+- **Expected**：A 在创建前复核发现 branch/HEAD 偏离 snapshot 时 fail closed。B 走“分支可能已创建”的部分成功路径，停止且报告实际分支事实，不回滚 Git 状态。
+- **Assertions**：A 不执行 switch；A 与 B 均不调用 Runtime `create`，不写入本次 `change.md`、三件套或产品文件；B 不自动删除分支、切回原分支、reset 或 clean。
+
+### 18. 本地或所有 remote 缓存同名 ref 阻塞新建
+
+- **Setup**：fresh-session；不存在 active change，调用起点 attached 且 clean，已只读分析并确定合法 `<type>/<change-id>`；子场景分别在精确本地 `refs/heads/<type>/<change-id>`、任一已配置 remote 的缓存 `refs/remotes/<remote>/<type>/<change-id>`，或当前本地 `refs/remotes/**` 快照中存在同名 ref。
+- **User Prompt**：`/nuclio:work 修复登录回跳并补测试`
+- **Expected**：列出全部本地配置 remote，并仅查询当前本地缓存 refs；任一精确冲突均报告同名分支冲突并 fail closed，不自动改名、追加后缀或切换到已存在分支。
+- **Assertions**：不只检查 `origin`；不得 `git fetch`、`git ls-remote`、联网或刷新 refs；不执行 `git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`，不调用 Runtime `create`，不写入本次 `change.md`、三件套或产品文件。

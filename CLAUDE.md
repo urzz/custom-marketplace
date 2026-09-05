@@ -55,7 +55,7 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 修改 `/commit` 或 `/commit-and-push` 时同步两者共享的提交合同、新 Skill、插件 metadata、Marketplace、README 和本文件。
 
-## Nuclio v3 5.1.5 约束
+## Nuclio v3 5.2.0 约束
 
 Nuclio 当前权威文件：
 
@@ -71,11 +71,14 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 - `/nuclio:init` 与 `/nuclio:work` 都只能由用户显式调用；init 只在 `${CLAUDE_PROJECT_DIR}/.dev-docs/` 创建或安全修复知识骨架后停止，普通 change 只通过 work。
 - 两个 Skill 始终在调用开始时的当前模式内运行，不调用 `EnterPlanMode` 或 `ExitPlanMode`；若调用时已处于 Claude Code Plan Mode，则立即停止，不创建或恢复 change、不执行 Runtime，并要求用户退出后重新显式调用。`delivery.yaml` milestone 不等于 Claude Code Plan Mode。
 - active change 与新 archive 都完整保留 `change.md`、`delivery.yaml`、`state.yaml`。主会话是唯一控制器；`change.py` 是唯一 State writer，只提供 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令。
+- `/nuclio:work` 通过 Plan Mode 边界后、discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。恢复唯一 active change 不创建或切换分支，多个 active 仍 fail closed；仅无 active change 时才要求调用起点为 attached 且无 staged、unstaged、untracked 改动。
+- 无 active change 时，主会话只读完成 Shape 调查、确定合法 `<change-id>` 与 `feat|fix|refactor|docs|test|chore` 类型（无法明确时为 `feat`）后，复核 branch/HEAD 未漂移、当前仍 clean、本地 `refs/heads/...` 与全部本地配置 remote 的缓存 remote-tracking `refs/remotes/<remote>/...` 无精确冲突；只读本地 Git metadata，不 `fetch`、`ls-remote`、联网或刷新 refs。全部通过后执行 `git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`；只有 post-switch 的 branch、HEAD、clean 和 remote-ref 二次校验成功才调用 `create`。
+- 分支操作只由主会话执行，不加入 Runtime command、State 或 artifact；Runtime 不创建或切换分支，也不保存 branch state。前置检查或 switch 失败不调用 `create`，不写入本次 change 或产品文件；switch 后异常或 `create` 失败不自动回滚，保留分支并在部分成功或最终新建成功报告中包含分支名。不得自动 stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree。
 - 用户只确认结果合同。主会话基于上下文负担按需有界委派 Agent：仅将合同不变、范围清晰且可验证的阅读或诊断密集局部工作交给 Agent；小型确定性工作、产品语义、兼容性、权限、外部副作用、不可逆结果、架构取舍、用户交互和 Runtime/Verify/Finish 决策仍由主会话直接处理。主会话自主维护 delivery milestone、实施方式、检查和合同不变的修复；只有产品语义、兼容性、外部副作用或不可逆结果变化才重新确认。
 - bundled Runtime 通过 `${CLAUDE_SKILL_DIR}` 定位，并显式传入 `${CLAUDE_PROJECT_DIR}`；插件源码和 Marketplace cache 始终只读，运行时写入只落在项目 `.dev-docs/**`。
 - `record-check` 只校验并记录 Claude Code 直接运行的 exact argv，不执行命令。合同、HEAD、检查定义或未登记的产品工作区漂移必须使旧验证失效；stale complete 恢复仅可保留 State 已精确登记的 `APPLIED|PARTIAL` knowledge dirty 路径，详细例外以 Runtime reference 为准。失败、缺失或过期依据回到 Build 修复。
 - 主会话始终自检；独立审查仅按需要使用 `nuclio:readonly-reviewer`。其工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings，不运行 shell、不写文件、不调用 Skill 或 Agent，也不接管 Runtime。
-- `/nuclio:work` 通过 Plan Mode 边界后先仅发现 `.dev-docs/changes/` 的非 archive 直接子目录：无候选时进入 Shape，唯一候选时才以目录名调用 `status --id <change-id> --json`，多个候选时 fail closed 并报告歧义；不得无 ID 调用 `status`、猜测目标或扫描 archive。Shape、Build、恢复、Verify 与 Finish 均从 `.dev-docs/index.md` 路由相关知识；不默认读取全部知识或 archive。Finish 同时检查新增候选和既有知识失效，无候选记录 `NO_OP`，有候选只询问一次“写入并归档（推荐）/跳过并归档”。
+- `/nuclio:work` 通过 Plan Mode 边界并完成只读调用起点 snapshot 后，仅发现 `.dev-docs/changes/` 的非 archive 直接子目录：无候选时进入新建 Shape，唯一候选时才以目录名调用 `status --id <change-id> --json`，多个候选时 fail closed 并报告歧义；snapshot 不得提前阻塞已有 active change 的发现与恢复，不得无 ID 调用 `status`、猜测目标或扫描 archive。Shape、Build、恢复、Verify 与 Finish 均从 `.dev-docs/index.md` 路由相关知识；不默认读取全部知识或 archive。Finish 同时检查新增候选和既有知识失效，无候选记录 `NO_OP`，有候选只询问一次“写入并归档（推荐）/跳过并归档”。
 - Open Design 能力只在显式 `/nuclio:work` 请求且当前请求或已加载项目上下文提供绑定 `project-id` 时启用。主会话仅使用用户已配置 MCP 的只读工具；Shape 不写产品文件，批准后将完整交付固化到固定目录 `.dev-docs/artifacts/open-design/`，knowledge 只接收提炼后的稳定项目事实，随后不静默刷新外部设计。
 - v2 active 输入必须 fail closed；旧 archive 不扫描、解析、修改或删除。archive 只处理显式已完成 change，完整保留三件套且可恢复重跑，不吸收无关 dirty work。
 - Runtime 不执行项目检查，不复制 Claude Code 权限、sandbox、Agent 或 worktree 能力；不自动 push、merge、stash、reset、clean、切换分支或改写历史，不托管或新增 daemon、MCP、网络服务、第二 State writer、DAG 或双栈 Runtime。可选 Open Design MCP 只由主会话消费，不进入 Runtime。

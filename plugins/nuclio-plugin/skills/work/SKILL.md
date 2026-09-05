@@ -9,7 +9,19 @@ disable-model-invocation: true
 
 ## Plan Mode 边界
 
-从显式调用开始直到完成或停止，Shape、Build、Verify 和 Finish 始终在当前模式执行，不得调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若调用开始时已处于 Claude Code Plan Mode，立即 fail closed：不创建或恢复 change，不调用 Runtime、不自行调用 `ExitPlanMode`；报告阻塞，并要求用户先退出 Plan Mode 后重新显式调用 `/nuclio:work`。
+从显式调用开始直到完成或停止，Shape、Build、Verify 和 Finish 始终在当前模式执行，不得调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若调用开始时已处于 Claude Code Plan Mode，立即 fail closed：不创建或恢复 change、不进行 Git 分支检查或创建、不调用 Runtime、不自行调用 `ExitPlanMode`；报告阻塞，并要求用户先退出 Plan Mode 后重新显式调用 `/nuclio:work`。
+
+## 调用起点快照
+
+仅在已通过 Plan Mode fail-closed 边界的 `/nuclio:work` 调用中，主会话必须在 active change discovery 前立即执行只读调用起点快照。所有 Git 命令均显式使用 `git -C "${CLAUDE_PROJECT_DIR}" ...`，不依赖当前目录。使用以下命令捕获起点：
+
+```bash
+git -C "${CLAUDE_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all
+```
+
+主会话必须从该输出确定项目是否为 Git 仓库、`HEAD` 是否为 attached；可用时记录当前分支为 `start_branch`、当前 commit 为 `start_head`，并观察调用起点 staged、unstaged、untracked 是否均为空。输出不可解析或命令失败时记录 snapshot unavailable。此时不得写入文件、调用 Runtime，或进行网络、远程和分支操作。
+
+快照不可用、不是 Git 仓库、`HEAD` 未 attached 或调用起点任一工作区状态不为空，均不得阻止 active change discovery。主会话只在本次调用的瞬时控制信息中记录 unavailable 或 dirty。仅当 discovery 结果为无候选时，才要求有效的 attached `start_branch`/`start_head` 快照且调用起点的 staged、unstaged、untracked 均为空；否则 fail closed。恰有一个或多个候选时，照既有恢复或歧义路径继续，不因快照不可用或调用起点 dirty 而提前停止。
 
 ## Read first
 
@@ -27,7 +39,48 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 
 ### 1. Shape
 
-通过 Plan Mode 边界后，先仅检查 `${CLAUDE_PROJECT_DIR}/.dev-docs/changes/` 的直接子目录，排除 `archive/`，以发现 active change 候选；不得扫描、读取或猜测 archive。无候选时不调用 `status`，直接调查用户请求、仓库事实和通过 `.dev-docs/index.md` 路由的相关长期知识，并在需要时以 `create` 创建三件套草稿。恰有一个候选时，以其目录名作为 change ID 调用 `status --id <change-id> --json`，再按 `next_action` 恢复。多个候选时立即 fail closed：不调用 Runtime、不猜测目标，报告候选目录并要求用户先解决歧义。`create` 的单行参数只是种子；创建后必须重新读取并按调查事实补全 `change.md`，使其无需旧聊天也能说明 Goal、必要 Context、每项独立 Constraint/Non-goal 和可观察 Acceptance。多个独立边界使用列表，不得压成一句同义概括，也不得把实现步骤写入结果合同。
+通过调用起点快照后，先仅检查 `${CLAUDE_PROJECT_DIR}/.dev-docs/changes/` 的直接子目录，排除 `archive/`，以发现 active change 候选；不得扫描、读取或猜测 archive。
+
+- 恰有一个候选时，丢弃调用起点快照。以目录名作为 change ID 调用 `status --id <change-id> --json`，再按 `next_action` 恢复；不得创建或切换分支。
+- 多个候选时，同样丢弃快照并立即 fail closed：不调用 Runtime、不猜测目标，报告候选目录并要求用户先解决歧义；不得创建或切换分支。
+- 无候选时，按以下新建路径继续。
+
+无候选时不调用 `status`。主会话必须按以下确定性顺序处理：
+
+1. 确认调用起点快照有效：项目是 Git 仓库、`HEAD` 为 attached，且起点的 staged、unstaged、untracked 均为空。快照 unavailable 或起点 dirty 时立即 fail closed；即使 Shape 期间外部清理了工作区也不得继续新建。
+2. 只读调查用户请求、仓库事实和通过 `.dev-docs/index.md` 路由的相关长期知识，确定遵守 `change-format.md` 的合法 `<change-id>`、结果合同和固定类型前缀。类型仅可为 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`。目标分支为 `<type>/<change-id>`。
+3. 完成只读 Shape 后、调用 Runtime `create` 或写入任何本次 change 或产品文件前，重新运行以下命令并以其输出重新读取当前 branch、`HEAD` 与 clean 状态：
+
+   ```bash
+   git -C "${CLAUDE_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all
+   ```
+
+   输出必须可解析，当前 branch 与 `HEAD` 必须分别等于 `start_branch` 与 `start_head`，且 staged、unstaged、untracked 必须均为空；任一不满足或命令失败立即 fail closed。
+4. 以以下本地精确查询检查 `refs/heads/<type>/<change-id>`：
+
+   ```bash
+   git -C "${CLAUDE_PROJECT_DIR}" show-ref --verify --quiet refs/heads/<type>/<change-id>
+   ```
+
+   exit `0` 表示冲突，exit `1` 表示不存在，其他 exit 均 fail closed。再运行 `git -C "${CLAUDE_PROJECT_DIR}" remote` 列出全部本地配置 remote。对每个 `<remote>`，使用相同 `show-ref --verify --quiet` 语义检查精确 `refs/remotes/<remote>/<type>/<change-id>`。最后运行以下命令读取本地缓存全集，并将每个输出 refname 与已构造的完整目标 refname 集合精确比较，确保不只检查 `origin`：
+
+   ```bash
+   git -C "${CLAUDE_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/
+   ```
+
+5. remote-tracking 只指当前本地缓存的 `refs/remotes/**` 快照。所有 Git/ref 检查只读取本地 Git metadata，不联系 remote；命令或解析异常均 fail closed。绝不调用 `git fetch`、`git ls-remote` 或任何网络或远程操作，也不得静默刷新 refs。
+6. 仅在全部前置检查通过后执行以下命令，其中 `<start-head>` 是已捕获的 `start_head`：
+
+   ```bash
+   git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>
+   ```
+
+7. switch 成功后、调用 `create` 前，再运行步骤 3 的 `git -C "${CLAUDE_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`。输出必须可解析，当前 branch 必须精确为 `<type>/<change-id>`、`HEAD` 必须精确为 `start_head`，且 staged、unstaged、untracked 必须仍均为空。还必须再次运行 `git -C "${CLAUDE_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/`，并将结果与全部已配置 remote 构造的完整目标 refname 集合精确比较；不得把 `foo<type>/<change-id>` 等非精确 ref 当作冲突。若检查期间新出现任何属于已配置 remote 的精确目标 ref，或任一命令/解析/状态检查异常，按“分支可能已创建”的部分成功路径停止：不调用 `create`、不写本次 change 或产品文件、不自动回滚，并报告分支事实。
+8. 仅在 post-switch 校验成功后，以 `create` 创建三件套。`create` 的单行参数只是种子；创建后必须重新读取并按调查事实补全 `change.md`，使其无需旧聊天也能说明 Goal、必要 Context、每项独立 Constraint/Non-goal 和可观察 Acceptance。多个独立边界使用列表，不得压成一句同义概括，也不得把实现步骤写入结果合同。
+
+这些 Git 操作仅由 Claude Code 主会话直接执行，不加入 Runtime command、State、artifact 或用户 Gate；Runtime 仍不创建或切换分支。switch 前的任一前置检查或 `git switch -c` 失败时立即 fail closed：不调用 `create`，不写本次 change 或产品文件。不得自动 stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree。
+
+post-switch 校验成功后，丢弃 `start_branch` 与 `start_head`；创建的分支名只保留在主会话的瞬时控制信息中，不写入 Runtime、State、artifact 或 knowledge。若 `create` 失败，保留新分支、不自动回滚 Git 状态，并在部分成功报告中包含分支名。同一调用最终成功完成时，最终报告也必须包含创建的分支名；恢复调用未创建分支时不得声称创建了分支。
 
 Open Design 输入在 Shape 只通过用户已配置的 MCP 读取；当前请求中的显式绑定优先，其次使用已加载项目上下文中的绑定，不得从知识库或活动页面猜测项目。合同批准前不把设计文件写入产品仓库；MCP 不可用、绑定无效、项目上下文冲突或交付不完整时按 reference 报告 blocker。
 
@@ -63,4 +116,4 @@ python3 "${CLAUDE_SKILL_DIR}/../../scripts/change.py" --project-root "${CLAUDE_P
 
 验证通过后，先报告产品结果与最小证据。通过索引只读取受影响的知识，同时检查本次是否产生新候选以及现有知识是否失效。无候选时以 `NO_OP` 连续补全完成 section、`complete` 和 `archive`。有候选时只使用一次 `AskUserQuestion`：“如何处理以上知识候选并完成本次 change？”，选项为“写入并归档（推荐）”和“跳过并归档”。该选择同时授权知识处理、complete 和 archive；不得再次请求归档确认。
 
-按 `change-format.md` 追加信息完整的 `Outcome`、`Validation`、`Knowledge Updates`、`Residual Risks`，再调用 `complete` 与 `archive`。归档记录必须脱离聊天仍能说明实际交付范围、验证所绑定的 HEAD 与检查结果、知识处理结果和残余风险。只报告最终 outcome、archive 路径/commit 与剩余风险。
+按 `change-format.md` 追加信息完整的 `Outcome`、`Validation`、`Knowledge Updates`、`Residual Risks`，再调用 `complete` 与 `archive`。归档记录必须脱离聊天仍能说明实际交付范围、验证所绑定的 HEAD 与检查结果、知识处理结果和残余风险。只报告最终 outcome、archive 路径/commit、剩余风险，以及新建调用所创建的分支名（如适用）。

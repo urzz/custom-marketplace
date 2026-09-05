@@ -23,6 +23,18 @@
 
 发现 active 目录中的 v2 `plan.yaml` 或旧 State 时，Runtime 返回 `V2_ACTIVE_UNSUPPORTED` 并停止；不迁移、不读取旧协议。archive 仅按用户明确的 change ID 操作；不扫描、解析、修改或删除旧 archive。
 
+## 新 change 的 Git 分支边界
+
+新 change 的分支检查和创建是 Claude Code 主会话在调用 Runtime `create` 前执行的前置行为，不是 active artifact schema、Runtime command、State 字段或用户 Gate。所有 Git 命令均显式使用 `git -C "${CLAUDE_PROJECT_DIR}" ...`，不依赖当前目录。通过 Plan Mode fail-closed 边界后、active change discovery 前，主会话立即只读运行 `git -C "${CLAUDE_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`，从可解析输出记录 Git 仓库和 attached `HEAD` 是否可用；可用时捕获 `start_branch` 与 `start_head`，并观察调用起点 staged、unstaged、untracked 是否均为空。命令或解析异常为 snapshot unavailable。此时不得写文件、调用 Runtime，或进行网络、远程和分支操作。快照不可用或调用起点 dirty 不得阻止 discovery；若随后发现唯一或多个 active change，丢弃快照并遵循既有恢复或歧义路径，不创建或切换分支。
+
+仅 `/nuclio:work` 无 active change 时适用：主会话必须先要求有效 attached `start_branch`/`start_head` 快照及调用起点 staged、unstaged、untracked 均为空。任一不满足即 fail closed，即使 Shape 期间外部清理了工作区也不得新建。然后只读调查需求、索引路由知识和仓库事实，确定合法 `<change-id>` 与类型。类型仅可为 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`；分支名为 `<type>/<change-id>`，其中类型不写入三件套。
+
+完成只读 Shape 后、在 Runtime `create` 和任何本次 change 或产品文件写入前，主会话重新运行 `git -C "${CLAUDE_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`。输出必须可解析；当前 branch 与 `HEAD` 必须分别等于 `start_branch` 与 `start_head`，且 staged、unstaged、untracked 必须仍均为空；任一异常 fail closed。使用 `git -C "${CLAUDE_PROJECT_DIR}" show-ref --verify --quiet refs/heads/<type>/<change-id>` 检查精确本地 ref：exit `0` 表示冲突、exit `1` 表示不存在、其他 exit fail closed。运行 `git -C "${CLAUDE_PROJECT_DIR}" remote` 列出全部本地配置 remote，并对每个 remote 用相同 `show-ref --verify --quiet` 语义检查精确 `refs/remotes/<remote>/<type>/<change-id>`。再运行 `git -C "${CLAUDE_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/` 读取本地缓存全集，和由全部已配置 remote 构造的完整目标 refname 集合精确比较，确保不只查 `origin`。remote-tracking 仅指当前本地缓存的 `refs/remotes/**` 快照。所有检查只读取本地 Git metadata，不联系 remote；命令或解析异常 fail closed；不得调用 `git fetch`、`git ls-remote` 或任何网络或远程操作，也不得静默刷新 refs。随后执行 `git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`。
+
+switch 成功后、调用 `create` 前，主会话再运行 `git -C "${CLAUDE_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`。输出必须可解析，当前 branch 必须精确为 `<type>/<change-id>`、`HEAD` 必须精确为 `start_head`，且 staged、unstaged、untracked 仍均为空。还必须再次运行 `git -C "${CLAUDE_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/`，将输出与全部已配置 remote 构造的完整目标 refname 集合精确比较；不得把 `foo<type>/<change-id>` 等非精确 ref 当作冲突。若检查期间新出现任何属于已配置 remote 的精确目标 ref，或任一命令、解析或状态检查异常，按“分支可能已创建”的部分成功路径停止：不调用 `create`、不写本次 change 或产品文件、不自动回滚，并报告分支事实。只有 post-switch 校验成功后才能调用 `create` 创建三件套；之后才丢弃 `start_branch` 与 `start_head`。创建的分支名只保留在本次调用的主会话瞬时控制信息中，不写入 Runtime、State、artifact 或 knowledge。
+
+switch 前的任一前置检查或切换失败均 fail closed，不调用 `create` 或写入本次 change 或产品文件。切换成功但 `create` 失败时，保留新分支并在部分成功报告中包含分支名；不自动回滚。同一调用最终成功完成时，最终报告也必须包含创建的分支名；恢复调用未创建分支时不得声称创建了分支。Finish 最终报告包含 outcome、archive 路径/commit、剩余风险，以及新建调用所创建的分支名（如适用）。不得自动 stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree。Runtime 不创建或切换分支，也不保存 branch identity。
+
 ## `change.md`
 
 ```markdown

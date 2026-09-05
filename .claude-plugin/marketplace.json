@@ -18,7 +18,7 @@
     {
       "name": "nuclio",
       "source": "./plugins/nuclio-plugin",
-      "description": "Use when a project needs Nuclio v3 5.1.5 for explicit /nuclio:init knowledge setup or /nuclio:work delivery without entering or exiting Claude Code Plan Mode; /nuclio:work safely discovers zero, one, or multiple active changes before any status query, uses context-aware bounded Agent dispatch for stable, scoped, verifiable Build work while the main session retains control decisions, then provides optional read-only Open Design MCP intake from the current request or loaded project context followed by a readable .dev-docs artifact snapshot, one user-confirmed result contract, file-first delivery state, current verification, optional read-only review, and recoverable archive."
+      "description": "Use when a project needs Nuclio v3 5.2.0 for explicit /nuclio:init knowledge setup or /nuclio:work delivery without entering or exiting Claude Code Plan Mode; /nuclio:work safely discovers zero, one, or multiple active changes before any status query, captures invocation-start HEAD and creates a guarded new-change branch before create, uses context-aware bounded Agent dispatch for stable, scoped, verifiable Build work while the main session retains control decisions, then provides optional read-only Open Design MCP intake from the current request or loaded project context followed by a readable .dev-docs artifact snapshot, one user-confirmed result contract, file-first delivery state, current verification, optional read-only review, and recoverable archive."
     }
   ]
 }

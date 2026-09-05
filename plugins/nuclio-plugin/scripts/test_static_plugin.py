@@ -203,6 +203,161 @@ class ClaudeCodeContracts(unittest.TestCase):
         source = read(RUNTIME)
         self.assertIn('status.add_argument("--id", required=True)', source)
 
+    def test_new_change_branch_contract_is_precise_and_precedes_create(self):
+        work = read(WORK)
+        workflow = read(REFERENCES / "workflow.md")
+        change_format = read(REFERENCES / "change-format.md")
+        context = read(REFERENCES / "context-hygiene.md")
+        eval_prompts = read(REFERENCES / "eval-prompts.md")
+        snapshot = 'git -C "${CLAUDE_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all'
+        local_ref = 'git -C "${CLAUDE_PROJECT_DIR}" show-ref --verify --quiet refs/heads/<type>/<change-id>'
+        remote_refs = 'git -C "${CLAUDE_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/'
+        switch = 'git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>'
+        type_contract = "类型仅可为 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`"
+
+        # The work Skill is the main procedural contract: assert its ordered, independently
+        # meaningful guards rather than fragile copies of long prose from each reference.
+        for required in (
+            "Plan Mode 边界",
+            "调用起点快照",
+            snapshot,
+            "active change discovery",
+            "snapshot unavailable",
+            "快照不可用、不是 Git 仓库、`HEAD` 未 attached 或调用起点任一工作区状态不为空，均不得阻止 active change discovery",
+            "仅当 discovery 结果为无候选时，才要求有效的 attached `start_branch`/`start_head` 快照且调用起点的 staged、unstaged、untracked 均为空",
+            type_contract,
+            "只读调查用户请求、仓库事实",
+            "当前 branch 与 `HEAD` 必须分别等于 `start_branch` 与 `start_head`",
+            "refs/heads/<type>/<change-id>",
+            "git -C \"${CLAUDE_PROJECT_DIR}\" remote",
+            "refs/remotes/<remote>/<type>/<change-id>",
+            remote_refs,
+            "完整目标 refname 集合精确比较，确保不只检查 `origin`",
+            "本地 Git metadata，不联系 remote",
+            "绝不调用 `git fetch`、`git ls-remote` 或任何网络或远程操作",
+            switch,
+            "post-switch 校验成功后，以 `create` 创建三件套",
+            "switch 前的任一前置检查或 `git switch -c` 失败时立即 fail closed：不调用 `create`，不写本次 change 或产品文件",
+            "若 `create` 失败，保留新分支、不自动回滚 Git 状态，并在部分成功报告中包含分支名",
+            "同一调用最终成功完成时，最终报告也必须包含创建的分支名",
+        ):
+            self.assertIn(required, work)
+        plan_mode = work.index("Plan Mode 边界")
+        invocation_snapshot = work.index("调用起点快照")
+        discovery = work.index("通过调用起点快照后，先仅检查")
+        shape = work.index("完成只读 Shape 后")
+        pre_switch_snapshot = work.index(snapshot, shape)
+        post_switch = work.index("switch 成功后、调用 `create` 前")
+        create = work.index("post-switch 校验成功后，以 `create` 创建三件套")
+        self.assertLess(plan_mode, invocation_snapshot)
+        self.assertLess(invocation_snapshot, discovery)
+        self.assertLess(work.index(snapshot), discovery)
+        self.assertLess(work.index("只读调查用户请求、仓库事实"), pre_switch_snapshot)
+        self.assertLess(pre_switch_snapshot, work.index("当前 branch 与 `HEAD` 必须分别等于 `start_branch` 与 `start_head`"))
+        self.assertLess(work.index("当前 branch 与 `HEAD` 必须分别等于 `start_branch` 与 `start_head`"), work.index(local_ref))
+        self.assertLess(work.index(local_ref), work.index(switch))
+        self.assertLess(work.index(switch), post_switch)
+        self.assertLess(post_switch, create)
+        self.assertLess(work.index(remote_refs), work.index(switch))
+        self.assertGreaterEqual(work.count(remote_refs), 2)
+        post_switch_contract = work[post_switch:create]
+        for required in (
+            "当前 branch 必须精确为 `<type>/<change-id>`",
+            "`HEAD` 必须精确为 `start_head`",
+            "staged、unstaged、untracked 必须仍均为空",
+            remote_refs,
+            "全部已配置 remote 构造的完整目标 refname 集合精确比较",
+            "不得把 `foo<type>/<change-id>` 等非精确 ref 当作冲突",
+            "若检查期间新出现任何属于已配置 remote 的精确目标 ref",
+            "不调用 `create`、不写本次 change 或产品文件、不自动回滚",
+        ):
+            self.assertIn(required, post_switch_contract)
+        self.assertIn("不得自动 stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree", work)
+
+        # Recovery and blocked entry paths retain discovery behavior without branch work.
+        self.assertIn("恰有一个候选时，丢弃调用起点快照", work)
+        self.assertIn("不得创建或切换分支", work)
+        self.assertIn("多个候选时，同样丢弃快照并立即 fail closed", work)
+        self.assertIn("不因快照不可用或调用起点 dirty 而提前停止", work)
+        self.assertIn("不进行 Git 分支检查或创建", work)
+        init = read(INIT)
+        self.assertNotIn("git ", init)
+        self.assertNotIn("switch", init)
+        self.assertNotIn("checkout", init)
+
+        # References and evals synchronize the essentials without duplicating brittle prose.
+        for text in (workflow, change_format, context):
+            self.assertIn(snapshot, text)
+            self.assertIn(switch, text)
+            self.assertIn("不创建或切换分支", text)
+        for text in (workflow, change_format):
+            self.assertIn(type_contract, text)
+        self.assertIn("仅 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`", context)
+        self.assertIn("快照不可用或起点 dirty 不得阻止 discovery", workflow)
+        self.assertIn("恢复调用绝不创建或切换分支", workflow)
+        self.assertIn("Runtime 仍不创建或切换分支，也不保存 branch identity", workflow)
+        self.assertIn("Runtime 不创建或切换分支，也不保存 branch identity", change_format)
+        self.assertIn("快照 unavailable 或起点 dirty 不得阻止 discovery", context)
+        self.assertIn("先完成上述只读调用起点 snapshot，再检查", context)
+        self.assertIn("snapshot 不得提前阻塞已有 active change 的发现与恢复", context)
+        self.assertIn("post-switch branch/HEAD/clean 与 remote-ref 校验，才能 `create`", context)
+        for required in (
+            "无 active change 的 Shape 与新建分支",
+            "snapshot unavailable、detached 或 dirty",
+            "不创建、不切换任何分支，不再次调用 `create`",
+            "多个 active change",
+            "不创建或切换分支",
+            "不做调用起点 snapshot 或分支检查/创建",
+            "git -C \"${CLAUDE_PROJECT_DIR}\" switch -c <type>/<change-id> <start-head>",
+            "不得 `git fetch`、`git ls-remote`、联网或刷新 refs",
+        ):
+            self.assertIn(required, eval_prompts)
+
+    def test_git_commands_are_project_root_bound_and_runtime_has_no_branch_state(self):
+        guides = (WORK, REFERENCES / "workflow.md", REFERENCES / "change-format.md", REFERENCES / "context-hygiene.md", REFERENCES / "eval-prompts.md")
+        prefixes = ('git -C "${CLAUDE_PROJECT_DIR}"', "git -C ...")
+        non_executing_mentions = {"git fetch", "git ls-remote", "git switch -c", "git -C"}
+        for path in guides:
+            text = read(path)
+            commands = []
+            for block in re.findall(r"(?ms)^```(?:bash)?\n(.*?)^```", text):
+                commands.extend(line.strip() for line in block.splitlines() if line.strip().startswith("git "))
+            commands.extend(re.findall(r"`(git [^`]+)`", text))
+            for command in commands:
+                if command in non_executing_mentions:
+                    continue
+                self.assertTrue(command.startswith(prefixes), f"unbound Git command in {path}: {command}")
+        source = read(RUNTIME)
+        self.assertEqual(
+            literal(source, "COMMANDS"),
+            ("create", "approve", "status", "record-check", "verify", "complete", "archive"),
+        )
+        self.assertEqual(literal(source, "ARTIFACTS"), ("change.md", "delivery.yaml", "state.yaml"))
+        self.assertIn(
+            'required = {"schema_version", "change_id", "revision", "phase", "base_head", "approval_head", "verified_head", "verification", "knowledge"}',
+            source,
+        )
+        self.assertNotIn('git(root, "switch"', source)
+        self.assertNotIn('git(root, "checkout"', source)
+        self.assertNotIn('"branch_identity"', source)
+        self.assertNotIn("'branch_identity'", source)
+
+    def test_runtime_contract_has_no_branch_commands_or_branch_state(self):
+        source = read(RUNTIME)
+        self.assertEqual(
+            literal(source, "COMMANDS"),
+            ("create", "approve", "status", "record-check", "verify", "complete", "archive"),
+        )
+        self.assertEqual(literal(source, "ARTIFACTS"), ("change.md", "delivery.yaml", "state.yaml"))
+        self.assertIn(
+            'required = {"schema_version", "change_id", "revision", "phase", "base_head", "approval_head", "verified_head", "verification", "knowledge"}',
+            source,
+        )
+        self.assertNotIn('git(root, "switch"', source)
+        self.assertNotIn('git(root, "checkout"', source)
+        self.assertNotIn('"branch_identity"', source)
+        self.assertNotIn("'branch_identity'", source)
+
     def test_knowledge_is_index_first_in_each_lifecycle_phase(self):
         for path in (WORK, REFERENCES / "workflow.md", REFERENCES / "knowledge.md", REFERENCES / "context-hygiene.md"):
             self.assertIn(".dev-docs/index.md", read(path))
@@ -254,15 +409,17 @@ class PackageSyncContracts(unittest.TestCase):
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
         self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "5.1.5")
+        self.assertEqual(plugin["version"], "5.2.0")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         self.assertEqual(entry["description"], plugin["description"])
+        self.assertIn("Nuclio v3 5.2.0", plugin["description"])
         self.assertIn("without entering or exiting Claude Code Plan Mode", plugin["description"])
+        self.assertIn("captures invocation-start HEAD and creates a guarded new-change branch before create", plugin["description"])
         self.assertIn("context-aware bounded Agent dispatch", plugin["description"])
         readme = read(ROOT / "README.md")
-        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.1.5 约束", 1)[1].split("## 验证命令", 1)[0]
-        self.assertIn("Nuclio v3 5.1.5", readme)
-        self.assertIn("Nuclio v3 5.1.5", read(ROOT / "CLAUDE.md"))
+        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.2.0 约束", 1)[1].split("## 验证命令", 1)[0]
+        self.assertIn("Nuclio v3 5.2.0", readme)
+        self.assertIn("Nuclio v3 5.2.0", read(ROOT / "CLAUDE.md"))
         self.assertIn("主会话基于上下文负担按需有界委派 Agent", readme)
         self.assertIn("主会话基于上下文负担按需有界委派 Agent", nuclio_rules)
         for text in (readme, nuclio_rules):
@@ -273,6 +430,24 @@ class PackageSyncContracts(unittest.TestCase):
             self.assertNotIn("task-implementer", text)
             self.assertIn("docs/research/", text)
             self.assertIn("Open Design", text)
+            self.assertIn("仅无 active change", text)
+            self.assertIn("调用起点 snapshot", text)
+            self.assertIn("snapshot unavailable", text)
+            self.assertRegex(text, r"snapshot (?:unavailable 或起点 dirty 不阻塞|不得提前阻塞)已有 active change 的(?: discovery 与恢复|发现与恢复)")
+            self.assertIn("只读", text)
+            self.assertIn("attached", text)
+            for dirty_kind in ("staged", "unstaged", "untracked"):
+                self.assertIn(dirty_kind, text)
+            self.assertIn("remote-tracking", text)
+            self.assertIn('git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>', text)
+            self.assertIn("post-switch", text)
+            self.assertIn("不调用 `create`", text)
+            self.assertIn("恢复唯一 active change", text)
+            self.assertIn("Runtime", text)
+            self.assertIn("不创建或切换分支", text)
+            self.assertIn("branch state", text)
+            self.assertIn("自动回滚", text)
+            self.assertIn("stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree", text)
 
 
 if __name__ == "__main__":
