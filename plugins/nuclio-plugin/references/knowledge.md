@@ -33,3 +33,5 @@
 选项为“写入并归档（推荐）”与“跳过并归档”。用户也可说明调整；调整后重新展示同一组选择。一次写入或跳过同时授权知识处理、完成 section、`complete` 与 `archive`，不得再次请求归档确认或要求固定口令。
 
 结果为 `NO_OP`、`APPLIED`、`PARTIAL` 或 `REJECTED`。`APPLIED`/`PARTIAL` 仅声明实际改变且精确匹配的 `.dev-docs/knowledge/**` 路径和必要的 `.dev-docs/index.md`；其余结果不带路径。知识正文和 proposal 不写入 State，短摘要写入 `change.md` 的 `Knowledge Updates`。
+
+`complete` 后到 archive 移动前仍须保持登记路径与实际 dirty knowledge 集合一致；归档中断重试也会复核。已撤销或丢失的改动不能继续声明 `APPLIED`；按已确认选择恢复知识改动，或重新处理知识决定和完成记录，再调用 Runtime。知识路径支持中文文件名；`.dev-docs` 下的父目录和知识文件不得通过符号链接重定向。

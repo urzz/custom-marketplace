@@ -9,8 +9,8 @@
 | `dev-stack` / `0.5.0` | `/dev-stack:skill-forge` | `$dev-stack:skill-forge` | 为 Claude Code、Codex 或双平台创建、修改、审查 skill |
 | `dev-stack` / `0.5.0` | `/dev-stack:commit` | `$dev-stack:commit` | 分析改动并安全创建单个 Conventional Commit |
 | `dev-stack` / `0.5.0` | `/dev-stack:commit-and-push` | `$dev-stack:commit-and-push` | 创建并验证单个提交后普通推送当前分支 |
-| `nuclio` / `5.3.0` | `/nuclio:init` | `$nuclio:init` | 创建或安全修复 `.dev-docs` 知识骨架 |
-| `nuclio` / `5.3.0` | `/nuclio:work` | `$nuclio:work` | 创建、恢复、验证和归档一个 change |
+| `nuclio` / `5.3.1` | `/nuclio:init` | `$nuclio:init` | 创建或安全修复 `.dev-docs` 知识骨架 |
+| `nuclio` / `5.3.1` | `/nuclio:work` | `$nuclio:work` | 创建、恢复、验证和归档一个 change |
 
 `skill-forge` 与 Nuclio 的两个技能仅显式调用。commit 系列保留自动发现，实际暂存、提交和推送仍遵守各自的用户请求与授权合同。
 
@@ -44,11 +44,13 @@ codex plugin add nuclio@jade-tools-marketplace
 
 **Skill Forge** 先确定目标平台与需求，确认 Spec，再生成并校验 Plan，按 Task 顺序实施。宿主与目标可以不同，例如在 Codex 中维护 Claude Code skill。两端共用 Plan validator 和代理角色合同；工具与权限按实际宿主适配。
 
-**Nuclio v3 5.3.0** 共用七命令 Runtime，active change 和新 archive 都保留 `change.md`、`delivery.yaml`、`state.yaml`。在另一宿主恢复时继续读取同一份文件，无需转换状态。
+**Nuclio v3 5.3.1** 共用七命令 Runtime，active change 和新 archive 都保留 `change.md`、`delivery.yaml`、`state.yaml`。在另一宿主恢复时继续读取同一份文件，无需转换状态。
 
-Nuclio 在 Claude Code Plan Mode 或 Codex Plan mode 中均停止并要求退出后重新显式调用。普通模式下，work 在 discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。唯一 active change 按 ID 恢复，多个候选报告歧义；仅无 active change 时才要求起点 attached 且 clean，并在只读 Shape 后完成分支/HEAD/工作区及全部已配置 remote 的缓存 remote-tracking refs 检查，创建受控新分支，再进行 post-switch 复核与 Runtime create。
+Nuclio 在 Claude Code Plan Mode 或 Codex Plan mode 中均停止并要求退出后重新显式调用。普通模式下，work 在 discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。唯一 active change 按 ID 恢复，多个候选报告歧义；仅无 active change 且需要新建时才要求起点 attached 且 clean，并在只读 Shape 后完成分支/HEAD/工作区及全部已配置 remote 的缓存 remote-tracking refs 检查，创建受控新分支，再进行 post-switch 复核与 Runtime create。
 
 用户确认结果合同后，主会话管理交付与检查，按上下文负担有界委派原生 Agent；Runtime 记录当前检查依据、判断完成条件，并支持知识决定与可恢复归档。可选 Open Design 只使用用户已配置的 MCP 和明确绑定的 `project-id`，批准后的设计交付固定保存到 `.dev-docs/artifacts/open-design/`。
+
+手工验收必须明确 `PASS` 或 `FAIL`；旧 v3 无状态手工记录不再作为通过依据，需要重新观察。批准提交回写中断通过 status 的 `recover-approval` 恢复；归档移动中断后，可明确请求“恢复并归档 `<change-id>`”，直接恢复指定 ID。Runtime 支持 Git 子目录项目、中文路径，并在归档移动前检查知识改动和忽略规则；已完成归档可在后续提交后幂等确认，归档内容漂移会被拒绝。
 
 详细规则见 [Nuclio workflow](plugins/nuclio-plugin/references/workflow.md)、[宿主适配](plugins/nuclio-plugin/references/host-runtime.md) 和 [Skill Forge 平台适配](plugins/dev-stack/skills/skill-forge/references/platforms.md)。
 

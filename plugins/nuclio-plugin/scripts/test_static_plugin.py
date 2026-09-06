@@ -203,6 +203,21 @@ class HostContracts(unittest.TestCase):
         source = read(RUNTIME)
         self.assertIn('status.add_argument("--id", required=True)', source)
 
+    def test_explicit_archive_and_approval_recovery_are_routed_by_both_hosts(self):
+        work = read(WORK)
+        exception = work.index("**显式归档恢复例外**")
+        creation = work.index("1. 确认调用起点快照有效")
+        self.assertLess(exception, creation)
+        route = work[exception:creation]
+        for required in ("用户当前明确提供合法", "不列举或读取其他 archive", "直接调用 `archive --id <change-id>`", "不受新建的起点 clean 要求限制", "目标不存在则报告未找到"):
+            self.assertIn(required, route)
+        self.assertIn("恢复 ID 与候选不一致", work)
+        for path in (WORK, REFERENCES / "workflow.md", REFERENCES / "context-hygiene.md", REFERENCES / "host-runtime.md"):
+            guide = read(path)
+            self.assertIn("recover-approval", guide)
+            self.assertIn("archive --id", guide)
+        self.assertIn("显式 ID 恢复归档中断", read(REFERENCES / "eval-prompts.md"))
+
     def test_new_change_branch_contract_is_precise_and_precedes_create(self):
         work = read(WORK)
         workflow = read(REFERENCES / "workflow.md")
@@ -211,7 +226,7 @@ class HostContracts(unittest.TestCase):
         eval_prompts = read(REFERENCES / "eval-prompts.md")
         snapshot = 'git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all'
         local_ref = 'git -C "${NUCLIO_PROJECT_DIR}" show-ref --verify --quiet refs/heads/<type>/<change-id>'
-        remote_refs = 'git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/'
+        remote_refs = 'git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format="%(refname)" refs/remotes/'
         switch = 'git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>'
         type_contract = "类型仅可为 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`"
 
@@ -224,7 +239,7 @@ class HostContracts(unittest.TestCase):
             "active change discovery",
             "snapshot unavailable",
             "快照不可用、不是 Git 仓库、`HEAD` 未 attached 或调用起点任一工作区状态不为空，均不得阻止 active change discovery",
-            "仅当 discovery 结果为无候选时，才要求有效的 attached `start_branch`/`start_head` 快照且调用起点的 staged、unstaged、untracked 均为空",
+            "仅当 discovery 结果为无候选且需要新建时，才要求有效的 attached `start_branch`/`start_head` 快照且调用起点的 staged、unstaged、untracked 均为空",
             type_contract,
             "只读调查用户请求、仓库事实",
             "当前 branch 与 `HEAD` 必须分别等于 `start_branch` 与 `start_head`",
@@ -412,12 +427,12 @@ class PackageSyncContracts(unittest.TestCase):
         for key in ("name", "version", "description"):
             self.assertEqual(claude[key], codex[key])
             self.assertEqual(claude[key], entry[key])
-        self.assertEqual(claude["version"], "5.3.0")
+        self.assertEqual(claude["version"], "5.3.1")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         self.assertIn("Claude Code", claude["description"])
         self.assertIn("Codex", claude["description"])
         self.assertIn("@AGENTS.md", read(ROOT / "CLAUDE.md"))
-        self.assertIn("Nuclio v3 5.3.0", read(ROOT / "AGENTS.md"))
+        self.assertIn("Nuclio v3 5.3.1", read(ROOT / "AGENTS.md"))
         for filename in ("README.md", "AGENTS.md"):
             text = read(ROOT / filename)
             self.assertIn(".agents/plugins/marketplace.json", text)

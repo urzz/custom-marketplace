@@ -27,7 +27,7 @@ git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-fil
 
 主会话必须从该输出确定项目是否为 Git 仓库、`HEAD` 是否为 attached；可用时记录当前分支为 `start_branch`、当前 commit 为 `start_head`，并观察调用起点 staged、unstaged、untracked 是否均为空。输出不可解析或命令失败时记录 snapshot unavailable。此时不得写入文件、调用 Runtime，或进行网络、远程和分支操作。
 
-快照不可用、不是 Git 仓库、`HEAD` 未 attached 或调用起点任一工作区状态不为空，均不得阻止 active change discovery。主会话只在本次调用的瞬时控制信息中记录 unavailable 或 dirty。仅当 discovery 结果为无候选时，才要求有效的 attached `start_branch`/`start_head` 快照且调用起点的 staged、unstaged、untracked 均为空；否则 fail closed。恰有一个或多个候选时，照既有恢复或歧义路径继续，不因快照不可用或调用起点 dirty 而提前停止。
+快照不可用、不是 Git 仓库、`HEAD` 未 attached 或调用起点任一工作区状态不为空，均不得阻止 active change discovery。主会话只在本次调用的瞬时控制信息中记录 unavailable 或 dirty。仅当 discovery 结果为无候选且需要新建时，才要求有效的 attached `start_branch`/`start_head` 快照且调用起点的 staged、unstaged、untracked 均为空；否则 fail closed。恰有一个或多个候选时，照既有恢复或歧义路径继续，不因快照不可用或调用起点 dirty 而提前停止。
 
 ## Read first
 
@@ -47,11 +47,13 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
 
 通过调用起点快照后，先仅检查 `${NUCLIO_PROJECT_DIR}/.dev-docs/changes/` 的直接子目录，排除 `archive/`，以发现 active change 候选；不得扫描、读取或猜测 archive。
 
-- 恰有一个候选时，丢弃调用起点快照。以目录名作为 change ID 调用 `status --id <change-id> --json`，再按 `next_action` 恢复；不得创建或切换分支。
+- 恰有一个候选时，丢弃调用起点快照。若用户明确指定的恢复 ID 与候选不一致，报告目标冲突并停止；否则以目录名作为 change ID 调用 `status --id <change-id> --json`，再按 `next_action` 恢复；不得创建或切换分支。
 - 多个候选时，同样丢弃快照并立即 fail closed：不调用 Runtime、不猜测目标，报告候选目录并要求用户先解决歧义；不得创建或切换分支。
-- 无候选时，按以下新建路径继续。
+- 无候选时，先判断下述显式归档恢复例外；不适用时按新建路径继续。
 
-无候选时不调用 `status`。主会话必须按以下确定性顺序处理：
+**显式归档恢复例外**：仅当用户当前明确提供合法 `<change-id>` 并要求恢复或归档该 ID 时，允许定点检查 `.dev-docs/changes/archive/<change-id>/` 是否存在，不列举或读取其他 archive。目标存在时丢弃调用起点快照，直接调用 `archive --id <change-id>`；该恢复不受新建的起点 clean 要求限制，不调用 `status`、不创建分支或 change。Runtime 校验目标确为可恢复或已提交的 v3 完成态后，完成或确认归档；失败时保留现场并报告。目标不存在则报告未找到，不改走新建。用户未提供 ID 时不得从 dirty 路径猜测归档目标；说明恢复归档需要其明确 ID。
+
+无候选时不调用 `status`。以下起点 clean 和分支规则仅适用于新建，不适用于上述显式归档恢复。主会话必须按以下确定性顺序处理：
 
 1. 确认调用起点快照有效：项目是 Git 仓库、`HEAD` 为 attached，且起点的 staged、unstaged、untracked 均为空。快照 unavailable 或起点 dirty 时立即 fail closed；即使 Shape 期间外部清理了工作区也不得继续新建。
 2. 只读调查用户请求、仓库事实和通过 `.dev-docs/index.md` 路由的相关长期知识，确定遵守 `change-format.md` 的合法 `<change-id>`、结果合同和固定类型前缀。类型仅可为 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`。目标分支为 `<type>/<change-id>`。
@@ -71,7 +73,7 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
    exit `0` 表示冲突，exit `1` 表示不存在，其他 exit 均 fail closed。再运行 `git -C "${NUCLIO_PROJECT_DIR}" remote` 列出全部本地配置 remote。对每个 `<remote>`，使用相同 `show-ref --verify --quiet` 语义检查精确 `refs/remotes/<remote>/<type>/<change-id>`。最后运行以下命令读取本地缓存全集，并将每个输出 refname 与已构造的完整目标 refname 集合精确比较，确保不只检查 `origin`：
 
    ```bash
-   git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/
+   git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format="%(refname)" refs/remotes/
    ```
 
 5. remote-tracking 只指当前本地缓存的 `refs/remotes/**` 快照。所有 Git/ref 检查只读取本地 Git metadata，不联系 remote；命令或解析异常均 fail closed。绝不调用 `git fetch`、`git ls-remote` 或任何网络或远程操作，也不得静默刷新 refs。
@@ -81,7 +83,7 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
    git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>
    ```
 
-7. switch 成功后、调用 `create` 前，再运行步骤 3 的 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`。输出必须可解析，当前 branch 必须精确为 `<type>/<change-id>`、`HEAD` 必须精确为 `start_head`，且 staged、unstaged、untracked 必须仍均为空。还必须再次运行 `git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/`，并将结果与全部已配置 remote 构造的完整目标 refname 集合精确比较；不得把 `foo<type>/<change-id>` 等非精确 ref 当作冲突。若检查期间新出现任何属于已配置 remote 的精确目标 ref，或任一命令/解析/状态检查异常，按“分支可能已创建”的部分成功路径停止：不调用 `create`、不写本次 change 或产品文件、不自动回滚，并报告分支事实。
+7. switch 成功后、调用 `create` 前，再运行步骤 3 的 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`。输出必须可解析，当前 branch 必须精确为 `<type>/<change-id>`、`HEAD` 必须精确为 `start_head`，且 staged、unstaged、untracked 必须仍均为空。还必须再次运行 `git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format="%(refname)" refs/remotes/`，并将结果与全部已配置 remote 构造的完整目标 refname 集合精确比较；不得把 `foo<type>/<change-id>` 等非精确 ref 当作冲突。若检查期间新出现任何属于已配置 remote 的精确目标 ref，或任一命令/解析/状态检查异常，按“分支可能已创建”的部分成功路径停止：不调用 `create`、不写本次 change 或产品文件、不自动回滚，并报告分支事实。
 8. 仅在 post-switch 校验成功后，以 `create` 创建三件套。`create` 的单行参数只是种子；创建后必须重新读取并按调查事实补全 `change.md`，使其无需旧聊天也能说明 Goal、必要 Context、每项独立 Constraint/Non-goal 和可观察 Acceptance。多个独立边界使用列表，不得压成一句同义概括，也不得把实现步骤写入结果合同。
 
 这些 Git 操作仅由 宿主主会话直接执行，不加入 Runtime command、State、artifact 或用户 Gate；Runtime 仍不创建或切换分支。switch 前的任一前置检查或 `git switch -c` 失败时立即 fail closed：不调用 `create`，不写本次 change 或产品文件。不得自动 stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree。
@@ -110,13 +112,15 @@ Open Design change 在批准后的首个相关 milestone 中把已接受的设�
 
 ### 3. Verify
 
-先执行 `status --json`，读取工作包、当前合同、milestone/handoff，并经索引读取相关知识。宿主主会话在当前 HEAD 直接执行 delivery 中的 exact argv；随后为每项检查调用 `record-check`，再调用 `verify`。Runtime 不执行检查。
+先执行 `status --id <change-id> --json`，读取工作包、当前合同、milestone/handoff，并经索引读取相关知识。`next_action=recover-approval` 时先重跑 `approve --id <change-id>`，恢复已经提交但尚未写回的批准，再重新读取 status；不重复确认同一合同。宿主主会话在当前 HEAD 按 check 的 `cwd` 和 `timeout_seconds` 直接执行 delivery 中的 exact argv；随后为每项检查调用 `record-check`，再调用 `verify`。Runtime 不执行检查。
 
 ```bash
 python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_PROJECT_DIR}" status --id <change-id> --json
 python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_PROJECT_DIR}" record-check --id <change-id> --check-id <id> --head <head> --exit-code <code> --summary <summary> -- <exact-argv>
 python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_PROJECT_DIR}" verify --id <change-id>
 ```
+
+手工观察通过 `verify --manual` 记录，JSON 必须包含 `acceptance`、`status: PASS|FAIL`、`steps`、`result`、`executor`。仅 `PASS` 贡献通过依据；当前 `FAIL` 使对应 Acceptance 保持未通过，即使其他检查或 reviewer 覆盖它。`manual_blocker` 非空时回到 Build 修复，并以新的完整手工批次复验。旧 v3 manual 记录缺少 `status` 时可读取恢复，但不再贡献通过依据；补做观察后替换，不推测旧 `result` 文本的结论。
 
 恢复时按 `status --json` 基于当前 evidence 给出的 `next_action` 继续到合同确认、Build、Verify、Finish 或 archive；`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。Verify FAIL、缺失或过期依据时回到 Build 自主修复；向 Runtime 提交当前 reviewer `FAIL` 同样回到 Build。HEAD、合同或 check 定义变化会使旧依据失效。先进行主会话整体自检；用户或项目要求、较高后果或验证不足时，按 [宿主适配](../../references/host-runtime.md) 选择具有有效只读限制的 fresh reviewer，传入 [只读审查合同](../../references/readonly-review.md) 的绝对路径或完整正文与必要材料。reviewer 只返回 findings，主会话自行决定后续工作和 Runtime 输入。代理不可用时主会话继续自检并明确独立审查未执行；若独立审查为用户或项目要求，则保留未满足项，不宣称完成。
 
@@ -125,3 +129,5 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
 验证通过后，先报告产品结果与最小证据。通过索引只读取受影响的知识，同时检查本次是否产生新候选以及现有知识是否失效。无候选时以 `NO_OP` 连续补全完成 section、`complete` 和 `archive`。有候选时只使用一次宿主确认交互：“如何处理以上知识候选并完成本次 change？”，选项为“写入并归档（推荐）”和“跳过并归档”。该选择同时授权知识处理、complete 和 archive；不得再次请求归档确认。
 
 按 `change-format.md` 追加信息完整的 `Outcome`、`Validation`、`Knowledge Updates`、`Residual Risks`，再调用 `complete` 与 `archive`。归档记录必须脱离聊天仍能说明实际交付范围、验证所绑定的 HEAD 与检查结果、知识处理结果和残余风险。只报告最终 outcome、archive 路径/commit、剩余风险，以及新建调用所创建的分支名（如适用）。
+
+归档移动或提交中断时保留目录与 Git 现场，报告精确 change ID；同一调用在原因解除后可直接重跑 `archive --id <change-id>`，新会话按 Shape 的显式归档恢复例外进入。不得手工改写 State、删除目录或回滚提交来伪造完成。

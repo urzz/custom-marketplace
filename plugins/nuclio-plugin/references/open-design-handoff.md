@@ -45,4 +45,6 @@
 
 用 delivery 中的 exact argv 验证构建、lint 和测试。视觉、交互、响应式与无障碍观察通过 `verify --manual` 绑定到当前 HEAD；记录视口、步骤和结果，不把截图或完整日志写入 State。
 
+每条 manual JSON 必须显式包含 `status: PASS|FAIL` 以及 `acceptance`、`steps`、`result`、`executor`。观察失败提交 `FAIL` 并回到 Build；不能因为已记录观察就视为验收通过。旧记录缺少状态时重新观察，不猜测自由文本结果。
+
 Finish 时把版本化设计快照视为当前 change 的可恢复输入，而不是项目事实。Open Design 绑定继续归属 `CLAUDE.md` 或 `AGENTS.md`；只有从设计中提炼出的跨 change 稳定规则新建、变化或失效时，才按知识流程提出候选，不要把完整交付或本次同步记录复制进长期知识。

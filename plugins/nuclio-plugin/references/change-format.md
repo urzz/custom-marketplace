@@ -21,6 +21,8 @@
 
 `change-id` 仅可使用小写字母、数字和单个连字符分隔的段；不得为 `archive`，不得含路径分隔符、`..`、glob 或控制字符。Runtime 的所有路径均解析在显式 project root 的 `.dev-docs/**` 下。
 
+项目根目录可位于 Git 仓库子目录；Runtime 显式转换项目相对路径和 Git 根目录相对路径，不改变项目边界，项目外的 dirty 路径仍参与共享 Git 工作区的 clean gate。Git 文件列表使用 NUL 分隔，支持中文及需要引用的文件名，不依赖 `core.quotePath`。`.dev-docs` 及其下 artifact/config/knowledge 路径的任一父目录或文件不得为符号链接；发现时返回 `UNSAFE_SYMLINK`，不通过链接写入其他目录。实际项目根路径的解析不受此限制。
+
 发现 active 目录中的 v2 `plan.yaml` 或旧 State 时，Runtime 返回 `V2_ACTIVE_UNSUPPORTED` 并停止；不迁移、不读取旧协议。archive 仅按用户明确的 change ID 操作；不扫描、解析、修改或删除旧 archive。
 
 ## 新 change 的 Git 分支边界
@@ -29,9 +31,9 @@
 
 仅 `/nuclio:work` 无 active change 时适用：主会话必须先要求有效 attached `start_branch`/`start_head` 快照及调用起点 staged、unstaged、untracked 均为空。任一不满足即 fail closed，即使 Shape 期间外部清理了工作区也不得新建。然后只读调查需求、索引路由知识和仓库事实，确定合法 `<change-id>` 与类型。类型仅可为 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`；分支名为 `<type>/<change-id>`，其中类型不写入三件套。
 
-完成只读 Shape 后、在 Runtime `create` 和任何本次 change 或产品文件写入前，主会话重新运行 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`。输出必须可解析；当前 branch 与 `HEAD` 必须分别等于 `start_branch` 与 `start_head`，且 staged、unstaged、untracked 必须仍均为空；任一异常 fail closed。使用 `git -C "${NUCLIO_PROJECT_DIR}" show-ref --verify --quiet refs/heads/<type>/<change-id>` 检查精确本地 ref：exit `0` 表示冲突、exit `1` 表示不存在、其他 exit fail closed。运行 `git -C "${NUCLIO_PROJECT_DIR}" remote` 列出全部本地配置 remote，并对每个 remote 用相同 `show-ref --verify --quiet` 语义检查精确 `refs/remotes/<remote>/<type>/<change-id>`。再运行 `git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/` 读取本地缓存全集，和由全部已配置 remote 构造的完整目标 refname 集合精确比较，确保不只查 `origin`。remote-tracking 仅指当前本地缓存的 `refs/remotes/**` 快照。所有检查只读取本地 Git metadata，不联系 remote；命令或解析异常 fail closed；不得调用 `git fetch`、`git ls-remote` 或任何网络或远程操作，也不得静默刷新 refs。随后执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`。
+完成只读 Shape 后、在 Runtime `create` 和任何本次 change 或产品文件写入前，主会话重新运行 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`。输出必须可解析；当前 branch 与 `HEAD` 必须分别等于 `start_branch` 与 `start_head`，且 staged、unstaged、untracked 必须仍均为空；任一异常 fail closed。使用 `git -C "${NUCLIO_PROJECT_DIR}" show-ref --verify --quiet refs/heads/<type>/<change-id>` 检查精确本地 ref：exit `0` 表示冲突、exit `1` 表示不存在、其他 exit fail closed。运行 `git -C "${NUCLIO_PROJECT_DIR}" remote` 列出全部本地配置 remote，并对每个 remote 用相同 `show-ref --verify --quiet` 语义检查精确 `refs/remotes/<remote>/<type>/<change-id>`。再运行 `git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format="%(refname)" refs/remotes/` 读取本地缓存全集，和由全部已配置 remote 构造的完整目标 refname 集合精确比较，确保不只查 `origin`。remote-tracking 仅指当前本地缓存的 `refs/remotes/**` 快照。所有检查只读取本地 Git metadata，不联系 remote；命令或解析异常 fail closed；不得调用 `git fetch`、`git ls-remote` 或任何网络或远程操作，也不得静默刷新 refs。随后执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`。
 
-switch 成功后、调用 `create` 前，主会话再运行 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`。输出必须可解析，当前 branch 必须精确为 `<type>/<change-id>`、`HEAD` 必须精确为 `start_head`，且 staged、unstaged、untracked 仍均为空。还必须再次运行 `git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/`，将输出与全部已配置 remote 构造的完整目标 refname 集合精确比较；不得把 `foo<type>/<change-id>` 等非精确 ref 当作冲突。若检查期间新出现任何属于已配置 remote 的精确目标 ref，或任一命令、解析或状态检查异常，按“分支可能已创建”的部分成功路径停止：不调用 `create`、不写本次 change 或产品文件、不自动回滚，并报告分支事实。只有 post-switch 校验成功后才能调用 `create` 创建三件套；之后才丢弃 `start_branch` 与 `start_head`。创建的分支名只保留在本次调用的主会话瞬时控制信息中，不写入 Runtime、State、artifact 或 knowledge。
+switch 成功后、调用 `create` 前，主会话再运行 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`。输出必须可解析，当前 branch 必须精确为 `<type>/<change-id>`、`HEAD` 必须精确为 `start_head`，且 staged、unstaged、untracked 仍均为空。还必须再次运行 `git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format="%(refname)" refs/remotes/`，将输出与全部已配置 remote 构造的完整目标 refname 集合精确比较；不得把 `foo<type>/<change-id>` 等非精确 ref 当作冲突。若检查期间新出现任何属于已配置 remote 的精确目标 ref，或任一命令、解析或状态检查异常，按“分支可能已创建”的部分成功路径停止：不调用 `create`、不写本次 change 或产品文件、不自动回滚，并报告分支事实。只有 post-switch 校验成功后才能调用 `create` 创建三件套；之后才丢弃 `start_branch` 与 `start_head`。创建的分支名只保留在本次调用的主会话瞬时控制信息中，不写入 Runtime、State、artifact 或 knowledge。
 
 switch 前的任一前置检查或切换失败均 fail closed，不调用 `create` 或写入本次 change 或产品文件。切换成功但 `create` 失败时，保留新分支并在部分成功报告中包含分支名；不自动回滚。同一调用最终成功完成时，最终报告也必须包含创建的分支名；恢复调用未创建分支时不得声称创建了分支。Finish 最终报告包含 outcome、archive 路径/commit、剩余风险，以及新建调用所创建的分支名（如适用）。不得自动 stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree。Runtime 不创建或切换分支，也不保存 branch identity。
 
@@ -132,12 +134,24 @@ State 不保存合同正文、content hash、完整命令输出、diff、Agent/t
 
 CLI 仅有 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令；成功、参数错误和 schema 错误均以 JSON 表达。`record-check` 只比较调用方给出的 argv、HEAD、exit code 与当前定义并记录结果，绝不执行 argv。
 
-`approve` 要求完整合同、完整 delivery、附着 HEAD、空 index 和干净产品工作区；它只提交三件套，subject 为 `approve(<id>): confirm revision <n>`。提交成功但 State 回写中断时，重跑可恢复该提交。重新批准保留首次 `base_head`，替换 approval HEAD，并清空旧验证。
+`approve` 要求完整合同、完整 delivery、附着 HEAD、空 index 和干净产品工作区；它只提交三件套，subject 为 `approve(<id>): confirm revision <n>`。提交成功但 State 回写中断时，`status` 只读识别并返回 `recover-approval`；主会话重跑 `approve`，复核合同和 clean gate 后写回该提交，不重复确认或创建新提交。重新批准保留首次 `base_head`，替换 approval HEAD，并清空旧验证。
+
+`verify --manual` 每个参数是一个包含 `acceptance`、`status`、`steps`、`result`、`executor` 的 JSON 对象，例如：
+
+```json
+{"acceptance":"AC-1","status":"PASS","steps":"密码登录后观察回跳地址","result":"返回原页面并保留 query string","executor":"host"}
+```
+
+`status` 必须为 `PASS|FAIL`，其他说明字段非空；Runtime 添加当前 `head`。只有当前 HEAD 的 `PASS` 能贡献 Acceptance 依据；`FAIL` 优先阻断对应 Acceptance，不能被其他通过的检查或 review 抵消。状态与 `verify` 输出的 `manual_blocker` 列出失败的 Acceptance ID。新输入缺少 `status` 返回 `INVALID_MANUAL`；旧 v3 State 中无 `status` 的手工记录仅保留可读性，不贡献通过依据，依赖它的 active change 必须重新观察并用完整批次替换。不得从自由文本 `result` 猜测成功。
 
 正常 `verify` 要求批准合同未漂移、delivery 覆盖完整、产品工作区干净，且所有当前定义的项目与 change checks 都在当前 HEAD 通过；stale complete 恢复时仅允许 State 已精确登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty，其他 dirty 路径仍被拒绝。HEAD、合同或 check 的 `source`、`id`、`run`、`cwd`、`timeout_seconds`、`covers` 任一漂移（包括新增或删除 check ID）都会使旧依据失效；重跑 `verify` 会移除已不在当前定义中的旧记录。当前 HEAD 上显式 reviewer `FAIL` 会阻断 `verify` 和 `complete`；同一 HEAD 的 `PASS` 可解除该阻断。未提供 `--manual` 时保留同一 HEAD 的已有手工依据；提供 `--manual` 时以该次完整批次替换，旧 HEAD 依据自然失效。`complete` 还要求每条 Acceptance 有当前依据、当前 HEAD 等于 `verified_head`、完成 section 已写入，以及明确且精确的知识结果；terminal evidence 仍为当前时 `verify` 不会降级 complete State，stale complete 恢复时可按验证结果转为 `verified|build`。
 
-`status.next_action` 按当前事实恢复，并在工作包中返回 index 与 dirty-product clean gate：`shape` 为 `confirm-contract`；当前 reviewer `FAIL` 优先为 `build`；检查缺失、失败或过期为 `run-required-checks`；verified evidence 因 HEAD 漂移失效为 `build`；其余尚未绑定的证据为 `verify`；当前 `verified` 仅在 index 为空且除 Finish 可确认的 knowledge 候选外无产品 dirty 时为 `finish`。`complete` 仅在 terminal evidence、完成章节与 clean gate 均当前时为 `archive`；clean gate 只允许 State 已登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty。完成章节缺失为 `finish`，证据或 clean gate 漂移按相同规则回到 Build/检查并允许 `record-check`、`verify` 重建依据，不重新确认未变化的合同。工作包同时返回 `verified_head`、缺失 Acceptance 和当前 reviewer blocker。
+`status.next_action` 按当前事实恢复，并在工作包中返回 index 与 dirty-product clean gate：可识别的批准提交回写中断为 `recover-approval`；`shape` 或尚无可恢复批准为 `confirm-contract`；当前 reviewer `FAIL` 或 `manual_blocker` 优先为 `build`；检查缺失、失败或过期为 `run-required-checks`；verified evidence 因 HEAD 漂移失效为 `build`；其余尚未绑定的证据为 `verify`；当前 `verified` 仅在 index 为空且除 Finish 可确认的 knowledge 候选外无产品 dirty 时为 `finish`。`complete` 仅在 terminal evidence、完成章节与 clean gate 均当前时为 `archive`；clean gate 只允许 State 已登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty。完成章节缺失为 `finish`，证据或 clean gate 漂移按相同规则回到 Build/检查并允许 `record-check`、`verify` 重建依据，不重新确认未变化的合同。工作包同时返回 `verified_head`、缺失 Acceptance 和当前 reviewer/manual blocker。
 
 知识结果为 `NO_OP|APPLIED|PARTIAL|REJECTED`。`NO_OP|REJECTED` 不带路径；`APPLIED|PARTIAL` 必须给出与当前 dirty knowledge 路径精确一致的 `.dev-docs/knowledge/**` 或 `.dev-docs/index.md` 路径。
 
-`archive` 只处理已完成的显式 change，完整保留三件套，subject 为 `archive(<id>): retain complete change record`。正常归档及移动/提交中断恢复都重新验证批准合同、完整 delivery、当前 check 定义和 terminal evidence；它只暂存 active/archive 三件套和确认的知识路径，不吸收无关修改。成功重跑幂等。terminal evidence 仍为当前的完成态拒绝新的 `record-check`，避免 State 被无条件降级；证据漂移后的完成态可按恢复路由重建依据。Runtime 不 push、merge、stash、reset、clean、切换分支或改写历史。
+`archive` 只处理已完成的显式 change，完整保留三件套，subject 为 `archive(<id>): retain complete change record`。正常归档及移动后尚未提交的恢复都重新验证批准合同、完整 delivery、当前 check 定义和 terminal evidence，并要求知识路径仍与实际 dirty knowledge 集合精确一致；撤销或丢失知识改动返回 `KNOWLEDGE_PATH_MISMATCH`。移动前确认 archive 目标未被 Git 忽略，否则返回 `ARCHIVE_TARGET_IGNORED` 且不移动、不暂存。它只暂存 active/archive 三件套和确认的知识路径，不吸收无关修改；暂存或提交失败时仅撤销该 transition 实际已暂存的路径，保留移动后的目录供显式 ID 重跑，不能撤销暂存时报告精确待恢复路径。
+
+已提交归档的成功重跑幂等，不要求归档提交恰好为 HEAD。Runtime 只查询显式 ID 的 archive State 文件引入历史，找到当前分支历史中的精确归档提交；要求工作区三件套与该提交一致，并以原 `verified_head` 的项目 check 定义验证历史 terminal evidence。归档文件漂移返回 `ARCHIVE_CONTENT_DRIFT`，不修改它们；后续普通产品提交或检查配置变化不会使已完成归档变成未完成。此路径不重新吸收知识或创建提交，不扫描其他 archive。
+
+宿主新会话仅在用户当前明确给出恢复/归档 ID 且无 active 候选时，允许定点检查对应 archive 目录，并直接调用 `archive --id <change-id>`；不经过新建的起点 clean 和分支规则。没有 ID 时要求用户明确目标，不猜测或扫描 archive；多个 active 仍 fail closed。terminal evidence 仍为当前的完成态拒绝新的 `record-check`，避免 State 被无条件降级；证据漂移后的完成态可按恢复路由重建依据。Runtime 不 push、merge、stash、reset、clean、切换分支或改写历史。

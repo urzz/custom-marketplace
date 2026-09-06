@@ -90,12 +90,26 @@ def under(root: Path, path: Path) -> Path:
     return path
 
 
+def devdocs_path(root: Path, path: Path) -> Path:
+    """固定项目知识目录，拒绝通过任一父目录或文件符号链接重定向。"""
+    try:
+        path.relative_to(root / ".dev-docs")
+    except ValueError as exc:
+        raise NuclioError("PATH_ESCAPE", "Runtime artifacts must be under .dev-docs") from exc
+    current = root
+    for part in path.relative_to(root).parts:
+        current /= part
+        if current.is_symlink():
+            raise NuclioError("UNSAFE_SYMLINK", "Runtime artifact paths cannot follow symlinks", path=rel(root, current))
+    return under(root, path)
+
+
 def active_dir(root: Path, change_id: str) -> Path:
-    return under(root, root / ".dev-docs" / "changes" / validate_id(change_id))
+    return devdocs_path(root, root / ".dev-docs" / "changes" / validate_id(change_id))
 
 
 def archive_dir(root: Path, change_id: str) -> Path:
-    return under(root, root / ".dev-docs" / "changes" / "archive" / validate_id(change_id))
+    return devdocs_path(root, root / ".dev-docs" / "changes" / "archive" / validate_id(change_id))
 
 
 def rel(root: Path, path: Path) -> str:
@@ -115,13 +129,17 @@ def read_text(path: Path, label: str) -> str:
         raise NuclioError("INVALID_UTF8", f"{label} must be UTF-8") from exc
 
 
-def read_yaml(path: Path, label: str) -> Any:
+def parse_yaml(text: str, label: str) -> Any:
     try:
-        return require_yaml().load(read_text(path, label), Loader=UniqueKeyLoader)
+        return require_yaml().load(text, Loader=UniqueKeyLoader)
     except NuclioError:
         raise
     except Exception as exc:
         raise NuclioError("INVALID_YAML", f"invalid YAML in {label}: {exc}") from exc
+
+
+def read_yaml(path: Path, label: str) -> Any:
+    return parse_yaml(read_text(path, label), label)
 
 
 def dump_atomic(path: Path, data: dict[str, Any]) -> None:
@@ -144,10 +162,28 @@ def dump_atomic(path: Path, data: dict[str, Any]) -> None:
 
 
 def git(root: Path, *args: str, allow_fail: bool = False) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(["git", "-C", str(root), *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    # check-ignore 本身按字面路径处理，并拒绝 pathspec 的 literal magic。
+    options = [] if args[:1] == ("check-ignore",) else ["--literal-pathspecs"]
+    process = subprocess.run(["git", "-C", str(root), *options, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    # 显式解码，保留 NUL 列表中文件名的 CR/LF；路径始终按字面值处理。
+    result = subprocess.CompletedProcess(process.args, process.returncode, process.stdout.decode("utf-8", "surrogateescape"), process.stderr.decode("utf-8", "replace"))
     if not allow_fail and result.returncode:
         raise NuclioError("GIT_ERROR", f"git {' '.join(args)} failed", stderr=result.stderr.strip())
     return result
+
+
+def repository_root(root: Path) -> Path:
+    return Path(git(root, "rev-parse", "--show-toplevel").stdout.rstrip("\n")).resolve()
+
+
+def git_path(root: Path, path: str) -> str:
+    return (root / path).relative_to(repository_root(root)).as_posix()
+
+
+def project_paths(root: Path, paths: list[str]) -> list[str]:
+    repository = repository_root(root)
+    # 项目以外的路径保留为 ../…，仍参与共享 Git 工作区的 clean gate。
+    return [Path(os.path.relpath(repository / path, root)).as_posix() for path in paths]
 
 
 def head(root: Path) -> str:
@@ -176,12 +212,12 @@ def porcelain(root: Path) -> list[str]:
     while index < len(fields):
         item = fields[index]
         status, name = item[:2], item[3:]
-        if status.startswith(("R", "C")) and index + 1 < len(fields):
-            index += 1
-            name = fields[index]
         paths.append(name)
+        if any(marker in status for marker in "RC") and index + 1 < len(fields):
+            index += 1
+            paths.append(fields[index])
         index += 1
-    return paths
+    return project_paths(root, paths)
 
 
 def product_dirty_paths(root: Path, change_id: str, allowed_dirty: set[str] | None = None) -> list[str]:
@@ -298,7 +334,7 @@ def validate_check(root: Path, raw: Any, acceptance: set[str], source: str) -> d
 
 
 def parse_delivery(root: Path, change_id: str, acceptance: list[str], directory: Path | None = None) -> dict[str, Any]:
-    raw = read_yaml((directory or active_dir(root, change_id)) / "delivery.yaml", "delivery.yaml")
+    raw = read_yaml(devdocs_path(root, (directory or active_dir(root, change_id)) / "delivery.yaml"), "delivery.yaml")
     if not isinstance(raw, dict) or set(raw) != {"schema_version", "change_id", "milestones", "verification"}:
         raise NuclioError("INVALID_DELIVERY", "delivery.yaml schema keys mismatch")
     if raw.get("schema_version") != 1 or raw.get("change_id") != change_id:
@@ -329,11 +365,20 @@ def parse_delivery(root: Path, change_id: str, acceptance: list[str], directory:
     return {"milestones": normalized, "checks": checks}
 
 
-def project_checks(root: Path, acceptance: list[str]) -> list[dict[str, Any]]:
+def project_checks(root: Path, acceptance: list[str], commit: str | None = None) -> list[dict[str, Any]]:
     path = root / ".dev-docs" / "nuclio.yaml"
-    if not path.exists():
-        return []
-    raw = read_yaml(path, "nuclio.yaml")
+    if commit is None:
+        devdocs_path(root, path)
+        if not path.exists():
+            return []
+        raw = read_yaml(path, "nuclio.yaml")
+    else:
+        pathspec = git_path(root, rel(root, path))
+        entry = git(root, "ls-tree", "--full-tree", "-z", commit, "--", pathspec).stdout
+        if not entry:
+            return []
+        result = git(root, "show", f"{commit}:{pathspec}")
+        raw = parse_yaml(result.stdout, "committed nuclio.yaml")
     if not isinstance(raw, dict) or set(raw) != {"schema_version", "checks"} or raw.get("schema_version") != 1 or not isinstance(raw["checks"], list):
         raise NuclioError("INVALID_PROJECT_CONFIG", "nuclio.yaml must contain schema_version 1 and checks")
     return [validate_check(root, item, set(acceptance), "project") for item in raw["checks"]]
@@ -341,7 +386,7 @@ def project_checks(root: Path, acceptance: list[str]) -> list[dict[str, Any]]:
 
 def current_definition(root: Path, change_id: str) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     reject_v2_active(root, change_id)
-    change = parse_change(active_dir(root, change_id) / "change.md", change_id)
+    change = parse_change(devdocs_path(root, active_dir(root, change_id) / "change.md"), change_id)
     delivery = parse_delivery(root, change_id, change["acceptance"])
     checks = project_checks(root, change["acceptance"]) + delivery["checks"]
     identifiers = [check["id"] for check in checks]
@@ -351,7 +396,7 @@ def current_definition(root: Path, change_id: str) -> tuple[dict[str, Any], dict
 
 
 def state_file(root: Path, change_id: str) -> Path:
-    return active_dir(root, change_id) / "state.yaml"
+    return devdocs_path(root, active_dir(root, change_id) / "state.yaml")
 
 
 def valid_sha_or_null(value: Any) -> bool:
@@ -376,7 +421,8 @@ def validate_state(state: Any, change_id: str) -> dict[str, Any]:
     if any(not isinstance(item, dict) or set(item) != check_keys or not isinstance(item["id"], str) or not isinstance(item["source"], str) or item["source"] not in {"change", "project"} or not isinstance(item["run"], list) or not item["run"] or not all(isinstance(arg, str) and arg for arg in item["run"]) or not isinstance(item["cwd"], str) or not isinstance(item["covers"], list) or not valid_sha_or_null(item["head"]) or not isinstance(item["exit_code"], int) or isinstance(item["exit_code"], bool) or not isinstance(item["summary"], str) for item in verification["checks"]):
         raise NuclioError("INVALID_STATE", "state.yaml check evidence is invalid")
     manual_keys = {"acceptance", "steps", "result", "executor", "head"}
-    if any(not isinstance(item, dict) or set(item) != manual_keys or not isinstance(item["acceptance"], str) or not AC_ID_RE.fullmatch(item["acceptance"]) or not all(isinstance(item[key], str) and item[key].strip() for key in ("steps", "result", "executor")) or not valid_sha_or_null(item["head"]) for item in verification["manual"]):
+    # 旧 v3 记录可读取以恢复，但缺少显式 status 时不能贡献通过依据。
+    if any(not isinstance(item, dict) or set(item) not in (manual_keys, manual_keys | {"status"}) or "status" in item and (not isinstance(item["status"], str) or item["status"] not in {"PASS", "FAIL"}) or not isinstance(item["acceptance"], str) or not AC_ID_RE.fullmatch(item["acceptance"]) or not all(isinstance(item[key], str) and item[key].strip() for key in ("steps", "result", "executor")) or not valid_sha_or_null(item["head"]) for item in verification["manual"]):
         raise NuclioError("INVALID_STATE", "state.yaml manual evidence is invalid")
     review = verification["review"]
     if review is not None and (set(review) != {"status", "summary", "covers", "head"} or not isinstance(review["status"], str) or review["status"] not in {"PASS", "FAIL"} or not isinstance(review["summary"], str) or not review["summary"].strip() or not isinstance(review["covers"], list) or not all(isinstance(ac, str) and AC_ID_RE.fullmatch(ac) for ac in review["covers"]) or not valid_sha_or_null(review["head"])):
@@ -410,7 +456,7 @@ def exact_artifacts(directory: Path, *, code: str = "UNEXPECTED_ARTIFACTS") -> N
     if not directory.is_dir():
         raise NuclioError("MISSING_CHANGE", f"change directory missing: {directory}")
     names = sorted(item.name for item in directory.iterdir())
-    invalid = [name for name in ARTIFACTS if name in names and (directory / name).is_symlink()]
+    invalid = [name for name in ARTIFACTS if name in names and ((directory / name).is_symlink() or not (directory / name).is_file())]
     if names != sorted(ARTIFACTS) or invalid:
         raise NuclioError(code, "change directory must contain exactly regular change.md, delivery.yaml, state.yaml", artifacts=names)
 
@@ -426,7 +472,7 @@ def contract_from_approval(root: Path, change_id: str, state: dict[str, Any]) ->
     if not isinstance(approval, str) or not approval:
         raise NuclioError("NOT_APPROVED", "change has not been approved")
     pathspec = f".dev-docs/changes/{change_id}/change.md"
-    result = git(root, "show", f"{approval}:{pathspec}", allow_fail=True)
+    result = git(root, "show", f"{approval}:{git_path(root, pathspec)}", allow_fail=True)
     if result.returncode:
         raise NuclioError("APPROVAL_ARTIFACT_MISSING", "approval commit lacks change.md")
     # Parse committed approval data in memory.
@@ -445,16 +491,17 @@ def require_current_contract(root: Path, change_id: str, state: dict[str, Any], 
         raise NuclioError("CONTRACT_DRIFT", "change.md differs from the approved contract; revise and approve again")
 
 
-def commit_subject(root: Path) -> str:
-    return git(root, "log", "-1", "--format=%s").stdout.rstrip("\n")
+def commit_subject(root: Path, commit: str = "HEAD") -> str:
+    return git(root, "log", "-1", "--format=%s", commit).stdout.rstrip("\n")
 
 
-def commit_parent(root: Path) -> str:
-    return git(root, "rev-parse", "HEAD^").stdout.strip()
+def commit_parent(root: Path, commit: str = "HEAD") -> str:
+    return git(root, "rev-parse", f"{commit}^").stdout.strip()
 
 
-def changed_paths(root: Path) -> list[str]:
-    return [line for line in git(root, "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "HEAD").stdout.splitlines() if line]
+def changed_paths(root: Path, commit: str = "HEAD") -> list[str]:
+    paths = git(root, "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", commit).stdout
+    return project_paths(root, [path for path in paths.split("\0") if path])
 
 
 def approval_subject(change_id: str, revision: int) -> str:
@@ -471,11 +518,11 @@ def approval_commit_paths(root: Path, change_id: str) -> bool:
     return required <= changed <= allowed
 
 
-def try_recover_approval(root: Path, change_id: str, state: dict[str, Any], revision: int) -> bool:
+def recoverable_approval(root: Path, change_id: str, state: dict[str, Any], revision: int) -> bool:
     if state.get("approval_head") is not None or commit_subject(root) != approval_subject(change_id, revision) or not approval_commit_paths(root, change_id):
         return False
     pathspec = f".dev-docs/changes/{change_id}/state.yaml"
-    committed = git(root, "show", f"HEAD:{pathspec}", allow_fail=True)
+    committed = git(root, "show", f"HEAD:{git_path(root, pathspec)}", allow_fail=True)
     if committed.returncode:
         return False
     try:
@@ -484,6 +531,17 @@ def try_recover_approval(root: Path, change_id: str, state: dict[str, Any], revi
         return False
     if approved_state["revision"] != revision or approved_state["base_head"] != state["base_head"] or approved_state["approval_head"] is not None or approved_state["verified_head"] is not None or approved_state["phase"] != "build":
         return False
+    return True
+
+
+def try_recover_approval(root: Path, change_id: str, state: dict[str, Any], revision: int) -> bool:
+    if not recoverable_approval(root, change_id, state, revision):
+        return False
+    require_clean_index(root)
+    require_product_clean(root, change_id)
+    recovered = {**state, "approval_head": head(root)}
+    change = parse_change(devdocs_path(root, active_dir(root, change_id) / "change.md"), change_id)
+    require_current_contract(root, change_id, recovered, change)
     state["approval_head"] = head(root)
     write_state(root, change_id, state)
     return True
@@ -538,6 +596,7 @@ def cmd_create(args: argparse.Namespace, root: Path) -> int:
     acceptance = args.acceptance or [args.goal]
     if not all(isinstance(value, str) and value.strip() and "\n" not in value and "\r" not in value for value in acceptance):
         raise NuclioError("INVALID_INPUT", "acceptance items must be non-empty single lines")
+    require_yaml()
     directory.mkdir()
     frontmatter = require_yaml().safe_dump({"schema_version": 1, "change_id": change_id, "revision": 1}, sort_keys=False, allow_unicode=True).rstrip()
     criteria = "\n".join(f"- AC-{index}: {value}" for index, value in enumerate(acceptance, 1))
@@ -579,6 +638,7 @@ def cmd_status(args: argparse.Namespace, root: Path) -> int:
         require_current_contract(root, change_id, state, change)
     current = head(root)
     failed, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], current)
+    manual_blocker = manual_failures(state["verification"], current)
     missing_acceptance = sorted(set(change["acceptance"]) - passed)
     milestone = next((item for item in delivery["milestones"] if item["status"] != "done"), delivery["milestones"][-1])
     phase = state.get("phase", "shape")
@@ -591,11 +651,13 @@ def cmd_status(args: argparse.Namespace, root: Path) -> int:
     dirty_product = product_dirty_paths(root, change_id, allowed_dirty)
     dirty_index = not index_clean(root)
     clean_gate = not dirty_index and not dirty_product
-    if phase == "shape":
+    if recoverable_approval(root, change_id, state, change["frontmatter"]["revision"]):
+        next_action = "recover-approval"
+    elif phase == "shape" or state.get("approval_head") is None:
         next_action = "confirm-contract"
     elif phase == "complete" and evidence_current:
         next_action = "build" if not clean_gate else "archive" if completion_current else "finish"
-    elif review_failed:
+    elif review_failed or manual_blocker:
         next_action = "build"
     elif failed:
         next_action = "run-required-checks"
@@ -609,7 +671,7 @@ def cmd_status(args: argparse.Namespace, root: Path) -> int:
         next_action = "verify"
     review = state["verification"]["review"]
     review_blocker = review if review_failed else None
-    return emit_ok({"change_id": change_id, "phase": phase, "disposition": "await-user" if phase == "shape" else "continue", "goal": change["sections"]["Goal"], "constraints": change["sections"]["Constraints"], "non_goals": change["sections"]["Non-goals"], "milestone": {"id": milestone["id"], "outcome": milestone["outcome"], "acceptance": milestone["covers"]}, "handoff": milestone["handoff"], "git": {"base_head": state.get("base_head"), "approval_head": state.get("approval_head"), "verified_head": state.get("verified_head"), "current_head": current}, "failed_checks": failed, "stale_checks": stale_checks, "missing_acceptance": missing_acceptance, "review_blocker": review_blocker, "clean_gate": {"index_clean": not dirty_index, "dirty_product": dirty_product, "allowed_dirty": sorted(allowed_dirty)}, "next_action": next_action})
+    return emit_ok({"change_id": change_id, "phase": phase, "disposition": "await-user" if next_action == "confirm-contract" else "continue", "goal": change["sections"]["Goal"], "constraints": change["sections"]["Constraints"], "non_goals": change["sections"]["Non-goals"], "milestone": {"id": milestone["id"], "outcome": milestone["outcome"], "acceptance": milestone["covers"]}, "handoff": milestone["handoff"], "git": {"base_head": state.get("base_head"), "approval_head": state.get("approval_head"), "verified_head": state.get("verified_head"), "current_head": current}, "failed_checks": failed, "stale_checks": stale_checks, "missing_acceptance": missing_acceptance, "review_blocker": review_blocker, "manual_blocker": manual_blocker, "clean_gate": {"index_clean": not dirty_index, "dirty_product": dirty_product, "allowed_dirty": sorted(allowed_dirty)}, "next_action": next_action})
 
 
 def cmd_record_check(args: argparse.Namespace, root: Path) -> int:
@@ -646,8 +708,8 @@ def manual_records(values: list[str], acceptance: set[str], current: str) -> lis
             data = json.loads(item)
         except json.JSONDecodeError as exc:
             raise NuclioError("INVALID_MANUAL", "--manual must be a JSON object") from exc
-        if not isinstance(data, dict) or set(data) != {"acceptance", "steps", "result", "executor"} or not isinstance(data.get("acceptance"), str) or data["acceptance"] not in acceptance or not all(isinstance(data.get(key), str) and data[key].strip() for key in ("steps", "result", "executor")):
-            raise NuclioError("INVALID_MANUAL", "manual observation requires acceptance, steps, result, executor")
+        if not isinstance(data, dict) or set(data) != {"acceptance", "status", "steps", "result", "executor"} or not isinstance(data.get("acceptance"), str) or data["acceptance"] not in acceptance or not isinstance(data.get("status"), str) or data["status"] not in {"PASS", "FAIL"} or not all(isinstance(data.get(key), str) and data[key].strip() for key in ("steps", "result", "executor")):
+            raise NuclioError("INVALID_MANUAL", "manual observation requires acceptance, status (PASS|FAIL), steps, result, executor")
         result.append({**data, "head": current})
     return result
 
@@ -684,13 +746,17 @@ def cmd_verify(args: argparse.Namespace, root: Path) -> int:
     else:
         state["verified_head"] = None; state["phase"] = "build"
     write_state(root, change_id, state)
-    return emit_ok({"change_id": change_id, "verified": state["verified_head"] == current, "verified_head": state["verified_head"], "missing_checks": missing, "missing_acceptance": [ac for ac in change["acceptance"] if ac not in passed]})
+    return emit_ok({"change_id": change_id, "verified": state["verified_head"] == current, "verified_head": state["verified_head"], "missing_checks": missing, "missing_acceptance": [ac for ac in change["acceptance"] if ac not in passed], "manual_blocker": manual_failures(verification, current)})
 
 
 def valid_knowledge_path(value: str) -> str:
     if not isinstance(value, str) or value.startswith("/") or "\\" in value or ".." in Path(value).parts or (value != ".dev-docs/index.md" and not value.startswith(".dev-docs/knowledge/")):
         raise NuclioError("INVALID_KNOWLEDGE_PATH", "knowledge paths must be .dev-docs/index.md or .dev-docs/knowledge/**")
     return value
+
+
+def manual_failures(verification: dict[str, Any], current: str) -> list[str]:
+    return sorted({item["acceptance"] for item in verification["manual"] if item["head"] == current and item.get("status") == "FAIL"})
 
 
 def current_evidence(checks: list[dict[str, Any]], acceptance: list[str], verification: dict[str, Any], current: str) -> tuple[list[str], set[str], bool, list[str]]:
@@ -704,12 +770,21 @@ def current_evidence(checks: list[dict[str, Any]], acceptance: list[str], verifi
             missing.append(definition["id"])
         elif definition["source"] == "change":
             passed.update(definition["covers"])
-    passed.update(item["acceptance"] for item in verification["manual"] if item["head"] == current)
+    passed.update(item["acceptance"] for item in verification["manual"] if item["head"] == current and item.get("status") == "PASS")
     review = verification["review"]
     review_failed = isinstance(review, dict) and review["head"] == current and review["status"] == "FAIL"
     if isinstance(review, dict) and review["head"] == current and review["status"] == "PASS":
         passed.update(review["covers"])
+    passed.difference_update(manual_failures(verification, current))
     return missing, passed & set(acceptance), review_failed, stale
+
+
+def require_knowledge_paths_current(root: Path, knowledge: list[str]) -> None:
+    for path in knowledge:
+        devdocs_path(root, root / valid_knowledge_path(path))
+    dirty = sorted(path for path in porcelain(root) if path == ".dev-docs/index.md" or path.startswith(".dev-docs/knowledge/"))
+    if sorted(knowledge) != dirty:
+        raise NuclioError("KNOWLEDGE_PATH_MISMATCH", "knowledge paths must exactly match dirty knowledge paths", expected=dirty, actual=sorted(knowledge))
 
 
 def cmd_complete(args: argparse.Namespace, root: Path) -> int:
@@ -724,9 +799,7 @@ def cmd_complete(args: argparse.Namespace, root: Path) -> int:
         raise NuclioError("INVALID_KNOWLEDGE_RESULT", "knowledge result and paths are inconsistent")
     allowed = set(knowledge)
     require_product_clean(root, change_id, allowed)
-    dirty_knowledge = sorted(path for path in porcelain(root) if path == ".dev-docs/index.md" or path.startswith(".dev-docs/knowledge/"))
-    if sorted(knowledge) != dirty_knowledge:
-        raise NuclioError("KNOWLEDGE_PATH_MISMATCH", "knowledge paths must exactly match dirty knowledge paths", expected=dirty_knowledge, actual=sorted(knowledge))
+    require_knowledge_paths_current(root, knowledge)
     state["knowledge"] = {"result": args.knowledge_result, "paths": knowledge}; state["phase"] = "complete"; write_state(root, change_id, state)
     return emit_ok({"change_id": change_id, "phase": "complete", "knowledge": state["knowledge"]})
 
@@ -739,8 +812,68 @@ def archive_paths(change_id: str, state: dict[str, Any]) -> list[str]:
     return [f".dev-docs/changes/{change_id}/{name}" for name in ARTIFACTS] + [f".dev-docs/changes/archive/{change_id}/{name}" for name in ARTIFACTS] + state["knowledge"]["paths"]
 
 
-def validate_archive_commit(root: Path, change_id: str, state: dict[str, Any]) -> bool:
-    return commit_subject(root) == archive_subject(change_id) and commit_parent(root) == state.get("verified_head") and set(changed_paths(root)) == set(archive_paths(change_id, state)) and index_clean(root)
+def validate_archive_commit(root: Path, change_id: str, state: dict[str, Any], commit: str = "HEAD") -> bool:
+    return commit_subject(root, commit) == archive_subject(change_id) and commit_parent(root, commit) == state.get("verified_head") and set(changed_paths(root, commit)) == set(archive_paths(change_id, state))
+
+
+def find_archive_commit(root: Path, change_id: str, state: dict[str, Any]) -> str | None:
+    if state["phase"] != "complete":
+        return None
+    # 只查询显式 ID 的 state 文件引入历史，不发现或读取其他 archive。
+    path = rel(root, archive_dir(root, change_id) / "state.yaml")
+    candidates = git(root, "log", "--format=%H", "--diff-filter=A", "--no-renames", "--", path).stdout.splitlines()
+    for commit in candidates:
+        if validate_archive_commit(root, change_id, state, commit):
+            return commit
+    return None
+
+
+def validate_archive_record(root: Path, change_id: str, directory: Path, state: dict[str, Any], *, historical: bool = False) -> None:
+    current = state["verified_head"] if historical else head(root)
+    if state["phase"] != "complete" or state["verified_head"] != current:
+        raise NuclioError("CHANGE_NOT_COMPLETE", "archive requires a current completed and verified change")
+    change = parse_change(devdocs_path(root, directory / "change.md"), change_id, completion=True)
+    require_current_contract(root, change_id, state, change)
+    delivery = parse_delivery(root, change_id, change["acceptance"], directory)
+    checks = project_checks(root, change["acceptance"], current if historical else None) + delivery["checks"]
+    if len({check["id"] for check in checks}) != len(checks):
+        raise NuclioError("DUPLICATE_CHECK_ID", "project and change checks must have unique IDs")
+    missing, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], current)
+    if missing or stale_checks or passed != set(change["acceptance"]) or review_failed:
+        raise NuclioError("VERIFICATION_NOT_CURRENT", "all checks and Acceptance evidence must pass at the verified HEAD", missing_checks=missing, missing_acceptance=sorted(set(change["acceptance"]) - passed))
+
+
+def require_archive_target_visible(root: Path, change_id: str) -> None:
+    paths = [rel(root, archive_dir(root, change_id) / name) for name in ARTIFACTS]
+    result = git(root, "check-ignore", "--no-index", "--", *paths, allow_fail=True)
+    if result.returncode == 0:
+        raise NuclioError("ARCHIVE_TARGET_IGNORED", "archive target must not be ignored; no files were moved or staged", paths=paths)
+    if result.returncode != 1:
+        raise NuclioError("GIT_ERROR", "cannot inspect archive target ignore rules", stderr=result.stderr.strip())
+
+
+def unstage_transition(root: Path, paths: list[str]) -> None:
+    output = git(root, "diff", "--cached", "--name-only", "--no-renames", "-z", "--", *paths).stdout
+    staged = project_paths(root, [path for path in output.split("\0") if path])
+    allowed = set(paths)
+    selected = [path for path in staged if path in allowed]
+    if selected:
+        result = git(root, "restore", "--staged", "--", *selected, allow_fail=True)
+        if result.returncode:
+            raise NuclioError("ARCHIVE_RECOVERY_REQUIRED", "cannot unstage the interrupted archive transition", paths=selected)
+
+
+def commit_archive(root: Path, change_id: str, state: dict[str, Any]) -> str:
+    paths = archive_paths(change_id, state)
+    try:
+        git(root, "add", "-A", "--", *paths)
+        git(root, "commit", "-m", archive_subject(change_id))
+    except (NuclioError, OSError) as exc:
+        unstage_transition(root, paths)
+        raise NuclioError("ARCHIVE_COMMIT_FAILED", "archive move is recoverable; rerun archive with this explicit ID", change_id=change_id) from exc
+    if not validate_archive_commit(root, change_id, state) or not index_clean(root):
+        raise NuclioError("ARCHIVE_COMMIT_INVALID", "archive commit does not contain exactly this transition")
+    return head(root)
 
 
 def cmd_archive(args: argparse.Namespace, root: Path) -> int:
@@ -752,52 +885,36 @@ def cmd_archive(args: argparse.Namespace, root: Path) -> int:
             state = validate_state(read_yaml(target / "state.yaml", "archived state.yaml"), change_id)
         except NuclioError as exc:
             raise NuclioError("ARCHIVED_CHANGE_EXISTS", "archive target is not this v3 change") from exc
-        if validate_archive_commit(root, change_id, state):
-            return emit_ok({"change_id": change_id, "path": rel(root, target), "recovered": True})
+        committed = find_archive_commit(root, change_id, state)
+        if committed:
+            require_clean_index(root)
+            paths = [rel(root, target / name) for name in ARTIFACTS]
+            comparison = git(root, "diff", "--quiet", committed, "--", *paths, allow_fail=True)
+            if comparison.returncode == 1:
+                raise NuclioError("ARCHIVE_CONTENT_DRIFT", "archived artifacts differ from the completed archive commit", archive_commit=committed)
+            if comparison.returncode:
+                raise NuclioError("GIT_ERROR", "cannot compare archived artifacts", stderr=comparison.stderr.strip())
+            validate_archive_record(root, change_id, target, state, historical=True)
+            return emit_ok({"change_id": change_id, "path": rel(root, target), "archive_commit": committed, "recovered": True})
         if state.get("phase") != "complete" or state.get("verified_head") != head(root):
             raise NuclioError("ARCHIVE_RECOVERY_REQUIRED", "archive move exists without a recoverable terminal state")
-        change = parse_change(target / "change.md", change_id, completion=True)
-        require_current_contract(root, change_id, state, change)
-        delivery = parse_delivery(root, change_id, change["acceptance"], target)
-        checks = project_checks(root, change["acceptance"]) + delivery["checks"]
-        if len({check["id"] for check in checks}) != len(checks):
-            raise NuclioError("DUPLICATE_CHECK_ID", "project and change checks must have unique IDs")
-        missing, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], head(root))
-        if missing or stale_checks or passed != set(change["acceptance"]) or review_failed:
-            raise NuclioError("VERIFICATION_NOT_CURRENT", "all current checks and Acceptance evidence must pass at the current HEAD", missing_checks=missing, missing_acceptance=sorted(set(change["acceptance"]) - passed))
+        validate_archive_record(root, change_id, target, state)
         paths = archive_paths(change_id, state)
         require_clean_index(root); require_product_clean(root, change_id, set(paths))
-        git(root, "add", "-A", "--", *paths)
-        try:
-            git(root, "commit", "-m", archive_subject(change_id))
-        except Exception:
-            git(root, "restore", "--staged", "--", *paths, allow_fail=True)
-            raise NuclioError("ARCHIVE_COMMIT_FAILED", "archive move is recoverable; rerun archive")
-        if not validate_archive_commit(root, change_id, state):
-            raise NuclioError("ARCHIVE_COMMIT_INVALID", "archive recovery commit does not contain exactly this transition")
-        return emit_ok({"change_id": change_id, "path": rel(root, target), "archive_commit": head(root), "recovered": True})
+        require_knowledge_paths_current(root, state["knowledge"]["paths"])
+        require_archive_target_visible(root, change_id)
+        committed = commit_archive(root, change_id, state)
+        return emit_ok({"change_id": change_id, "path": rel(root, target), "archive_commit": committed, "recovered": True})
     if target.exists() or not source.exists():
         raise NuclioError("ARCHIVE_CONFLICT", "active and archive paths conflict")
-    reject_v2_active(root, change_id); exact_artifacts(source); state = load_state(root, change_id); change, _delivery, checks = current_definition(root, change_id)
-    require_current_contract(root, change_id, state, change); parse_change(source / "change.md", change_id, completion=True)
-    current = head(root)
-    if state.get("phase") != "complete" or state.get("verified_head") != current:
-        raise NuclioError("CHANGE_NOT_COMPLETE", "archive requires a current completed and verified change")
-    missing, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], current)
-    if missing or stale_checks or passed != set(change["acceptance"]) or review_failed:
-        raise NuclioError("VERIFICATION_NOT_CURRENT", "all current checks and Acceptance evidence must pass at the current HEAD", missing_checks=missing, missing_acceptance=sorted(set(change["acceptance"]) - passed))
+    reject_v2_active(root, change_id); exact_artifacts(source); state = load_state(root, change_id)
+    validate_archive_record(root, change_id, source, state)
     require_clean_index(root); require_product_clean(root, change_id, set(state["knowledge"]["paths"]))
+    require_knowledge_paths_current(root, state["knowledge"]["paths"])
+    require_archive_target_visible(root, change_id)
     target.parent.mkdir(parents=True, exist_ok=True); source.rename(target)
-    paths = archive_paths(change_id, state)
-    git(root, "add", "-A", "--", *paths)
-    try:
-        git(root, "commit", "-m", archive_subject(change_id))
-    except Exception:
-        git(root, "restore", "--staged", "--", *paths, allow_fail=True)
-        raise NuclioError("ARCHIVE_COMMIT_FAILED", "archive move is recoverable; rerun archive")
-    if not validate_archive_commit(root, change_id, state):
-        raise NuclioError("ARCHIVE_COMMIT_INVALID", "archive commit does not contain exactly this transition")
-    return emit_ok({"change_id": change_id, "path": rel(root, target), "archive_commit": head(root), "retained_artifacts": list(ARTIFACTS)})
+    committed = commit_archive(root, change_id, state)
+    return emit_ok({"change_id": change_id, "path": rel(root, target), "archive_commit": committed, "retained_artifacts": list(ARTIFACTS)})
 
 
 def main(argv: list[str] | None = None) -> int:

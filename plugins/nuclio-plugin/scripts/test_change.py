@@ -1,6 +1,8 @@
 """Focused behavior tests for the Nuclio v3 thin Runtime."""
 
 import json
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -36,6 +38,9 @@ class ChangeRuntimeTests(unittest.TestCase):
         git(self.root, "init")
         git(self.root, "config", "user.email", "nuclio@example.invalid")
         git(self.root, "config", "user.name", "Nuclio Test")
+        git(self.root, "config", "commit.gpgsign", "false")
+        git(self.root, "config", "core.hooksPath", "/dev/null")
+        git(self.root, "config", "core.quotePath", "true")
         (self.root / "README.md").write_text("# Test\n", encoding="utf-8")
         (self.root / ".dev-docs" / "changes" / "archive").mkdir(parents=True)
         git(self.root, "add", "README.md", ".dev-docs")
@@ -57,6 +62,299 @@ class ChangeRuntimeTests(unittest.TestCase):
     def finish_sections(self, directory):
         change = directory / "change.md"
         change.write_text(change.read_text(encoding="utf-8") + "\n## Outcome\n\nAlpha shipped.\n\n## Validation\n\nFocused check passed.\n\n## Knowledge Updates\n\nNO_OP\n\n## Residual Risks\n\nNone.\n", encoding="utf-8")
+
+    def manual(self, status="PASS", result="观察符合验收结果"):
+        return json.dumps({"acceptance": "AC-1", "status": status, "steps": "观察所需行为", "result": result, "executor": "test"})
+
+    def verified_change(self):
+        directory = self.create()
+        self.approve()
+        result = run(self.root, "verify", "--id", "alpha-change", "--manual", self.manual())
+        self.assertTrue(output(result)["verified"], result.stderr)
+        self.finish_sections(directory)
+        return directory
+
+    def test_documented_remote_ref_command_runs_in_bash_and_zsh(self):
+        guide = SCRIPT.parents[1] / "skills/work/SKILL.md"
+        command = re.search(r"(?m)^\s*(git -C .* for-each-ref .*?)$", guide.read_text()).group(1)
+        command = command.replace('"${NUCLIO_PROJECT_DIR}"', shlex.quote(str(self.root)))
+        ref = "refs/remotes/team/fix/alpha-change"
+        git(self.root, "update-ref", ref, "HEAD")
+        for shell in ("bash", "zsh"):
+            with self.subTest(shell=shell):
+                executable = shutil.which(shell)
+                if executable is None:
+                    self.skipTest(f"未安装 {shell}")
+                result = subprocess.run([executable, "-c", command], text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), [ref])
+
+    def test_failed_manual_blocks_completion_even_with_passing_review(self):
+        directory = self.create()
+        self.approve()
+        result = run(self.root, "verify", "--id", "alpha-change", "--manual", self.manual("FAIL", "缺少所需行为"),
+                     "--review-status", "PASS", "--review-summary", "其他审查通过", "--review-cover", "AC-1")
+        self.assertFalse(output(result)["verified"])
+        status = output(run(self.root, "status", "--id", "alpha-change"))
+        self.assertEqual(status["next_action"], "build")
+        self.assertEqual(status["manual_blocker"], ["AC-1"])
+        self.finish_sections(directory)
+        self.assertEqual(output(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP"))["code"], "VERIFICATION_NOT_CURRENT")
+        self.assertFalse(output(run(self.root, "archive", "--id", "alpha-change"))["ok"])
+        self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", self.manual()))["verified"])
+
+    def test_manual_requires_explicit_status_and_legacy_evidence_is_not_passed(self):
+        directory = self.verified_change()
+        legacy = json.loads(self.manual())
+        del legacy["status"]
+        rejected = run(self.root, "verify", "--id", "alpha-change", "--manual", json.dumps(legacy))
+        self.assertEqual(output(rejected)["code"], "INVALID_MANUAL")
+        state = change.load_state(self.root, "alpha-change")
+        del state["verification"]["manual"][0]["status"]
+        change.write_state(self.root, "alpha-change", state)
+        before = (directory / "state.yaml").read_bytes()
+        status = output(run(self.root, "status", "--id", "alpha-change"))
+        self.assertEqual(status["missing_acceptance"], ["AC-1"])
+        self.assertEqual(status["next_action"], "build")
+        self.assertEqual((directory / "state.yaml").read_bytes(), before)
+        self.assertEqual(output(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP"))["code"], "VERIFICATION_NOT_CURRENT")
+        self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", self.manual()))["verified"])
+
+    def test_unicode_knowledge_archives_and_retries_with_default_git_quoting(self):
+        self.verified_change()
+        path = self.root / ".dev-docs/knowledge/认证.md"
+        path.parent.mkdir(parents=True)
+        path.write_text("# 认证约束\n", encoding="utf-8")
+        completed = run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "APPLIED", "--knowledge-path", path.relative_to(self.root).as_posix())
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        for _ in range(2):
+            archived = run(self.root, "archive", "--id", "alpha-change")
+            self.assertEqual(archived.returncode, 0, archived.stderr)
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+
+    def test_quoted_and_control_character_knowledge_paths_are_preserved(self):
+        self.verified_change()
+        directory = self.root / ".dev-docs/knowledge"
+        directory.mkdir(parents=True)
+        args = ["complete", "--id", "alpha-change", "--knowledge-result", "APPLIED"]
+        for filename in ('引号".md', "制表\t.md", "换行\n.md", "回车\r.md", "literal[1].md"):
+            path = directory / filename
+            path.write_text("# 项目事实\n")
+            args.extend(["--knowledge-path", path.relative_to(self.root).as_posix()])
+        result = run(self.root, *args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for _ in range(2):
+            result = run(self.root, "archive", "--id", "alpha-change")
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+
+    def test_nested_project_completes_reapproves_and_archives(self):
+        repository = self.root
+        self.root = repository / "packages/app"
+        (self.root / ".dev-docs/changes/archive").mkdir(parents=True)
+        directory = self.create()
+        first = self.approve()
+        path = directory / "change.md"
+        path.write_text(path.read_text().replace("revision: 1", "revision: 2"))
+        second = self.approve()
+        self.assertEqual(first["base_head"], second["base_head"])
+        self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", self.manual()))["verified"])
+        self.finish_sections(directory)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        for _ in range(2):
+            result = run(self.root, "archive", "--id", "alpha-change")
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((repository / ".dev-docs/changes/alpha-change").exists())
+        self.assertTrue((self.root / ".dev-docs/changes/archive/alpha-change/state.yaml").is_file())
+        self.assertEqual(git(repository, "status", "--porcelain"), "")
+
+    def test_approval_postcommit_interruption_has_readonly_recovery_route(self):
+        directory = self.create()
+        real_write = change.write_state
+        def interrupt_after_commit(root, change_id, state):
+            if state["approval_head"] is not None:
+                raise change.NuclioError("INTERRUPTED", "模拟批准提交后的中断")
+            real_write(root, change_id, state)
+        args = change.build_parser().parse_args(["approve", "--id", "alpha-change"])
+        with mock.patch.object(change, "write_state", side_effect=interrupt_after_commit):
+            with self.assertRaises(change.NuclioError):
+                change.cmd_approve(args, self.root)
+        approved_head = git(self.root, "rev-parse", "HEAD")
+        before = (directory / "state.yaml").read_bytes()
+        status = output(run(self.root, "status", "--id", "alpha-change"))
+        self.assertEqual(status["next_action"], "recover-approval")
+        self.assertEqual((directory / "state.yaml").read_bytes(), before)
+        recovered = self.approve()
+        self.assertTrue(recovered["recovered"])
+        self.assertEqual(recovered["approval_head"], approved_head)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), approved_head)
+
+    def test_archive_commit_failure_can_be_retried_by_explicit_id(self):
+        directory = self.verified_change()
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        real_git = change.git
+        def fail_commit(root, *args, **kwargs):
+            if args[:1] == ("commit",):
+                raise change.NuclioError("GIT_ERROR", "模拟归档提交失败")
+            return real_git(root, *args, **kwargs)
+        args = change.build_parser().parse_args(["archive", "--id", "alpha-change"])
+        with mock.patch.object(change, "git", side_effect=fail_commit):
+            with self.assertRaises(change.NuclioError) as raised:
+                change.cmd_archive(args, self.root)
+        self.assertEqual(raised.exception.code, "ARCHIVE_COMMIT_FAILED")
+        self.assertFalse(directory.exists())
+        self.assertEqual(git(self.root, "diff", "--cached", "--name-only"), "")
+        recovered = run(self.root, "archive", "--id", "alpha-change")
+        self.assertTrue(output(recovered)["recovered"], recovered.stderr)
+
+    def test_reverted_knowledge_is_rejected_before_archive_mutation(self):
+        path = self.root / ".dev-docs/knowledge/alpha.md"
+        path.parent.mkdir(parents=True)
+        path.write_text("# 原有知识\n")
+        git(self.root, "add", ".dev-docs/knowledge/alpha.md")
+        git(self.root, "commit", "-m", "docs: prior knowledge")
+        directory = self.verified_change()
+        path.write_text("# 更新知识\n")
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "APPLIED", "--knowledge-path", ".dev-docs/knowledge/alpha.md").returncode, 0)
+        path.write_text("# 原有知识\n")
+        before = git(self.root, "rev-parse", "HEAD")
+        for moved in (False, True):
+            if moved:
+                directory.rename(self.root / ".dev-docs/changes/archive/alpha-change")
+            with self.subTest(moved=moved):
+                result = run(self.root, "archive", "--id", "alpha-change")
+                self.assertEqual(output(result)["code"], "KNOWLEDGE_PATH_MISMATCH")
+                self.assertEqual(git(self.root, "rev-parse", "HEAD"), before)
+                self.assertEqual(git(self.root, "diff", "--cached", "--name-only"), "")
+                if not moved:
+                    self.assertTrue(directory.exists())
+
+    def test_ignored_archive_is_rejected_before_move(self):
+        (self.root / ".gitignore").write_text(".dev-docs/changes/archive/\n")
+        git(self.root, "add", ".gitignore")
+        git(self.root, "commit", "-m", "chore: ignored archive fixture")
+        directory = self.verified_change()
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        result = run(self.root, "archive", "--id", "alpha-change")
+        self.assertEqual(output(result)["code"], "ARCHIVE_TARGET_IGNORED")
+        self.assertTrue(directory.exists())
+        self.assertEqual(git(self.root, "diff", "--cached", "--name-only"), "")
+
+    def test_partial_archive_add_failure_unstages_only_transition_and_retries(self):
+        self.verified_change()
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        real_git = change.git
+        def fail_add(root, *args, **kwargs):
+            if args[:2] == ("add", "-A"):
+                real_git(root, "add", "-u", "--", ".dev-docs/changes/alpha-change")
+                raise change.NuclioError("GIT_ERROR", "模拟部分暂存失败")
+            return real_git(root, *args, **kwargs)
+        args = change.build_parser().parse_args(["archive", "--id", "alpha-change"])
+        with mock.patch.object(change, "git", side_effect=fail_add):
+            with self.assertRaises(change.NuclioError) as raised:
+                change.cmd_archive(args, self.root)
+        self.assertEqual(raised.exception.code, "ARCHIVE_COMMIT_FAILED")
+        self.assertEqual(git(self.root, "diff", "--cached", "--name-only"), "")
+        recovered = run(self.root, "archive", "--id", "alpha-change")
+        self.assertTrue(output(recovered)["recovered"], recovered.stderr)
+
+    def test_archive_failure_preserves_concurrently_staged_unrelated_file(self):
+        self.verified_change()
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        real_git = change.git
+        def fail_add(root, *args, **kwargs):
+            if args[:2] == ("add", "-A"):
+                real_git(root, "add", "-u", "--", ".dev-docs/changes/alpha-change")
+                (root / "README.md").write_text("# 用户在检查后暂存的独立改动\n")
+                real_git(root, "add", "--", "README.md")
+                raise change.NuclioError("GIT_ERROR", "模拟暂存中断")
+            return real_git(root, *args, **kwargs)
+        args = change.build_parser().parse_args(["archive", "--id", "alpha-change"])
+        with mock.patch.object(change, "git", side_effect=fail_add):
+            with self.assertRaises(change.NuclioError):
+                change.cmd_archive(args, self.root)
+        self.assertEqual(git(self.root, "diff", "--cached", "--name-only"), "README.md")
+
+    def test_archive_recovery_add_failure_cleans_partial_index_and_retries(self):
+        directory = self.verified_change()
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        directory.rename(self.root / ".dev-docs/changes/archive/alpha-change")
+        real_git = change.git
+        def fail_add(root, *args, **kwargs):
+            if args[:2] == ("add", "-A"):
+                real_git(root, "add", "-u", "--", ".dev-docs/changes/alpha-change")
+                raise change.NuclioError("GIT_ERROR", "模拟恢复暂存中断")
+            return real_git(root, *args, **kwargs)
+        args = change.build_parser().parse_args(["archive", "--id", "alpha-change"])
+        with mock.patch.object(change, "git", side_effect=fail_add):
+            with self.assertRaises(change.NuclioError):
+                change.cmd_archive(args, self.root)
+        self.assertEqual(git(self.root, "diff", "--cached", "--name-only"), "")
+        self.assertEqual(run(self.root, "archive", "--id", "alpha-change").returncode, 0)
+
+    def test_create_rejects_internal_symlink_parent_without_product_writes(self):
+        changes = self.root / ".dev-docs/changes"
+        (changes / "archive").rmdir()
+        changes.rmdir()
+        target = self.root / "product-data"
+        (target / "archive").mkdir(parents=True)
+        changes.symlink_to(target, target_is_directory=True)
+        result = run(self.root, "create", "--id", "alpha-change", "--title", "Alpha", "--goal", "Ship alpha")
+        self.assertEqual(output(result)["code"], "UNSAFE_SYMLINK")
+        self.assertEqual(list(target.iterdir()), [target / "archive"])
+
+    def test_runtime_rejects_state_symlink_without_reading_or_overwriting_target(self):
+        directory = self.create()
+        path = directory / "state.yaml"
+        target = self.root / "user-data.txt"
+        original = b"private project data\n"
+        target.write_bytes(original)
+        path.unlink()
+        path.symlink_to(target)
+        result = run(self.root, "status", "--id", "alpha-change")
+        self.assertEqual(output(result)["code"], "UNSAFE_SYMLINK")
+        self.assertEqual(target.read_bytes(), original)
+
+    def test_nested_project_clean_gate_keeps_unrelated_repository_paths(self):
+        repository = self.root
+        self.root = repository / "packages/app"
+        (self.root / ".dev-docs/changes/archive").mkdir(parents=True)
+        self.create()
+        (repository / "README.md").write_text("# 独立项目改动\n")
+        result = run(self.root, "approve", "--id", "alpha-change")
+        self.assertEqual(output(result)["code"], "DIRTY_PRODUCT_WORKTREE")
+        self.assertEqual(output(result)["details"]["paths"], ["../../README.md"])
+
+    def test_archive_retry_rejects_modified_artifacts_without_touching_them(self):
+        self.verified_change()
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "archive", "--id", "alpha-change").returncode, 0)
+        target = self.root / ".dev-docs/changes/archive/alpha-change"
+        for filename in change.ARTIFACTS:
+            with self.subTest(filename=filename):
+                path = target / filename
+                original = path.read_bytes()
+                path.write_bytes(original + b"\n# Edited archive\n")
+                edited = path.read_bytes()
+                result = run(self.root, "archive", "--id", "alpha-change")
+                self.assertEqual(output(result)["code"], "ARCHIVE_CONTENT_DRIFT")
+                self.assertEqual(path.read_bytes(), edited)
+                path.write_bytes(original)
+
+    def test_archive_is_idempotent_after_later_commits_and_project_check_changes(self):
+        self.verified_change()
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        archived = output(run(self.root, "archive", "--id", "alpha-change"))
+        (self.root / "README.md").write_text("# 后续产品改动\n")
+        (self.root / ".dev-docs/nuclio.yaml").write_text("schema_version: 1\nchecks:\n- id: later\n  run: [python3, --version]\n")
+        git(self.root, "add", "README.md", ".dev-docs/nuclio.yaml")
+        git(self.root, "commit", "-m", "feat: later product change")
+        before = git(self.root, "rev-parse", "HEAD")
+        result = run(self.root, "archive", "--id", "alpha-change")
+        self.assertTrue(output(result)["recovered"], result.stderr)
+        self.assertEqual(output(result)["archive_commit"], archived["archive_commit"])
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), before)
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
 
     def test_help_exposes_exactly_seven_commands(self):
         result = run(self.root, "--help")
@@ -219,7 +517,7 @@ verification:
     def test_archive_succeeds_from_active_complete_change(self):
         directory = self.create()
         self.approve()
-        self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'))["verified"])
+        self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"status":"PASS","acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'))["verified"])
         self.finish_sections(directory)
         self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
         archived = output(run(self.root, "archive", "--id", "alpha-change"))
@@ -265,7 +563,7 @@ verification:
     def test_archive_recovery_rejects_contract_and_delivery_tampering(self):
         directory = self.create()
         self.approve()
-        self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'))["verified"])
+        self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"status":"PASS","acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'))["verified"])
         self.finish_sections(directory)
         self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
         target = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
@@ -304,7 +602,7 @@ verification:
 """, encoding="utf-8")
         current = git(self.root, "rev-parse", "HEAD")
         self.assertEqual(run(self.root, "record-check", "--id", "alpha-change", "--check-id", "focused", "--head", current, "--exit-code", "0", "--summary", "pass", "--", "python3", "-m", "unittest").returncode, 0)
-        manual = '{"acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'
+        manual = '{"status":"PASS","acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", manual))["verified"])
         self.finish_sections(directory)
         knowledge = self.root / ".dev-docs" / "knowledge" / "alpha.md"
@@ -347,7 +645,7 @@ verification:
       covers: [AC-1]
 """, encoding="utf-8")
         self.assertEqual(run(self.root, "record-check", "--id", "alpha-change", "--check-id", "focused", "--head", current, "--exit-code", "0", "--summary", "pass", "--", "python3", "-m", "unittest").returncode, 0)
-        manual = '{"acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'
+        manual = '{"status":"PASS","acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", manual))["verified"])
         self.finish_sections(directory)
         self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
@@ -409,7 +707,7 @@ verification:
     def test_reviewer_fail_blocks_and_pass_unblocks(self):
         self.create()
         self.approve()
-        evidence = '{"acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'
+        evidence = '{"status":"PASS","acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'
         failed = run(self.root, "verify", "--id", "alpha-change", "--manual", evidence, "--review-status", "FAIL", "--review-summary", "found issue", "--review-cover", "AC-1")
         self.assertFalse(output(failed)["verified"])
         self.assertEqual(change.load_state(self.root, "alpha-change")["phase"], "build")
@@ -423,7 +721,7 @@ verification:
     def test_status_clean_gate_routes_and_allows_expected_knowledge(self):
         directory = self.create()
         self.approve()
-        manual = '{"acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'
+        manual = '{"status":"PASS","acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", manual))["verified"])
         readme = self.root / "README.md"
         original = readme.read_text(encoding="utf-8")
@@ -456,7 +754,7 @@ verification:
         self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["next_action"], "confirm-contract")
         self.approve()
         self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["next_action"], "verify")
-        self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'))["verified"])
+        self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"status":"PASS","acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'))["verified"])
         self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["next_action"], "finish")
         (self.root / "README.md").write_text("# Changed\n", encoding="utf-8")
         git(self.root, "add", "README.md")
@@ -494,7 +792,7 @@ verification:
         head_drift = output(run(self.root, "status", "--id", "alpha-change"))
         self.assertNotEqual(head_drift["git"]["verified_head"], head_drift["git"]["current_head"])
         self.assertEqual(head_drift["next_action"], "build")
-        refreshed = output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"acceptance":"AC-1","steps":"recheck","result":"pass","executor":"test"}'))
+        refreshed = output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"status":"PASS","acceptance":"AC-1","steps":"recheck","result":"pass","executor":"test"}'))
         self.assertTrue(refreshed["verified"])
         self.assertEqual(change.load_state(self.root, "alpha-change")["phase"], "verified")
         self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
@@ -541,10 +839,10 @@ verification:
     def test_manual_evidence_preserves_or_replaces_current_batch(self):
         self.create()
         self.approve()
-        first = '{"acceptance":"AC-1","steps":"first","result":"pass","executor":"test"}'
+        first = '{"status":"PASS","acceptance":"AC-1","steps":"first","result":"pass","executor":"test"}'
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", first))["verified"])
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change"))["verified"])
-        replacement = '{"acceptance":"AC-1","steps":"replacement","result":"pass","executor":"test"}'
+        replacement = '{"status":"PASS","acceptance":"AC-1","steps":"replacement","result":"pass","executor":"test"}'
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", replacement))["verified"])
         records = change.load_state(self.root, "alpha-change")["verification"]["manual"]
         self.assertEqual([record["steps"] for record in records], ["replacement"])

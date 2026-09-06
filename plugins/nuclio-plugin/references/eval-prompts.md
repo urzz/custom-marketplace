@@ -125,3 +125,30 @@
 - **User Prompt**：`/nuclio:work 修复登录回跳并补测试`
 - **Expected**：列出全部本地配置 remote，并仅查询当前本地缓存 refs；任一精确冲突均报告同名分支冲突并 fail closed，不自动改名、追加后缀或切换到已存在分支。
 - **Assertions**：不只检查 `origin`；不得 `git fetch`、`git ls-remote`、联网或刷新 refs；不执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`，不调用 Runtime `create`，不写入本次 `change.md`、三件套或产品文件。
+
+### 19. 显式 ID 恢复归档中断
+
+- **Setup**：`alpha-change` 已 complete；archive 移动成功、提交失败，只有 `.dev-docs/changes/archive/alpha-change/`，调用起点 dirty，active 候选为空。
+- **User Prompt**：`/nuclio:work 恢复并归档 alpha-change`
+- **Expected**：只定点检查用户提供 ID 的 archive 目录，直接运行 `archive --id alpha-change`，由 Runtime 复核终态并完成提交。
+- **Assertions**：不因新建的起点 clean 要求阻塞，不调用 active `status`、`create` 或分支操作，不遍历其他 archive。未提供 ID 时要求用户明确目标；存在其他 active 时报告冲突，多个 active 仍停止。目标已提交且 HEAD 后来变化时只确认既有 archive commit，不新建提交。
+
+### 20. 批准提交后的 State 回写中断
+
+- **Setup**：唯一 active change；Git 中已有对应 approval commit，工作区 State 的 `phase=build`、`approval_head=null`。
+- **User Prompt**：`/nuclio:work 恢复 alpha-change`
+- **Expected**：读取 status 的 `recover-approval`，重跑 `approve --id alpha-change` 后重新读取状态。
+- **Assertions**：不先执行检查或 verify，不重复询问已提交的合同，不创建第二个批准提交；合同或产品工作区漂移仍停止。
+
+### 21. 手工观察失败与旧证据
+
+- **Setup**：A：手工观察发现 AC-1 未实现，即使自动检查和 reviewer 对它提供 PASS。B：旧 v3 State 的 manual 记录缺少 `status`。
+- **User Prompt**：`/nuclio:work 验证当前 change 并完成交付`
+- **Expected**：A 以显式 `status=FAIL` 记录观察并回到 Build。B 不采用旧记录为通过依据，重新观察后用包含 `status` 的完整批次替换。
+- **Assertions**：只把 `PASS` 作为通过证据；`manual_blocker` 非空时不 complete/archive，不从 `result` 自由文本猜测状态。
+
+### 22. 路径与归档写入边界
+
+- **Setup**：分别使用 Git 仓库子目录项目、中文知识文件、`.dev-docs/changes` 指向产品目录的符号链接、被忽略的 archive 目标，以及 complete 后已撤销的知识改动。
+- **Expected**：子目录项目保持明确边界并可完成全流程；中文路径正常提交。符号链接、忽略目标及知识路径漂移在写入或移动前停止，报告对应路径。
+- **Assertions**：不更改项目根目录，不写入符号链接目标，不留下部分暂存；实际使用 shell 时 `for-each-ref` 的 format 参数有正确引号。归档三件套被修改后重试应报告内容漂移并保留文件，不宣称成功。

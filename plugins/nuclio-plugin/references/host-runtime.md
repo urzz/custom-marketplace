@@ -24,6 +24,10 @@ Claude Code Plan Mode 与 Codex Plan mode 均执行技能的停止规则。不�
 3. 在开始流程前固定两个绝对路径。每次 shell 调用都把记号替换成已核实且正确引用的绝对路径，或在**同一次 shell 调用**内设置这两个任务变量；不要依赖前一次 shell 的赋值。不会 shell 转义时使用结构化 argv。
 4. Git 始终显式传入 `-C`，Runtime 始终显式传入 `--project-root`。无法定位任一路径时停止并报告，不能退回插件源码仓库、猜测安装路径或借用 Claude 的残留变量。
 
+项目可以是 Git 仓库中的子目录；Runtime 负责转换项目相对路径与 Git 根目录相对路径，Git 的共享 index 和项目外 dirty 路径仍参与 clean gate。项目根路径可以解析符号链接；其下 `.dev-docs` 的目录、artifact、配置和知识路径不能再通过符号链接重定向。分支 ref 列举命令中的 `--format="%(refname)"` 必须保留 shell 引号。
+
+两个宿主都按 work 的显式归档恢复例外处理用户当前给出的恢复/归档 ID：没有 active 候选时，只定点检查该 archive 目录并调用 `archive --id`，不扫描 archive、不进入新建分支规则。`status` 返回 `recover-approval` 时重跑 `approve --id`，不重复确认已经提交的合同。
+
 例如，本次加载技能位于 `/opt/plugin cache/nuclio/skills/work/SKILL.md`，目标项目为 `/work/my project`，实际命令是：
 
 ```bash

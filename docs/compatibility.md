@@ -19,6 +19,8 @@
 
 技能内的任务路径变量只是已解析路径的记号，不是 Codex 自动注入的环境变量。每次执行需使用实际绝对路径或在同一次 shell 调用内赋值。Nuclio 不因进入 Git 子目录而静默改变项目边界；从子目录启动且要管理顶层项目时，应明确提供顶层项目路径。
 
+Nuclio 也支持以仓库子目录本身作为目标项目：Runtime 负责 Git 路径转换，共享 index 和项目外改动仍参与 clean gate。中文文件名通过 NUL 分隔的 Git 文件列表处理；`.dev-docs` 下的符号链接重定向会被拒绝。两个宿主都支持显式 ID 的归档中断恢复和 `recover-approval` 路由，详见 Nuclio workflow。
+
 ## 权限与模式
 
 Nuclio 在任一宿主的 Plan mode 中都停止，不自动进入或退出模式。Skill Forge 与 commit 系列在只读/Plan mode 中仅分析。确认合同不等于扩大 sandbox 或工具权限。

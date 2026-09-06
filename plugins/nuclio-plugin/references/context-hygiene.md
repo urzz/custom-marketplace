@@ -4,7 +4,7 @@
 
 ## Phase read order
 
-- **Shape**：所有 Git 命令均显式使用 `git -C "${NUCLIO_PROJECT_DIR}" ...`，不依赖当前目录。通过 Plan Mode fail-closed 边界后、active change discovery 前，立即只读运行 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`：从可解析输出记录 Git 仓库与 attached `HEAD` 是否可用；可用时捕获 `start_branch`、`start_head`，并观察起点 staged、unstaged、untracked 是否均为空。命令或解析异常为 snapshot unavailable。不写文件、不调用 Runtime、也不进行网络、远程或分支操作 -> 仅检查 active change 候选。快照 unavailable 或起点 dirty 不得阻止 discovery。若有唯一或多个候选，丢弃快照并走既有恢复或歧义路径，绝不创建或切换分支。无候选时，先要求有效 attached snapshot 和调用起点 staged、unstaged、untracked 均为空；否则 fail closed，即使 Shape 期间外部清理工作区也不得新建。然后继续：用户请求与项目规则 -> `index.md` -> 有明确相关性的知识文件/heading -> 相关代码、测试、配置和仓库事实 -> 确定合法 `<change-id>` 和类型（仅 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`）。这全程只读；完成 Shape 后，重新运行同一 `git -C ... status` 命令，核对 branch/HEAD 分别仍等于快照且工作区仍 clean；完成本地精确 ref 检查并成功执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>` 前，不写本次 change 或产品文件。switch 成功后还必须按 workflow 完成 post-switch branch/HEAD/clean 与 remote-ref 校验，才能 `create`。
+- **Shape**：所有 Git 命令均显式使用 `git -C "${NUCLIO_PROJECT_DIR}" ...`，不依赖当前目录。通过 Plan Mode fail-closed 边界后、active change discovery 前，立即只读运行 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`：从可解析输出记录 Git 仓库与 attached `HEAD` 是否可用；可用时捕获 `start_branch`、`start_head`，并观察起点 staged、unstaged、untracked 是否均为空。命令或解析异常为 snapshot unavailable。不写文件、不调用 Runtime、也不进行网络、远程或分支操作 -> 仅检查 active change 候选。快照 unavailable 或起点 dirty 不得阻止 discovery。若有唯一或多个候选，丢弃快照并走既有恢复或歧义路径，绝不创建或切换分支。无候选时先处理显式归档恢复例外；需要新建时，才要求有效 attached snapshot 和调用起点 staged、unstaged、untracked 均为空；否则 fail closed，即使 Shape 期间外部清理工作区也不得新建。然后继续：用户请求与项目规则 -> `index.md` -> 有明确相关性的知识文件/heading -> 相关代码、测试、配置和仓库事实 -> 确定合法 `<change-id>` 和类型（仅 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`）。这全程只读；完成 Shape 后，重新运行同一 `git -C ... status` 命令，核对 branch/HEAD 分别仍等于快照且工作区仍 clean；完成本地精确 ref 检查并成功执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>` 前，不写本次 change 或产品文件。switch 成功后还必须按 workflow 完成 post-switch branch/HEAD/clean 与 remote-ref 校验，才能 `create`。
 - **Build / recovery**：主会话先保留或读取紧凑控制信息：`status --id <change-id> --json` 工作包、当前合同、milestone/handoff 和由 `.dev-docs/index.md` 路由的相关知识；派发时仅将当前控制信息、相关知识路径及读取理由和必要范围交给 Agent，不复制知识正文 -> 先作出派发判断。若派发：主会话不预读该委派范围的局部代码、测试、配置或测试诊断，Agent 在必要范围内读取代码、测试和配置并吸收局部探索、测试诊断和原始输出；主会话只处理短回传、milestone/handoff、Runtime 和 Verify。若直接实施：主会话才读取相关代码、测试和配置并实施。
 - **Verify**：批准合同、delivery、当前 diff、检查与观察优先；相关知识仅提供稳定约束，不能替代验证依据。
 - **Finish**：产品结果与 diff -> 索引路由的受影响知识，用同一次分析判断新增候选和既有结论是否失效。
@@ -15,7 +15,9 @@
 
 通过 Plan Mode 边界后，fresh session 先完成上述只读调用起点 snapshot，再检查 `${NUCLIO_PROJECT_DIR}/.dev-docs/changes/` 的直接子目录并排除 `archive/`；snapshot 不得提前阻塞已有 active change 的发现与恢复：
 
-- 无候选：不存在 active change 时，不调用 `status`；先要求调用起点的有效 attached snapshot 以及起点 staged、unstaged、untracked 均为空，再继续只读 Shape 调查并确定 `<change-id>` 与类型。随后用 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all` 重新读取 branch 和 `HEAD`；输出必须可解析，二者必须分别仍等于 `start_branch` 和 `start_head`，且 staged、unstaged、untracked 仍均为空。以 `git -C "${NUCLIO_PROJECT_DIR}" show-ref --verify --quiet refs/heads/<type>/<change-id>` 检查本地精确 ref（exit `0` 冲突、exit `1` 不存在、其他 exit fail closed）。用 `git -C "${NUCLIO_PROJECT_DIR}" remote` 读取全部本地配置 remote，并对每个 remote 以相同 `show-ref --verify --quiet` 语义检查精确缓存 remote-tracking ref。再以 `git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/` 读取本地缓存全集，并与全部已配置 remote 构造的完整目标 refname 集合精确比较，不能只检查 `origin`。命令或解析异常 fail closed；不刷新 refs，也不调用网络或远程操作。成功执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>` 后，还须用同一 `status` 与 `for-each-ref` 命令完成 post-switch 当前 branch、`HEAD`、clean 与 remote-ref 校验，才可在需要时 `create`。
+先处理显式归档恢复例外：无 active 候选且用户当前明确提供恢复/归档 ID 时，仅定点检查 `.dev-docs/changes/archive/<change-id>/`，存在则直接执行 `archive --id <change-id>`；不进入下述新建的起点 clean 和分支流程，也不调用 active `status`。不存在则报告未找到，不改走新建。用户没有明确 ID 时要求其给出，不从 Git dirty 路径、旧聊天或 archive 列表猜测；多个 active 仍 fail closed，显式 ID 与唯一 active 不一致时报告冲突。
+
+- 无候选：不存在 active change 时，不调用 `status`；先要求调用起点的有效 attached snapshot 以及起点 staged、unstaged、untracked 均为空，再继续只读 Shape 调查并确定 `<change-id>` 与类型。随后用 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all` 重新读取 branch 和 `HEAD`；输出必须可解析，二者必须分别仍等于 `start_branch` 和 `start_head`，且 staged、unstaged、untracked 仍均为空。以 `git -C "${NUCLIO_PROJECT_DIR}" show-ref --verify --quiet refs/heads/<type>/<change-id>` 检查本地精确 ref（exit `0` 冲突、exit `1` 不存在、其他 exit fail closed）。用 `git -C "${NUCLIO_PROJECT_DIR}" remote` 读取全部本地配置 remote，并对每个 remote 以相同 `show-ref --verify --quiet` 语义检查精确缓存 remote-tracking ref。再以 `git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format="%(refname)" refs/remotes/` 读取本地缓存全集，并与全部已配置 remote 构造的完整目标 refname 集合精确比较，不能只检查 `origin`。命令或解析异常 fail closed；不刷新 refs，也不调用网络或远程操作。成功执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>` 后，还须用同一 `status` 与 `for-each-ref` 命令完成 post-switch 当前 branch、`HEAD`、clean 与 remote-ref 校验，才可在需要时 `create`。
 - 恰有一个候选：以其目录名作为 `<change-id>`，再运行：
 
   ```bash
@@ -25,6 +27,8 @@
 - 多个候选：fail closed，报告候选目录并要求用户解决歧义；不得猜测 ID、调用 Runtime 或读取 archive。
 
 唯一候选的 `status` 返回后，再核对当前合同、milestone/handoff、HEAD、工作区和相关检查。Runtime 工作包、Git、代码、合同和长期知识各自回答不同问题；冲突时回到对应权威，而非采信旧消息。
+
+`next_action=recover-approval` 时直接重跑 `approve --id <change-id>` 恢复已提交批准，再读取 status；不得沿用缺失批准时的检查或重复确认同一合同。`manual_blocker` 与 `review_blocker` 一样先回到 Build 处理。手工记录缺少显式 `PASS|FAIL` 状态时不作为通过依据，按 `change-format.md` 重做观察。
 
 ## Agent and reviewer
 
