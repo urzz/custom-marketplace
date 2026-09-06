@@ -5,6 +5,8 @@ description: Use only when the user explicitly asks to create one Conventional C
 
 # Commit and Push
 
+本技能在 Claude Code 与 Codex 中共用同一提交合同。插件入口分别为 `/dev-stack:commit-and-push` 与 `$dev-stack:commit-and-push`；相对 references 路径以实际加载的技能目录为基准。按调用起点的用户项目定位 Git 仓库，确认根目录后所有 Git 命令显式使用 `git -C <repo-root>`，不从插件缓存目录推断目标。需要人工判断时使用宿主允许的提问方式并等待明确回复；空答案或超时不是批准。在只读/Plan mode 下仅提供分析，不 stage、commit 或 push。
+
 此 skill 将一次明确的“提交并推送”请求处理为两个严格顺序阶段：先安全创建并验证恰好一个 Conventional Commit，再把当前分支普通推送到其 upstream。用户显式调用本 skill 即授权第二阶段的普通 push，但不代表接受提交边界风险、敏感内容或其他强制停止项。
 
 ## 边界

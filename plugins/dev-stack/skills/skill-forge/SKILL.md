@@ -1,12 +1,12 @@
 ---
 name: skill-forge
-description: Use when explicitly creating, modifying, optimizing, or auditing Claude Code skills, including SKILL.md, supporting references/scripts/assets, plugin agents, trigger behavior, and skill validation.
+description: Use when explicitly creating, modifying, optimizing, or auditing Claude Code or Codex skills, including SKILL.md, supporting references/scripts/assets, plugin agents, trigger behavior, and skill validation.
 disable-model-invocation: true
 ---
 
 # Skill Forge
 
-为 Claude Code 创建、修改和审查 Skill。先通过需求澄清理解真实问题，再用 Spec、Plan、确定性验证和按需行为评测完成工作；不要把普通 Skill 维护扩张为通用软件交付状态机。
+为 Claude Code、Codex 或两者共用的目标创建、修改和审查 Skill。先通过需求澄清理解真实问题，再用 Spec、Plan、确定性验证和按需行为评测完成工作；不要把普通 Skill 维护扩张为通用软件交付状态机。
 
 ## Contents
 
@@ -15,6 +15,10 @@ disable-model-invocation: true
 - [CREATE 和 MODIFY](#create-和-modify)
 - [AUDIT](#audit)
 - [验证与完成](#验证与完成)
+
+## 宿主与目标平台
+
+先读取 [平台适配](references/platforms.md)，区分当前执行宿主与目标技能的平台，落实本次技能目录和项目根目录、调用策略、用户确认及代理权限。
 
 ## 核心规则
 
@@ -25,7 +29,7 @@ disable-model-invocation: true
 5. 先运行确定性检查，再做语义审查或行为评测。LLM 判断不能替代失败的 schema、静态检查、脚本或测试。
 6. 主 Session 是唯一 Controller。产品写入保持顺序；Subagent 只接收一个 Plan Task 的精确文件边界。
 7. 不自动 commit、squash、reset、rebase、checkout、stash，不创建或切换分支、worktree。完成后保留已验证 working tree。
-8. 不调用其他 Skill、workflow、MCP、网络服务、hook 或 daemon。仅在本流程明确需要时使用插件提供的 bounded agents。
+8. 不调用其他 Skill、workflow、MCP、网络服务、hook 或 daemon。仅在本流程明确需要且宿主支持时，按平台适配使用原生 bounded agents。
 9. 保留用户已有未提交改动。若目标路径存在非本次修改，先理解并协同编辑；无法安全合并时停止并说明冲突。
 10. 用户可见 prose 和生成文档默认使用用户当前主要语言；代码、命令、路径、配置键和协议字段保持原文。
 
@@ -40,14 +44,14 @@ disable-model-invocation: true
 | 只涉及普通业务代码或通用代码 review | HALT，说明不属于 Skill Forge |
 | 无法确定 | 询问用户要创建、修改、审查当前变更，还是完整审计 |
 
-CHANGE_AUDIT 以用户指定范围为入口，并读取直接受影响的稳定合同。FULL_AUDIT 读取完整 Skill、本层 references/scripts/assets、相关插件级 agents、插件 metadata、README 和 CLAUDE 同步点。
+CHANGE_AUDIT 以用户指定范围为入口，并读取直接受影响的稳定合同。FULL_AUDIT 读取完整 Skill、本层 references/scripts/assets、相关插件级 agents、插件 metadata、README、AGENTS 与 CLAUDE 同步点。
 
 ## CREATE 和 MODIFY
 
 ### 1. Discovery 与需求澄清
 
 1. 读取适用的仓库规则和目标 Skill 结构。
-2. CREATE 明确用户问题、目标用户、最小能力、输入、输出、触发边界、副作用和验证方式。
+2. CREATE 明确目标平台（Claude Code、Codex 或双平台）、用户问题、目标用户、最小能力、输入、输出、触发边界、副作用和验证方式。
 3. MODIFY 读取目标 `SKILL.md`、直接引用的 supporting files、相关 scripts/tests、插件级 agents、metadata 和同步文档；区分根因与表面症状，明确必须保持的行为。
 4. 把 review 或设计文档当作输入，用当前源码和可执行检查验证；不要把旧结论直接当成当前事实。
 5. 读取 [需求澄清协议](references/clarification.md)。默认使用 Focused；用户说 `grill me`、要求苏格拉底式追问，或存在会改变架构、权限、副作用或验收的重大不确定性时使用 Grill。
@@ -80,8 +84,8 @@ CHANGE_AUDIT 以用户指定范围为入口，并读取直接受影响的稳定�
 使用 bundled validator 计算 Spec hash 并校验 Plan：
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/plan_contract.py" hash-spec .skill-forge/<run>/spec.md
-python3 "${CLAUDE_SKILL_DIR}/scripts/plan_contract.py" validate .skill-forge/<run>/plan.yaml --repo-root <repo-root>
+python3 "${SKILL_FORGE_DIR}/scripts/plan_contract.py" hash-spec "${SKILL_FORGE_REPO_ROOT}/.skill-forge/<run>/spec.md"
+python3 "${SKILL_FORGE_DIR}/scripts/plan_contract.py" validate "${SKILL_FORGE_REPO_ROOT}/.skill-forge/<run>/plan.yaml" --repo-root "${SKILL_FORGE_REPO_ROOT}"
 ```
 
 校验失败时修正 Plan，不能绕过。展示 Plan 路径、Task 数、create/modify/delete 摘要、影响标记和 checks。
@@ -92,7 +96,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/plan_contract.py" validate .skill-forge/<ru
 
 1. 记录实现前 Git 状态和 diff base，但不要求干净工作区。
 2. 按 Plan 顺序执行 Task；同一时间只允许一个产品写入单元。
-3. 小型单 Task 由主 Session 直接实施。多 Task、上下文较重或文件边界清晰时使用 `dev-stack:skill-file-implementer`。
+3. 小型单 Task 由主 Session 直接实施。多 Task、上下文较重或文件边界清晰时，按平台适配使用 bounded implementer；Claude Code 为 `dev-stack:skill-file-implementer`，Codex 使用可用原生子代理。代理不可用时主 Session 依相同 Task 顺序实施。
 4. Subagent 只读取已确认 Spec、Plan 中自己的 Task 和必要接口文件；只能修改 Task 路径，直接返回不超过 15 行的结果，不写 brief/report/observation，不 commit，也不修改 Spec、Plan 或 State。
 5. 每个 Task 后运行其全部 `checks`。失败时只在原 Task 范围内修复并重跑。
 6. 需要新路径、依赖、权限、副作用，改变触发边界或原验收不可观察时停止实施，更新 Spec 并重新确认。
@@ -115,8 +119,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/plan_contract.py" validate .skill-forge/<ru
 3. `impacts.trigger_or_behavior_changed=true` 时，从 Spec 选择 3-5 个 fresh-session cases；description 变化同时覆盖 Should Trigger 和 Should Not Trigger。
 4. 没有隔离 harness 时报告 `SKIP: no isolated harness`，可以补充静态合同检查，但不能声称行为 PASS。
 5. 只有用户明确要求 benchmark 或专门调优 description 时，才运行 with-skill/without-skill 或版本 A/B。可复用用例写入目标 Skill 的 `evals/evals.json`，临时输出不长期保留。
-6. 对实现前 base 到当前 working tree 做一次最终完整 diff review，检查 Spec/Plan 覆盖、越界修改、触发边界、跨文件一致性和 Claude Code 结构。
-7. agent 权限、外部副作用、带副作用 script 或高影响核心控制流程变化时，使用 `dev-stack:skill-file-reviewer` 做独立只读审查；普通 Markdown 变化由主 Session 完成最终审查。
+6. 对实现前 base 到当前 working tree 做一次最终完整 diff review，检查 Spec/Plan 覆盖、越界修改、触发边界、跨文件一致性和已确认目标平台的结构。
+7. agent 权限、外部副作用、带副作用 script 或高影响核心控制流程变化时，按平台适配选择 reviewer 做独立只读审查；Claude Code 为 `dev-stack:skill-file-reviewer`，Codex 传入相同角色合同。若 Codex 无法满足有效只读限制，记录 CANNOT_VERIFY 和未完成验证，不声称整体 PASS；普通 Markdown 变化由主 Session 完成最终审查。
 8. 发现问题时在原 Plan 范围内修复并重跑受影响检查；范围变化则回到 Spec。同一失败重复且无进展时停止并报告。
 9. 报告修改内容、确定性检查、行为评测、独立审查和剩余风险。不要自动提交或改写 Git 历史。
 

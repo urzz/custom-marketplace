@@ -1,0 +1,5 @@
+interface:
+  display_name: "Commit"
+  short_description: "分析工作区和暂存区的改动，安全创建并验证单个 Conventional Commit。"
+policy:
+  allow_implicit_invocation: true

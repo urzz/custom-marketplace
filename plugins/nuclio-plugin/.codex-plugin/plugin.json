@@ -1,0 +1,24 @@
+{
+  "name": "nuclio",
+  "description": "面向 Claude Code 与 Codex 的 Nuclio v3 知识初始化和 change 交付：显式调用、结果合同确认、受控新分支、当前验证与可恢复归档。",
+  "version": "5.3.0",
+  "author": {
+    "name": "Jade Liu",
+    "email": "[redacted-email]"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Nuclio",
+    "shortDescription": "建立项目知识骨架，以可恢复的结果合同驱动交付、验证和归档。",
+    "longDescription": "面向 Claude Code 与 Codex 的 Nuclio v3 知识初始化和 change 交付：显式调用、结果合同确认、受控新分支、当前验证与可恢复归档。",
+    "developerName": "Jade Liu",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "显式使用 Nuclio work 处理当前项目的一个变更。"
+    ]
+  }
+}

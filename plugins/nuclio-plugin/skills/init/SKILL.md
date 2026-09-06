@@ -9,7 +9,11 @@ disable-model-invocation: true
 
 ## Plan Mode 边界
 
-从显式调用开始直到停止，始终在当前模式执行，不得调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若调用开始时已处于 Claude Code Plan Mode，立即 fail closed：不创建或恢复 change，也不写入知识骨架、不自行调用 `ExitPlanMode`；报告阻塞，并要求用户先退出 Plan Mode 后重新显式调用 `/nuclio:init`。
+从显式调用开始直到停止，始终在当前模式执行，不得调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若调用开始时已处于 Claude Code Plan Mode 或 Codex Plan mode，立即 fail closed：不创建或恢复 change，也不写入知识骨架、不自行调用 `ExitPlanMode`；报告阻塞，并要求用户先退出 Plan Mode 后重新显式调用 `/nuclio:init`。
+
+## 宿主与路径
+
+通过上述模式边界后，先读取 [宿主适配](../../references/host-runtime.md)，固定本次 `NUCLIO_SKILL_DIR` 与 `NUCLIO_PROJECT_DIR` 的绝对路径并选择当前宿主的确认/委派方式；后续命令中的变量是路径记号，必须在每次调用中落实。
 
 ## Read first
 
@@ -17,7 +21,7 @@ disable-model-invocation: true
 
 ## Scope
 
-在 `${CLAUDE_PROJECT_DIR}` 中检查 `.dev-docs` 后，只可：
+在 `${NUCLIO_PROJECT_DIR}` 中检查 `.dev-docs` 后，只可：
 
 - 创建缺失的 `.dev-docs/index.md`、`.dev-docs/knowledge/project.md`、`.dev-docs/knowledge/architecture.md`、`.dev-docs/knowledge/engineering.md` 与 `.dev-docs/changes/archive/`；
 - 为缺失的入口写入简短导航或空知识标题；索引只列出路径、摘要和何时读取，知识正文留在对应文件；
@@ -30,6 +34,6 @@ disable-model-invocation: true
 - 不创建 `changes/<id>/` 下的 `change.md`、`delivery.yaml` 或 `state.yaml`。
 - 不调用 `change.py`；七命令 Runtime 不增加初始化命令。
 - 不确认合同，不实现产品，不运行产品检查，不恢复、Verify、Finish、complete 或 archive。
-- 不依赖插件源码仓库路径，也不向 `${CLAUDE_SKILL_DIR}` 或 Marketplace cache 写入；所有允许写入只在 `${CLAUDE_PROJECT_DIR}/.dev-docs/`。
+- 不依赖插件源码仓库路径，也不向 `${NUCLIO_SKILL_DIR}` 或 Marketplace cache 写入；所有允许写入只在 `${NUCLIO_PROJECT_DIR}/.dev-docs/`。
 
 用户请求功能、缺陷、文档变更、恢复、验证或归档时，停止并请其显式使用 `/nuclio:work`。成功后只报告创建或修复的路径，并说明日常 change 使用 `/nuclio:work`。

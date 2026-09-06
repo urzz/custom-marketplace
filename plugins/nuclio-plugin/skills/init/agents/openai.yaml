@@ -1,0 +1,5 @@
+interface:
+  display_name: "Nuclio Init"
+  short_description: "显式初始化或安全修复项目的 Nuclio 知识骨架，保留已有项目内容。"
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,32 @@
+{
+  "name": "jade-tools-marketplace",
+  "interface": {
+    "displayName": "Jade 开发工具"
+  },
+  "plugins": [
+    {
+      "name": "dev-stack",
+      "source": {
+        "source": "local",
+        "path": "./plugins/dev-stack"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "nuclio",
+      "source": {
+        "source": "local",
+        "path": "./plugins/nuclio-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

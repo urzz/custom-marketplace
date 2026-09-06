@@ -1,53 +1,103 @@
 # cc-marketplace
 
-用于组织和分发 Claude Code 插件的轻量级 Marketplace 仓库。
+用于组织和分发 **Claude Code 与 Codex** 插件的轻量级 Marketplace 仓库。两端使用各自原生入口，共用技能正文、参考资料和 Python 实现。
 
-## 插件
+## 插件与调用
 
-| 插件 | 技能 | 用途 |
-|---|---|---|
-| `openclaw-plugin` | `/openclaw-skill-creator` | 起草和维护 OpenClaw skill |
-| `dev-stack` | `/skill-forge`、`/commit`、`/commit-and-push` | 创建、修改或审查 Claude Code skill；安全创建单个 Conventional Commit，并可在验证后普通推送当前分支 |
-| `nuclio` | `/nuclio:init`、`/nuclio:work` | Nuclio v3 5.2.0 的 `.dev-docs` 知识骨架与 file-first change 交付工作流 |
+| 插件 / 版本 | Claude Code | Codex | 用途 |
+|---|---|---|---|
+| `dev-stack` / `0.5.0` | `/dev-stack:skill-forge` | `$dev-stack:skill-forge` | 为 Claude Code、Codex 或双平台创建、修改、审查 skill |
+| `dev-stack` / `0.5.0` | `/dev-stack:commit` | `$dev-stack:commit` | 分析改动并安全创建单个 Conventional Commit |
+| `dev-stack` / `0.5.0` | `/dev-stack:commit-and-push` | `$dev-stack:commit-and-push` | 创建并验证单个提交后普通推送当前分支 |
+| `nuclio` / `5.3.0` | `/nuclio:init` | `$nuclio:init` | 创建或安全修复 `.dev-docs` 知识骨架 |
+| `nuclio` / `5.3.0` | `/nuclio:work` | `$nuclio:work` | 创建、恢复、验证和归档一个 change |
 
-Nuclio v3 5.2.0 的 active change 和新 archive 都完整保留 `change.md`、`delivery.yaml`、`state.yaml`。`/nuclio:init` 与 `/nuclio:work` 始终在调用开始时的当前模式内运行，不进入或退出 Claude Code Plan Mode；若调用时已经处于 Plan Mode，则停止并要求退出后重新显式调用。`/nuclio:work` 通过 Plan Mode 边界后，会在 discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。恢复唯一 active change 时才以目录名调用 `status --id <change-id> --json`，不创建或切换分支；多个候选则停止并报告歧义。仅无 active change 时才要求调用起点为 attached 且 clean，并在只读 Shape 调查后复核 branch/HEAD 未漂移、当前仍无 staged/unstaged/untracked 改动，以及本地和全部已配置 remote 的缓存 remote-tracking refs 无精确冲突；只读取本地 Git metadata，不 `fetch`、`ls-remote` 或联网。全部通过后执行 `git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`；只有 post-switch 的 branch/HEAD/clean 与 remote-ref 二次校验成功才调用 `create`。前置检查或 switch 失败不调用 `create`；switch 后异常或 `create` 失败不自动回滚，并在部分成功或最终新建成功报告中包含分支名。主会话不自动 stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree。用户只确认一次结果合同；主会话基于上下文负担按需有界委派 Agent，自主维护 delivery milestone；小型确定性工作与控制决策仍由主会话直接处理并运行定义的检查，再由 Runtime 记录和验证当前依据。当前请求或已加载项目上下文绑定 Open Design `project-id` 时，`/nuclio:work` 可在 Shape 通过用户已配置的 MCP 只读获取设计，批准后将完整交付固化到固定目录 `.dev-docs/artifacts/open-design/` 再实施，knowledge 只接收提炼后的稳定项目事实。可选 `nuclio:readonly-reviewer` 的工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings。Runtime 仍只提供 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令，不创建或切换分支，也不保存 branch state；工作流采用 index-first 知识读取、一次知识决定、明确知识结果与可恢复完整 archive。
+`skill-forge` 与 Nuclio 的两个技能仅显式调用。commit 系列保留自动发现，实际暂存、提交和推送仍遵守各自的用户请求与授权合同。
+
+## 安装
+
+需要 Git、Python 3.10+ 和 PyYAML；安装对应客户端后，在本仓库根目录执行以下命令。Marketplace 注册与插件安装会写入该客户端的个人配置。
+
+Claude Code：
+
+```bash
+claude plugin marketplace add .
+claude plugin install dev-stack@jade-tools-marketplace
+claude plugin install nuclio@jade-tools-marketplace
+```
+
+Codex CLI：
+
+```bash
+codex plugin marketplace add .
+codex plugin add dev-stack@jade-tools-marketplace
+codex plugin add nuclio@jade-tools-marketplace
+```
+
+按需选择插件安装，之后开启新会话。Codex 也可用 `/plugins` 打开插件浏览器。Git 托管分发时，将 `marketplace add` 的 `.` 换成该仓库的 Git 地址。
+
+本地开发可直接以 `claude --plugin-dir ./plugins/dev-stack` 加载 Claude 插件。Codex 的目录加载检查见下文；修改已安装插件后需通过客户端更新/重新安装并在新会话验证，安装缓存中的内容不应手工编辑。
+
+当前验证基线为 Claude Code `2.1.201` 与 Codex CLI `0.153.4`，不是声明的最低版本。客户端能力和未覆盖项见 [兼容性说明](docs/compatibility.md)。
+
+## 工作流
+
+**Skill Forge** 先确定目标平台与需求，确认 Spec，再生成并校验 Plan，按 Task 顺序实施。宿主与目标可以不同，例如在 Codex 中维护 Claude Code skill。两端共用 Plan validator 和代理角色合同；工具与权限按实际宿主适配。
+
+**Nuclio v3 5.3.0** 共用七命令 Runtime，active change 和新 archive 都保留 `change.md`、`delivery.yaml`、`state.yaml`。在另一宿主恢复时继续读取同一份文件，无需转换状态。
+
+Nuclio 在 Claude Code Plan Mode 或 Codex Plan mode 中均停止并要求退出后重新显式调用。普通模式下，work 在 discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。唯一 active change 按 ID 恢复，多个候选报告歧义；仅无 active change 时才要求起点 attached 且 clean，并在只读 Shape 后完成分支/HEAD/工作区及全部已配置 remote 的缓存 remote-tracking refs 检查，创建受控新分支，再进行 post-switch 复核与 Runtime create。
+
+用户确认结果合同后，主会话管理交付与检查，按上下文负担有界委派原生 Agent；Runtime 记录当前检查依据、判断完成条件，并支持知识决定与可恢复归档。可选 Open Design 只使用用户已配置的 MCP 和明确绑定的 `project-id`，批准后的设计交付固定保存到 `.dev-docs/artifacts/open-design/`。
+
+详细规则见 [Nuclio workflow](plugins/nuclio-plugin/references/workflow.md)、[宿主适配](plugins/nuclio-plugin/references/host-runtime.md) 和 [Skill Forge 平台适配](plugins/dev-stack/skills/skill-forge/references/platforms.md)。
 
 ## 仓库结构
 
 ```text
-.claude-plugin/marketplace.json
+AGENTS.md                              # 两端共用维护规则
+CLAUDE.md                              # 引用 AGENTS.md
+.claude-plugin/marketplace.json         # Claude marketplace
+.agents/plugins/marketplace.json        # Codex marketplace
 plugins/
-└── <plugin-name>/
+└── <plugin-dir>/
     ├── .claude-plugin/plugin.json
-    ├── agents/*.md                  # 可选：tool-scoped agent 定义
-    ├── skills/<skill-name>/SKILL.md
-    ├── references/                  # 可选：插件级参考资料
-    └── scripts/                     # 可选：确定性 helper 与测试
+    ├── .codex-plugin/plugin.json
+    ├── agents/*.md                    # 可选：Claude 原生代理入口
+    ├── skills/<skill-name>/
+    │   ├── SKILL.md                   # 共享技能
+    │   └── agents/openai.yaml          # Codex 界面与调用策略
+    ├── references/                    # 可选：共享资料与宿主适配
+    └── scripts/                       # 可选：共享 helper 与测试
+scripts/                               # 仓库级兼容性检查
 ```
 
-skill 也可以在自身目录下使用 `references/`、`scripts/` 等辅助目录。Nuclio 的当前运行时权威位于 `plugins/nuclio-plugin/skills/`、`references/` 和 `scripts/`；`plugins/nuclio-plugin/docs/research/` 仅保留历史设计背景。
+插件标识 `nuclio` 的目录仍为 `plugins/nuclio-plugin/`，由两端 source 显式映射。Nuclio 当前权威位于 `skills/`、`references/` 和 `scripts/`；`plugins/nuclio-plugin/docs/research/` 是历史设计背景。
 
-仓库维护规则见 `CLAUDE.md`。
+维护规则见 [AGENTS.md](AGENTS.md)。这是插件仓库，没有独立应用构建流程。
 
-## 本地验证
+## 验证
 
-仓库没有独立的应用构建流程。修改后按影响范围运行以下检查：
-
-```bash
-python3 -m json.tool .claude-plugin/marketplace.json >/dev/null
-python3 -m json.tool plugins/openclaw-plugin/.claude-plugin/plugin.json >/dev/null
-python3 -m json.tool plugins/dev-stack/.claude-plugin/plugin.json >/dev/null
-python3 -m json.tool plugins/nuclio-plugin/.claude-plugin/plugin.json >/dev/null
-```
+从仓库根目录执行：
 
 ```bash
+python3 scripts/validate_marketplace.py
+python3 -m unittest discover -s scripts -p 'test_*.py'
 python3 -m unittest discover -s plugins/dev-stack/skills/skill-forge/scripts -p 'test_*.py'
-python3 plugins/dev-stack/skills/skill-forge/scripts/plan_contract.py --help >/dev/null
-claude plugin validate plugins/dev-stack --strict
+python3 -m unittest discover -s plugins/nuclio-plugin/scripts -p 'test_*.py'
+python3 plugins/dev-stack/skills/skill-forge/scripts/plan_contract.py --help
+python3 plugins/nuclio-plugin/scripts/change.py --help
 ```
 
+两端原生检查：
+
 ```bash
-python3 plugins/nuclio-plugin/scripts/change.py --help >/dev/null
-python3 -m unittest discover -s plugins/nuclio-plugin/scripts -p 'test_*.py'
+claude plugin validate . --strict
+claude plugin validate plugins/dev-stack --strict
 claude plugin validate plugins/nuclio-plugin --strict
+python3 scripts/smoke_codex.py
 ```
+
+[静态校验](scripts/validate_marketplace.py) 检查两端名称、source、版本、调用策略和包内资源链接。[Codex 加载检查](scripts/smoke_codex.py) 通过临时副本与本地 app-server RPC 验证实际插件及技能元数据加载，同时覆盖含空格的缓存路径、不同 CWD 和插件目录只读；不安装到个人配置，也不启动模型会话。
+
+配置校验、模型行为评测、有效只读代理权限、公共目录上架是不同检查，不能相互替代。当前边界与可复用行为场景见 [兼容性说明](docs/compatibility.md)。

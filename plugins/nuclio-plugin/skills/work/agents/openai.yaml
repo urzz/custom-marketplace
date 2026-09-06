@@ -1,0 +1,5 @@
+interface:
+  display_name: "Nuclio Work"
+  short_description: "显式创建、恢复和交付 Nuclio 变更，管理结果合同、验证与归档。"
+policy:
+  allow_implicit_invocation: false

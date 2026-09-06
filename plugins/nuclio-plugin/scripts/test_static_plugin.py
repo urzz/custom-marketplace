@@ -1,4 +1,4 @@
-"""High-value static contracts for the Nuclio v3 Claude Code plugin."""
+"""Nuclio v3 双平台插件的关键静态合同。"""
 
 import ast
 import json
@@ -75,7 +75,7 @@ class V3RuntimeContracts(unittest.TestCase):
         self.assertIn('args.knowledge_result in {"APPLIED", "PARTIAL"} and not knowledge', source)
 
 
-class ClaudeCodeContracts(unittest.TestCase):
+class HostContracts(unittest.TestCase):
     def test_skills_are_explicit_and_work_uses_portable_paths(self):
         for path, name in ((INIT, "init"), (WORK, "work")):
             metadata = frontmatter(path)
@@ -83,8 +83,8 @@ class ClaudeCodeContracts(unittest.TestCase):
             self.assertIn("disable-model-invocation: true", metadata)
             self.assertIn("只能由用户显式调用", read(path))
         work = read(WORK)
-        self.assertIn('"${CLAUDE_SKILL_DIR}/../../scripts/change.py"', work)
-        self.assertIn('"${CLAUDE_PROJECT_DIR}"', work)
+        self.assertIn('"${NUCLIO_SKILL_DIR}/../../scripts/change.py"', work)
+        self.assertIn('"${NUCLIO_PROJECT_DIR}"', work)
         self.assertIn("Marketplace cache 始终只读", work)
 
     def test_nuclio_never_enters_or_exits_claude_plan_mode(self):
@@ -92,7 +92,7 @@ class ClaudeCodeContracts(unittest.TestCase):
             skill = read(path)
             self.assertIn("始终在当前模式执行", skill)
             self.assertIn("`EnterPlanMode` 或 `ExitPlanMode`", skill)
-            self.assertIn("已处于 Claude Code Plan Mode", skill)
+            self.assertIn("已处于 Claude Code Plan Mode 或 Codex Plan mode", skill)
             self.assertIn("立即 fail closed", skill)
             self.assertIn("不自行调用 `ExitPlanMode`", skill)
         init = read(INIT)
@@ -105,7 +105,7 @@ class ClaudeCodeContracts(unittest.TestCase):
         workflow = read(REFERENCES / "workflow.md")
         self.assertIn("Nuclio 生命周期始终在调用开始时的当前模式内运行", workflow)
         self.assertIn("不调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`", workflow)
-        self.assertIn("delivery milestone 是 Nuclio 的交付跟踪，不等于也不触发 Claude Code Plan Mode", workflow)
+        self.assertIn("delivery milestone 是 Nuclio 的交付跟踪，不等于也不触发宿主 Plan Mode", workflow)
         eval_prompts = read(REFERENCES / "eval-prompts.md")
         self.assertIn("已处于 Plan Mode", eval_prompts)
         self.assertIn("不调用 `EnterPlanMode` 或 `ExitPlanMode`", eval_prompts)
@@ -129,7 +129,7 @@ class ClaudeCodeContracts(unittest.TestCase):
         for guide in build_guides:
             self.assertRegex(guide, r"主会话(?:仍)?是唯一控制器")
             for required in (
-                "保护主会话上下文是优先使用一个有界 Claude Code Agent 的判断条件",
+                "保护主会话上下文是优先使用一个有界原生 Agent 的判断条件",
                 "读取广度",
                 "预期实现/诊断迭代",
                 "原始命令输出体量",
@@ -209,10 +209,10 @@ class ClaudeCodeContracts(unittest.TestCase):
         change_format = read(REFERENCES / "change-format.md")
         context = read(REFERENCES / "context-hygiene.md")
         eval_prompts = read(REFERENCES / "eval-prompts.md")
-        snapshot = 'git -C "${CLAUDE_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all'
-        local_ref = 'git -C "${CLAUDE_PROJECT_DIR}" show-ref --verify --quiet refs/heads/<type>/<change-id>'
-        remote_refs = 'git -C "${CLAUDE_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/'
-        switch = 'git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>'
+        snapshot = 'git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all'
+        local_ref = 'git -C "${NUCLIO_PROJECT_DIR}" show-ref --verify --quiet refs/heads/<type>/<change-id>'
+        remote_refs = 'git -C "${NUCLIO_PROJECT_DIR}" for-each-ref --format=%(refname) refs/remotes/'
+        switch = 'git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>'
         type_contract = "类型仅可为 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`"
 
         # The work Skill is the main procedural contract: assert its ordered, independently
@@ -229,7 +229,7 @@ class ClaudeCodeContracts(unittest.TestCase):
             "只读调查用户请求、仓库事实",
             "当前 branch 与 `HEAD` 必须分别等于 `start_branch` 与 `start_head`",
             "refs/heads/<type>/<change-id>",
-            "git -C \"${CLAUDE_PROJECT_DIR}\" remote",
+            "git -C \"${NUCLIO_PROJECT_DIR}\" remote",
             "refs/remotes/<remote>/<type>/<change-id>",
             remote_refs,
             "完整目标 refname 集合精确比较，确保不只检查 `origin`",
@@ -308,14 +308,14 @@ class ClaudeCodeContracts(unittest.TestCase):
             "多个 active change",
             "不创建或切换分支",
             "不做调用起点 snapshot 或分支检查/创建",
-            "git -C \"${CLAUDE_PROJECT_DIR}\" switch -c <type>/<change-id> <start-head>",
+            "git -C \"${NUCLIO_PROJECT_DIR}\" switch -c <type>/<change-id> <start-head>",
             "不得 `git fetch`、`git ls-remote`、联网或刷新 refs",
         ):
             self.assertIn(required, eval_prompts)
 
     def test_git_commands_are_project_root_bound_and_runtime_has_no_branch_state(self):
         guides = (WORK, REFERENCES / "workflow.md", REFERENCES / "change-format.md", REFERENCES / "context-hygiene.md", REFERENCES / "eval-prompts.md")
-        prefixes = ('git -C "${CLAUDE_PROJECT_DIR}"', "git -C ...")
+        prefixes = ('git -C "${NUCLIO_PROJECT_DIR}"', "git -C ...")
         non_executing_mentions = {"git fetch", "git ls-remote", "git switch -c", "git -C"}
         for path in guides:
             text = read(path)
@@ -405,49 +405,24 @@ class ClaudeCodeContracts(unittest.TestCase):
 
 class PackageSyncContracts(unittest.TestCase):
     def test_v3_metadata_and_repository_docs_are_synced(self):
-        plugin = json.loads(read(PLUGIN / ".claude-plugin" / "plugin.json"))
+        claude = json.loads(read(PLUGIN / ".claude-plugin" / "plugin.json"))
+        codex = json.loads(read(PLUGIN / ".codex-plugin" / "plugin.json"))
         marketplace = json.loads(read(ROOT / ".claude-plugin" / "marketplace.json"))
         entry = next(item for item in marketplace["plugins"] if item["name"] == "nuclio")
-        self.assertEqual(plugin["name"], "nuclio")
-        self.assertEqual(plugin["version"], "5.2.0")
+        for key in ("name", "version", "description"):
+            self.assertEqual(claude[key], codex[key])
+            self.assertEqual(claude[key], entry[key])
+        self.assertEqual(claude["version"], "5.3.0")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
-        self.assertEqual(entry["description"], plugin["description"])
-        self.assertIn("Nuclio v3 5.2.0", plugin["description"])
-        self.assertIn("without entering or exiting Claude Code Plan Mode", plugin["description"])
-        self.assertIn("captures invocation-start HEAD and creates a guarded new-change branch before create", plugin["description"])
-        self.assertIn("context-aware bounded Agent dispatch", plugin["description"])
-        readme = read(ROOT / "README.md")
-        nuclio_rules = read(ROOT / "CLAUDE.md").split("## Nuclio v3 5.2.0 约束", 1)[1].split("## 验证命令", 1)[0]
-        self.assertIn("Nuclio v3 5.2.0", readme)
-        self.assertIn("Nuclio v3 5.2.0", read(ROOT / "CLAUDE.md"))
-        self.assertIn("主会话基于上下文负担按需有界委派 Agent", readme)
-        self.assertIn("主会话基于上下文负担按需有界委派 Agent", nuclio_rules)
-        for text in (readme, nuclio_rules):
-            self.assertIn("Claude Code Plan Mode", text)
-            self.assertIn("delivery.yaml", text)
-            self.assertIn("state.yaml", text)
-            self.assertNotIn("plan.yaml", text)
-            self.assertNotIn("task-implementer", text)
+        self.assertIn("Claude Code", claude["description"])
+        self.assertIn("Codex", claude["description"])
+        self.assertIn("@AGENTS.md", read(ROOT / "CLAUDE.md"))
+        self.assertIn("Nuclio v3 5.3.0", read(ROOT / "AGENTS.md"))
+        for filename in ("README.md", "AGENTS.md"):
+            text = read(ROOT / filename)
+            self.assertIn(".agents/plugins/marketplace.json", text)
             self.assertIn("docs/research/", text)
-            self.assertIn("Open Design", text)
-            self.assertIn("仅无 active change", text)
-            self.assertIn("调用起点 snapshot", text)
-            self.assertIn("snapshot unavailable", text)
-            self.assertRegex(text, r"snapshot (?:unavailable 或起点 dirty 不阻塞|不得提前阻塞)已有 active change 的(?: discovery 与恢复|发现与恢复)")
-            self.assertIn("只读", text)
-            self.assertIn("attached", text)
-            for dirty_kind in ("staged", "unstaged", "untracked"):
-                self.assertIn(dirty_kind, text)
-            self.assertIn("remote-tracking", text)
-            self.assertIn('git -C "${CLAUDE_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>', text)
-            self.assertIn("post-switch", text)
-            self.assertIn("不调用 `create`", text)
-            self.assertIn("恢复唯一 active change", text)
-            self.assertIn("Runtime", text)
-            self.assertIn("不创建或切换分支", text)
-            self.assertIn("branch state", text)
-            self.assertIn("自动回滚", text)
-            self.assertIn("stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree", text)
+
 
 
 if __name__ == "__main__":

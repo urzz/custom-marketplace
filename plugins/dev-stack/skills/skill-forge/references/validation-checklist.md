@@ -23,9 +23,9 @@
 
 ## 结构与触发
 
-- `name` 与目录命名符合 Claude Code Skill 规则。
+- `name` 与目录命名符合已确认目标平台的 Skill 规则。
 - `description` 说明 Skill 做什么以及适用场景。
-- `disable-model-invocation: true` 存在，Skill 只由用户显式调用。
+- 按 `platforms.md` 保持目标技能既有调用策略；仅显式调用目标分别检查 Claude frontmatter 与 Codex `agents/openai.yaml`，不把 Skill Forge 自身的显式策略强加给生成内容。
 - 详细步骤与安全边界位于正文，不把核心程序藏在 metadata。
 - `SKILL.md` 保持精简；大段 schema、示例和澄清细节放入一层 `references/`。
 - 每个 supporting file 都从 `SKILL.md` 直接可发现，并说明何时读取或执行。
@@ -40,15 +40,15 @@
 - 拒绝不安全路径、重复 key、无效类型和超出限制的输入。
 - 缺少依赖时给出稳定、可操作的错误。
 - 实际运行单元测试、`--help` 和至少一个成功或失败 CLI 示例。
-- Skill 内调用使用 `${CLAUDE_SKILL_DIR}`，不依赖用户项目 CWD。
+- Skill 内调用从实际加载目录定位 bundled script，显式传入目标项目路径，不依赖后来变化的 shell CWD 或跨调用环境变量。
 - 脚本不静默 commit、改写 Git 历史、访问网络或执行外部副作用。
 
 ## Agents 与权限
 
 当 `agent_permissions_changed=true`：
 
-- plugin agent 位于插件根级 `agents/`，不是 Skill 内部 supporting directory。
-- implementer 只有 Task 所需写工具；reviewer 没有 Edit/Write 权限。
+- Claude plugin agent 位于插件根级 `agents/`；Codex 按宿主可用能力派发，不把技能 `agents/openai.yaml` 当作子代理定义。
+- implementer 只有 Task 所需写工具；reviewer 需满足平台适配规定的有效只读限制，不以角色名称或自然语言声明替代权限边界。
 - agent 不嵌套 delegation、不调用其他 Skill、不创建 worktree、不 commit。
 - dispatch 明确 repo root、Spec、Plan Task、允许路径、checks 和返回格式。
 - Subagent 返回简短结果，不创建 report、observation 或 diff package。
@@ -56,11 +56,11 @@
 
 ## 发布同步
 
-- 运行 `claude plugin validate <plugin> --strict`。
-- 校验 plugin metadata 和 marketplace JSON。
-- plugin description、marketplace description、README 和 CLAUDE 与实际行为一致。
+- Claude Code 目标运行 `claude plugin validate <plugin> --strict`；Codex 目标进行清单与技能元数据检查和实际客户端加载；双平台分别执行。
+- 校验两端 plugin metadata、marketplace JSON 以及名称、source、版本和调用策略的一致性。
+- plugin description、marketplace description、README、AGENTS 和 CLAUDE 与实际行为一致。
 - 不保留 L0-L3、review-state、Gate、ledger、fix budget、checkpoint commit 或 squash 的旧描述。
-- 不宣称 Codex、其他宿主或不存在的 agent/eval harness 已受支持。
+- 只宣称已验证的宿主和能力；本地插件加载、公共目录 ingestion、模型行为与独立审查分别报告。
 
 ## 行为评测
 

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Skill Forge"
+  short_description: "创建、修改和审查 Claude Code 与 Codex 技能，保留明确的需求及验证。"
+policy:
+  allow_implicit_invocation: false

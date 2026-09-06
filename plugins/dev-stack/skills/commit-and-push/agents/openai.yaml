@@ -1,0 +1,5 @@
+interface:
+  display_name: "Commit and Push"
+  short_description: "根据明确请求安全创建单个提交，验证后普通推送当前 Git 分支。"
+policy:
+  allow_implicit_invocation: true
