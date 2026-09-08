@@ -36,7 +36,9 @@
 
 工作包必须覆盖相关 Acceptance、Constraints/Non-goals、必要路径边界、实现、集成接缝、预期 changed paths 和 exact checks，使其可独立交付与验收；dispatch 只传紧凑控制信息、相关知识路径及读取理由，不复制完整知识正文。代理不调用 Skill、不继续委派、不接管 Runtime。代理活动期间，其产品路径和诊断主题对主会话排他：主会话不读取、编辑、写入、运行同题诊断或重复派发；可以处理明确不重叠的控制工作，并可为验收定点核对必要证据或执行目的明确的独立复核，但不得借机吸收完整调查。真正依赖结果时使用宿主完成通知或原生等待，禁止 shell `sleep`、Git 状态或反复消息轮询和催促。
 
-代理回传最多 15 行，只使用 `status`、`changed`、`checks`、`handoff`、`concerns`；`status` 仅为 `DELIVERED|BLOCKED`。代码、搜索过程、日志和完整测试输出留在代理上下文，但必须保留 Controller 决策所需的文件、检查和错误定位。`BLOCKED`、异常、超时或缺少合格回传时优先 resume；不可 resume 或范围不再合适时缩小/重切或重新委派。主会话只有在重新判断共享上下文收益高于隔离收益后才能接管，并在 handoff 写一句理由，不得静默重复宽范围探索。无原生代理时按同一工作包顺序直做；其他能力降级遵循 `host-runtime.md`，不得跨宿主调用 CLI 或模拟能力。
+调查与实施代理（含返修）的回传最多 15 行，只使用 `status`、`changed`、`checks`、`handoff`、`concerns`；`status` 仅为 `DELIVERED|BLOCKED`。代码、搜索过程、日志和完整测试输出留在代理上下文，但必须保留 Controller 决策所需的文件、检查和错误定位。`BLOCKED`、异常、超时或缺少合格回传时优先按宿主实际能力继续原线程（resume）；仅当该能力不可用、宿主明确拒绝恢复或范围不再合适时，才缩小/重切或重新委派。主会话只有在重新判断共享上下文收益高于隔离收益后才能接管，并在 handoff 写一句理由，不得静默重复宽范围探索。无原生代理时按同一工作包顺序直做；其他能力降级遵循 `host-runtime.md`，不得跨宿主调用 CLI 或模拟能力。
+
+独立 reviewer 的回传仅按 [只读审查合同](readonly-review.md) 验收，使用 `verdict`、`summary`、`findings`、`remaining_risk`；上述五字段、`DELIVERED|BLOCKED` 状态和 15 行限制不适用于 reviewer。不得因其使用审查格式而按缺少合格回传恢复或重派。
 
 独立 reviewer 派发前，主会话必须确定性预检明确审查问题、合同、当前 HEAD、changed paths、`readonly-review.md` 和必要材料均已提供；reviewer 只返回 findings。只读限制必须由宿主真实强制；无法满足时报告 `CANNOT_VERIFY: isolated read-only reviewer unavailable`，不得以自然语言约束或主会话自检冒充独立审查。独立审查按风险和 oracle 需要选择，不是 per-milestone 协议。
 

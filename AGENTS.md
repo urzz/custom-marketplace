@@ -57,7 +57,7 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 修改 `/commit` 或 `/commit-and-push` 时同步两者共享的提交合同、新 Skill、插件 metadata、Marketplace、README 和本文件。
 
-## Nuclio v3 5.3.2 约束
+## Nuclio v3 5.3.3 约束
 
 Nuclio 当前权威文件：
 
@@ -77,11 +77,11 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 - 无 active change 时，主会话只读完成 Shape 调查、确定合法 `<change-id>` 与 `feat|fix|refactor|docs|test|chore` 类型（无法明确时为 `feat`）后，复核 branch/HEAD 未漂移、当前仍 clean、本地 `refs/heads/...` 与全部本地配置 remote 的缓存 remote-tracking `refs/remotes/<remote>/...` 无精确冲突；只读本地 Git metadata，不 `fetch`、`ls-remote`、联网或刷新 refs。全部通过后执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`；只有 post-switch 的 branch、HEAD、clean 和 remote-ref 二次校验成功才调用 `create`。
 - 分支操作只由主会话执行，不加入 Runtime command、State 或 artifact；Runtime 不创建或切换分支，也不保存 branch state。前置检查或 switch 失败不调用 `create`，不写入本次 change 或产品文件；switch 后异常或 `create` 失败不自动回滚，保留分支并在部分成功或最终新建成功报告中包含分支名。不得自动 stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree。
 - 用户只确认结果合同。每个 Shape 调查和 Build/返修工作包前，主会话按独立性、上下文隔离收益与协调成本决定直接执行或条件性积极委派，由模型自主拆分；多文件/大输出/可独立验收轨道在有收益时积极委派，单文件小改、紧密依赖、共享资源争用或需持续共享上下文时直接处理。主会话仍独占产品语义、兼容性、权限、外部副作用、不可逆结果、架构取舍、用户交互及 Runtime/Verify/Finish 决策，并自主维护 delivery milestone、实施、检查和合同不变的返修；只有结果合同发生实质变化才重新确认。
-- 委派包必须可独立验收；活动期间其产品路径与诊断主题对主会话排他，Agent 只作最多 15 行结构化短回传，依赖结果时使用宿主原生通知或等待，失败优先 resume、缩小/重切或重新委派。Claude Code 与 Codex 按真实原生 Agent、等待、resume 和只读能力适配，共享合同不依赖模型或具体工具；能力不足时按语义顺序直做、原生阻塞等待、重切/重派或报告 `CANNOT_VERIFY`，不得跨宿主调用 CLI。Agent 不调用 Skill、不继续委派、不接管 Runtime，产品写入保持顺序。
+- 委派包必须可独立验收；活动期间其产品路径与诊断主题对主会话排他，调查与实施代理（含返修）只作最多 15 行的五字段结构化回传，依赖结果时使用宿主原生通知或等待，失败优先按实际能力继续原线程（resume），无法继续或工作包不再适合时才缩小/重切或重新委派。Claude Code 与 Codex 按真实原生 Agent、等待、resume 和只读能力适配；Codex 不按固定版本或文档遗漏推定恢复能力缺失。共享合同不依赖模型或具体工具，能力不足时按语义顺序直做、原生阻塞等待、重切/重派或报告 `CANNOT_VERIFY`，不得跨宿主调用 CLI。Agent 不调用 Skill、不继续委派、不接管 Runtime，产品写入保持顺序。
 - bundled Runtime 通过 `${NUCLIO_SKILL_DIR}` 定位，并显式传入 `${NUCLIO_PROJECT_DIR}`；两个路径记号按 `references/host-runtime.md` 从实际加载位置和目标项目解析；插件源码和 Marketplace cache 始终只读，运行时写入只落在项目 `.dev-docs/**`。
 - `record-check` 只校验并记录宿主主会话直接运行的 exact argv，不执行命令。合同、HEAD、检查定义或未登记的产品工作区漂移必须使旧验证失效；stale complete 恢复仅可保留 State 已精确登记的 `APPLIED|PARTIAL` knowledge dirty 路径，详细例外以 Runtime reference 为准。失败、缺失或过期依据回到 Build 修复。
 - 手工观察必须显式提供 `status: PASS|FAIL`；当前 FAIL 阻断对应 Acceptance，旧 v3 无状态 manual 记录仅可读取、不贡献通过依据。`status.next_action=recover-approval` 时重跑 approve 恢复已提交批准，不重复确认。无 active 且用户当前明确给出恢复/归档 ID 时，只定点访问该 archive 并调用 archive，不进入新建的起点 clean 或分支流程；未指定 ID、目标冲突或多个 active 均不猜测目标。
-- 主会话始终自检；独立审查仅按需要使用 `nuclio:readonly-reviewer`。Claude Code 下其工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings，不运行 shell、不写文件、不调用 Skill 或 Agent，也不接管 Runtime。Codex 按 `references/host-runtime.md` 使用具有有效只读限制的原生代理与共享审查合同；不能用自然语言声明替代权限，缺少能力时报告 CANNOT_VERIFY。
+- 主会话始终自检；独立审查仅按需要使用 `nuclio:readonly-reviewer`。Claude Code 下其工具精确限制为 `Read`、`Grep`、`Glob`，只返回 findings，不运行 shell、不写文件、不调用 Skill 或 Agent，也不接管 Runtime。Codex 按 `references/host-runtime.md` 使用具有有效只读限制的原生代理与共享审查合同；不能用自然语言声明替代权限，缺少能力时报告 CANNOT_VERIFY。独立 reviewer 使用 `verdict`、`summary`、`findings`、`remaining_risk`，不套用调查与实施代理的五字段、`DELIVERED|BLOCKED` 状态或 15 行限制；不得因合法审查格式而恢复或重派。
 - `/nuclio:work` 通过 Plan Mode 边界并完成只读调用起点 snapshot 后，仅发现 `.dev-docs/changes/` 的非 archive 直接子目录：无候选时先处理用户明确 ID 的归档恢复，否则进入新建 Shape，唯一候选时才以目录名调用 `status --id <change-id> --json`，多个候选时 fail closed 并报告歧义；snapshot 不得提前阻塞已有 active change 的发现与恢复，不得无 ID 调用 `status`、猜测目标或扫描 archive。Shape、Build、恢复、Verify 与 Finish 均从 `.dev-docs/index.md` 路由相关知识；不默认读取全部知识或 archive。Finish 同时检查新增候选和既有知识失效，无候选记录 `NO_OP`，有候选只询问一次“写入并归档（推荐）/跳过并归档”。
 - Open Design 能力只在显式 `/nuclio:work` 请求且当前请求或已加载项目上下文提供绑定 `project-id` 时启用。主会话仅使用用户已配置 MCP 的只读工具；Shape 不写产品文件，批准后将完整交付固化到固定目录 `.dev-docs/artifacts/open-design/`，knowledge 只接收提炼后的稳定项目事实，随后不静默刷新外部设计。
 - v2 active 输入必须 fail closed；旧 archive 不扫描、解析、修改或删除。archive 只处理显式已完成 change，完整保留三件套且可恢复重跑，不吸收无关 dirty work。

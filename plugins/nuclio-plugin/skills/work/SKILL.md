@@ -108,7 +108,9 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
 
 委派一经启动，工作包的产品路径与诊断主题在其活动期间对主会话排他：主会话不得读取、编辑、写入或运行诊断命令重复该范围，也不得重复派发同题工作；可继续明确不重叠的控制工作或其他顺序工作包。仅允许为验收定点核对必要证据，或执行目的明确的独立复核，不得借此重新通读实现范围或吸收完整调查。真正依赖结果时，使用宿主原生完成通知或等待机制；不得以 shell `sleep`、Git 状态或反复消息轮询、催促进度。
 
-代理回传最多 15 行，只使用 `status`、`changed`、`checks`、`handoff`、`concerns` 字段；`status` 仅为 `DELIVERED` 或 `BLOCKED`。不粘贴代码、搜索过程、完整日志或测试输出，但 `changed`、`checks` 或 `concerns` 必须保留 Controller 判断所需的文件、检查、错误等必要证据定位。主会话只吸收该短回传和定点证据。收到 `BLOCKED`、代理异常/超时或缺少合格回传时，先按宿主能力 resume；不可 resume 或原工作包不再合适时，缩小/重切或重新委派。仅当重新判断共享上下文收益确实高于隔离收益时才由主会话接管，并在 handoff 留下一句理由；不得无声重复代理已做的宽范围探索。能力降级细节见宿主适配。
+调查与实施代理（含返修）的回传最多 15 行，只使用 `status`、`changed`、`checks`、`handoff`、`concerns` 字段；`status` 仅为 `DELIVERED` 或 `BLOCKED`。不粘贴代码、搜索过程、完整日志或测试输出，但 `changed`、`checks` 或 `concerns` 必须保留 Controller 判断所需的文件、检查、错误等必要证据定位。主会话只吸收该短回传和定点证据。收到 `BLOCKED`、代理异常/超时或缺少合格回传时，先按宿主实际能力继续原线程（resume）；仅当该能力不可用、宿主明确拒绝恢复或原工作包不再合适时，才缩小/重切或重新委派。仅当重新判断共享上下文收益确实高于隔离收益时才由主会话接管，并在 handoff 留下一句理由；不得无声重复代理已做的宽范围探索。能力降级细节见宿主适配。
+
+独立 reviewer 的回传仅按 [只读审查合同](../../references/readonly-review.md) 验收，使用 `verdict`、`summary`、`findings`、`remaining_risk`；上述五字段、`DELIVERED|BLOCKED` 状态和 15 行限制不适用于 reviewer。不得因其使用审查格式而按缺少合格回传恢复或重派。
 
 Open Design change 在批准后的首个相关 milestone 中把已接受的设计交付固化到固定目录 `.dev-docs/artifacts/open-design/`，随后只以仓库快照恢复和实施；不得按 UUID 分层、把完整交付写入 knowledge，也不得在同一合同下静默拉取更新后的外部设计。
 

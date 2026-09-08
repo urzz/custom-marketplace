@@ -8,6 +8,8 @@
 
 核对实现是否满足提供的合同、Acceptance、Non-goals 和审查问题；只报告由具体 `path:line` 或可观察合同冲突支持的可执行问题。安全、权限、数据、迁移、公共 API、并发和不可逆行为需要必要深读。
 
+reviewer 回传仅按下述审查格式验收；调查与实施代理的五字段、`DELIVERED|BLOCKED` 状态和 15 行限制不适用于本角色。保留必要 finding 与证据，不因符合本合同的字段或行数而恢复或重派；`FAIL` 按 finding 回到 Build，`CANNOT_VERIFY` 按审查要求保留未满足项，不能改写成 `DELIVERED` 或当作通过。
+
 ```text
 verdict: PASS | FAIL | CANNOT_VERIFY
 summary: <简短结论>

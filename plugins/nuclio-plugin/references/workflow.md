@@ -38,7 +38,9 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
 
 委派启动后，其产品路径和诊断主题在活动期间对主会话排他：主会话不得读取、编辑、写入、执行同题诊断、重复派发或重新吸收完整调查；仍可处理明确不重叠的控制工作。为验收定点核对必要证据或执行目的明确的独立复核不算重复，但不得借此通读整个实现范围。真正依赖结果时使用宿主原生完成通知或等待机制，不使用 shell `sleep`、Git 状态或反复消息轮询、催促。
 
-代理回传最多 15 行，仅使用 `status`、`changed`、`checks`、`handoff`、`concerns`；`status` 为 `DELIVERED|BLOCKED`。不得粘贴代码、搜索过程、日志或完整测试输出，但要保留 Controller 决策所需的文件、检查和错误定位。`BLOCKED`、异常、超时或缺少合格回传时，先 resume；能力不支持或范围不再合适时缩小/重切或重新委派。主会话只有在重新判断共享上下文收益高于隔离收益后才能接管，并在 handoff 留一句理由；不得静默重复宽范围探索。宿主能力缺失的降级遵循 `host-runtime.md`，不得调用另一宿主 CLI 或模拟能力。
+调查与实施代理（含返修）的回传最多 15 行，仅使用 `status`、`changed`、`checks`、`handoff`、`concerns`；`status` 为 `DELIVERED|BLOCKED`。不得粘贴代码、搜索过程、日志或完整测试输出，但要保留 Controller 决策所需的文件、检查和错误定位。`BLOCKED`、异常、超时或缺少合格回传时，先按宿主实际能力继续原线程（resume）；仅当该能力不可用、宿主明确拒绝恢复或范围不再合适时，才缩小/重切或重新委派。主会话只有在重新判断共享上下文收益高于隔离收益后才能接管，并在 handoff 留一句理由；不得静默重复宽范围探索。宿主能力缺失的降级遵循 `host-runtime.md`，不得调用另一宿主 CLI 或模拟能力。
+
+独立 reviewer 的回传仅按 [只读审查合同](readonly-review.md) 验收，使用 `verdict`、`summary`、`findings`、`remaining_risk`；上述五字段、`DELIVERED|BLOCKED` 状态和 15 行限制不适用于 reviewer。不得因其使用审查格式而按缺少合格回传恢复或重派。
 
 ## Verification and review
 

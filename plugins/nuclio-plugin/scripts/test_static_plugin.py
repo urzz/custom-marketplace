@@ -119,6 +119,12 @@ class HostContracts(unittest.TestCase):
         reviewer = read(REVIEWER)
         for boundary in ("不运行 shell", "不创建、编辑、删除", "不调用 Skill、Agent、Task、Workflow", "只返回 findings"):
             self.assertIn(boundary, reviewer)
+        review_contract = read(REFERENCES / "readonly-review.md")
+        response = review_contract.split("```text\n", 1)[1].split("\n```", 1)[0]
+        fields = set(re.findall(r"^([a-z_]+):", response, flags=re.M))
+        self.assertEqual(fields, {"verdict", "summary", "findings", "remaining_risk"})
+        for field in fields:
+            self.assertIn(f"`{field}`", reviewer)
 
     def test_conditional_delegation_is_model_directed_and_bounded(self):
         work_build = read(WORK).split("### 2. Build", 1)[1].split("### 3. Verify", 1)[0]
@@ -162,7 +168,7 @@ class HostContracts(unittest.TestCase):
             )
             self.assertRegex(section, r"(?:允许|可以|可|不算重复)[^。\n]*定点|定点[^。\n]*独立复核[^。\n]*不算重复")
             self.assertRegex(section, r"定点[^。\n]*(?:目的明确[^。\n]*)?独立复核|目的明确[^。\n]*独立复核")
-            self.assertRegex(section, r"最多 15 行[^。\n]*`status`[^。\n]*`changed`[^。\n]*`checks`[^。\n]*`handoff`[^。\n]*`concerns`")
+            self.assertRegex(section, r"调查与实施代理（含返修）[^。\n]*最多 15 行[^。\n]*`status`[^。\n]*`changed`[^。\n]*`checks`[^。\n]*`handoff`[^。\n]*`concerns`")
             self.assertRegex(section, r"Controller[^。\n]*(?:文件|路径)[^。\n]*检查[^。\n]*错误[^。\n]*定位")
 
         host = read(REFERENCES / "host-runtime.md")
@@ -176,12 +182,17 @@ class HostContracts(unittest.TestCase):
             r"\| 完成通知/等待 \| 需要结果后再继续时以前台运行阻塞等待；后台运行的完成结果由宿主在后续 turn 通过 completion notification 送达 \|"
             r" 使用 native subagent `wait` 阻塞等待已派发代理的结果；`/agent` 不是等待或轮询机制 \|",
         )
-        self.assertRegex(
-            capability_table,
-            r"\| resume \| 对返回可寻址 agent ID/name 的普通代理，可用原生 `SendMessage` 继续原线程；内置 Explore/Plan 或用户手动停止的代理不可 resume \|"
-            r" 当前支持基线未定义已完成代理的 resume；`steer` 仅用于仍在运行的代理，`stop`、`close` 也不提供 resume \|"
-            r" resume 不可用时缩小/重切工作包或重新派发；",
-        )
+        resume_row = next(line for line in capability_table.splitlines() if line.startswith("| resume |"))
+        resume_cells = [cell.strip() for cell in resume_row.split("|")[1:-1]]
+        self.assertEqual(len(resume_cells), 4)
+        self.assertIn("当前会话实际提供的工具", resume_cells[2])
+        self.assertIn("原代理状态", resume_cells[2])
+        self.assertIn("继续原线程", resume_cells[2])
+        self.assertNotIn("当前支持基线未定义已完成代理的 resume", host)
+        for tool in ("followup_task", "send_input", "resume_agent"):
+            self.assertIn(f"`{tool}`", host)
+            for path in (WORK, REFERENCES / "workflow.md", REFERENCES / "context-hygiene.md"):
+                self.assertNotIn(f"`{tool}`", read(path))
         self.assertRegex(
             capability_table,
             r"无异步通知时使用当前宿主原生阻塞等待；不得用 shell `sleep`、Git 状态、反复消息或其他轮询模拟",
@@ -239,6 +250,8 @@ class HostContracts(unittest.TestCase):
             "Shape 重叠调查抑制",
             "单文件确定性 Build 不机械派发",
             "紧密共享上下文或共享资源争用不机械委派",
+            "Codex 按实际工具继续原线程",
+            "独立 reviewer 使用专用回传合同",
         ):
             self.assertIn(scenario, eval_prompts)
         for required in (
@@ -513,12 +526,12 @@ class PackageSyncContracts(unittest.TestCase):
         for key in ("name", "version", "description"):
             self.assertEqual(claude[key], codex[key])
             self.assertEqual(claude[key], entry[key])
-        self.assertEqual(claude["version"], "5.3.2")
+        self.assertEqual(claude["version"], "5.3.3")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         self.assertIn("Claude Code", claude["description"])
         self.assertIn("Codex", claude["description"])
         self.assertIn("@AGENTS.md", read(ROOT / "CLAUDE.md"))
-        self.assertIn("Nuclio v3 5.3.2", read(ROOT / "AGENTS.md"))
+        self.assertIn("Nuclio v3 5.3.3", read(ROOT / "AGENTS.md"))
         for filename in ("README.md", "AGENTS.md"):
             text = read(ROOT / filename)
             self.assertIn(".agents/plugins/marketplace.json", text)

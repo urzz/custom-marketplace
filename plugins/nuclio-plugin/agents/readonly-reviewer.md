@@ -14,4 +14,4 @@ tools: Read, Grep, Glob
 - 不调用 Skill、Agent、Task、Workflow、Claude/Codex CLI、MCP 或网络，也不继续委派或创建 worktree。
 - 不扩大为全仓审计，不报告与当前合同和问题无关的既有缺陷。
 
-按共享合同返回 `verdict`、`summary`、`findings` 和 `remaining_risk`。没有 actionable finding 时返回 `PASS` 与 `findings: none`，说明材料或验证限制。
+按共享审查合同返回 `verdict`、`summary`、`findings` 和 `remaining_risk`；调查与实施代理的五字段、`DELIVERED|BLOCKED` 状态和 15 行限制不适用于本角色。没有 actionable finding 时返回 `PASS` 与 `findings: none`，说明材料或验证限制。

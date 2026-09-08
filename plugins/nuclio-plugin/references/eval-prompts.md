@@ -62,7 +62,7 @@
 - **Setup**：fresh-session 中恰有一个 active change；一个符合场景 7 的有界 Build 工作包已经派发。分别注入三种子场景：A 返回 `status: BLOCKED`；B 异常退出或超时；C 没有回传，或回传超过 15 行、使用合同外字段、缺少必要证据定位。
 - **User Prompt**：`/nuclio:work 继续完成当前 change`
 - **Expected**：主会话把 C 视为缺少合格回传，不把任一子场景当作已交付。若当前宿主支持 resume，先恢复原代理会话；不支持 resume、恢复失败或原范围已不适合时，缩小/重切工作包或重新派发。只有重新判断后确认持续共享上下文收益高于隔离收益，才可由主会话接管，并在 handoff 留下一句理由；不得无声重复代理已经进行的宽范围探索。
-- **Assertions**：代理活动期间继续遵守产品路径与诊断主题的范围排他；等待只使用当前宿主完成通知或原生阻塞等待，不以 shell `sleep`、Git 状态、反复消息或催促模拟轮询。恢复、重切或重派不新增用户确认，也不让代理接管 Runtime；无 resume 时不伪造 resume，不调用另一宿主 CLI。回传不满足字段、状态、15 行或必要证据定位任一约束时，不进入最终 Verify。
+- **Assertions**：代理活动期间继续遵守产品路径与诊断主题的范围排他；等待只使用当前宿主完成通知或原生阻塞等待，不以 shell `sleep`、Git 状态、反复消息或催促模拟轮询。恢复、重切或重派不新增用户确认，也不让代理接管 Runtime；无 resume 时不伪造 resume，不调用另一宿主 CLI。该调查与实施代理的回传不满足字段、状态、15 行或必要证据定位任一约束时，不进入最终 Verify；独立 reviewer 按专用审查合同验收，见场景 28。
 
 ### 9. Verify 大输出失败回到 Build
 
@@ -186,3 +186,17 @@
 - **Setup**：分别使用 Git 仓库子目录项目、中文知识文件、`.dev-docs/changes` 指向产品目录的符号链接、被忽略的 archive 目标，以及 complete 后已撤销的知识改动。
 - **Expected**：子目录项目保持明确边界并可完成全流程；中文路径正常提交。符号链接、忽略目标及知识路径漂移在写入或移动前停止，报告对应路径。
 - **Assertions**：不更改项目根目录，不写入符号链接目标，不留下部分暂存；实际使用 shell 时 `for-each-ref` 的 format 参数有正确引号。归档三件套被修改后重试应报告内容漂移并保留文件，不宣称成功。
+
+### 27. Codex 按实际工具继续原线程
+
+- **Setup**：一个有界 Build 代理已返回 `BLOCKED` 或缺少合格回传，原工作包仍适合继续。子场景 A：原代理已完成且 idle，宿主提供 `followup_task`。B：原代理仍可接收 `send_input`。C：原代理已关闭，宿主提供 `resume_agent` 与 `send_input`。D：原代理已完成，宿主仅提供用于运行中代理的 `steer`，没有其他可用继续能力。
+- **User Prompt**：`/nuclio:work 继续修复刚才工作包的未完成项`
+- **Expected**：A 向同一 ID/name 调用 `followup_task`，B 向同一 ID 调用 `send_input`，C 先用同一 ID 调用 `resume_agent` 并确认成功，再发送后续任务；三者均复用原线程上下文。D 才按能力缺失缩小/重切工作包或重新派发。宿主明确拒绝恢复时也走降级路径。
+- **Assertions**：以实际工具定义、原代理状态和返回结果判断能力，不按固定 Codex 版本或文档遗漏推定不可恢复；A 不使用仅递送消息的 `send_message` 代替启动新 turn。A/B/C 成功继续时不创建替代代理，D 不调用未提供的工具；失败恢复仍由主会话控制，不新增用户确认或 Runtime 状态。
+
+### 28. 独立 reviewer 使用专用回传合同
+
+- **Setup**：主会话已提供完整审查输入，当前宿主有可强制只读的 reviewer。分别返回：A 合法 `verdict: PASS`、`findings: none`；B 合法 `verdict: FAIL`，包含多项具体 findings，必要证据使总回传超过 15 行；C `verdict: CANNOT_VERIFY` 并说明缺失材料。三者均使用 `verdict`、`summary`、`findings`、`remaining_risk`。
+- **User Prompt**：`/nuclio:work 对当前 change 完成必要的独立审查并继续交付`
+- **Expected**：按只读审查合同接受 A/B/C 的格式。A 供主会话判断验证结果，B 按 findings 回到 Build，C 保留未满足审查；不将 B 或 C 当作通过。用户或项目要求独立审查时，C 阻止宣称完成。
+- **Assertions**：不要求 reviewer 输出调查与实施代理的五字段或 `DELIVERED|BLOCKED`，不因合法报告超过 15 行而裁剪 finding、判为缺少合格回传或触发恢复/重派。普通调查与实施代理仍执行原五字段及 15 行限制，reviewer 的只读权限与 Runtime 边界保持有效。
