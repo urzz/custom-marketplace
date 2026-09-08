@@ -57,7 +57,7 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 修改 `/commit` 或 `/commit-and-push` 时同步两者共享的提交合同、新 Skill、插件 metadata、Marketplace、README 和本文件。
 
-## Nuclio v3 5.3.1 约束
+## Nuclio v3 5.3.2 约束
 
 Nuclio 当前权威文件：
 
@@ -76,7 +76,8 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 - `/nuclio:work` 通过 Plan Mode 边界后、discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。恢复唯一 active change 不创建或切换分支，多个 active 仍 fail closed；仅无 active change 且需要新建时才要求调用起点为 attached 且无 staged、unstaged、untracked 改动。
 - 无 active change 时，主会话只读完成 Shape 调查、确定合法 `<change-id>` 与 `feat|fix|refactor|docs|test|chore` 类型（无法明确时为 `feat`）后，复核 branch/HEAD 未漂移、当前仍 clean、本地 `refs/heads/...` 与全部本地配置 remote 的缓存 remote-tracking `refs/remotes/<remote>/...` 无精确冲突；只读本地 Git metadata，不 `fetch`、`ls-remote`、联网或刷新 refs。全部通过后执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`；只有 post-switch 的 branch、HEAD、clean 和 remote-ref 二次校验成功才调用 `create`。
 - 分支操作只由主会话执行，不加入 Runtime command、State 或 artifact；Runtime 不创建或切换分支，也不保存 branch state。前置检查或 switch 失败不调用 `create`，不写入本次 change 或产品文件；switch 后异常或 `create` 失败不自动回滚，保留分支并在部分成功或最终新建成功报告中包含分支名。不得自动 stash、commit、reset、clean、删除分支、切回原分支、push、merge、rebase 或创建 worktree。
-- 用户只确认结果合同。主会话基于上下文负担按需有界委派 Agent：仅将合同不变、范围清晰且可验证的阅读或诊断密集局部工作交给 Agent；小型确定性工作、产品语义、兼容性、权限、外部副作用、不可逆结果、架构取舍、用户交互和 Runtime/Verify/Finish 决策仍由主会话直接处理。主会话自主维护 delivery milestone、实施方式、检查和合同不变的修复；只有产品语义、兼容性、外部副作用或不可逆结果变化才重新确认。
+- 用户只确认结果合同。每个 Shape 调查和 Build/返修工作包前，主会话按独立性、上下文隔离收益与协调成本决定直接执行或条件性积极委派，由模型自主拆分；多文件/大输出/可独立验收轨道在有收益时积极委派，单文件小改、紧密依赖、共享资源争用或需持续共享上下文时直接处理。主会话仍独占产品语义、兼容性、权限、外部副作用、不可逆结果、架构取舍、用户交互及 Runtime/Verify/Finish 决策，并自主维护 delivery milestone、实施、检查和合同不变的返修；只有结果合同发生实质变化才重新确认。
+- 委派包必须可独立验收；活动期间其产品路径与诊断主题对主会话排他，Agent 只作最多 15 行结构化短回传，依赖结果时使用宿主原生通知或等待，失败优先 resume、缩小/重切或重新委派。Claude Code 与 Codex 按真实原生 Agent、等待、resume 和只读能力适配，共享合同不依赖模型或具体工具；能力不足时按语义顺序直做、原生阻塞等待、重切/重派或报告 `CANNOT_VERIFY`，不得跨宿主调用 CLI。Agent 不调用 Skill、不继续委派、不接管 Runtime，产品写入保持顺序。
 - bundled Runtime 通过 `${NUCLIO_SKILL_DIR}` 定位，并显式传入 `${NUCLIO_PROJECT_DIR}`；两个路径记号按 `references/host-runtime.md` 从实际加载位置和目标项目解析；插件源码和 Marketplace cache 始终只读，运行时写入只落在项目 `.dev-docs/**`。
 - `record-check` 只校验并记录宿主主会话直接运行的 exact argv，不执行命令。合同、HEAD、检查定义或未登记的产品工作区漂移必须使旧验证失效；stale complete 恢复仅可保留 State 已精确登记的 `APPLIED|PARTIAL` knowledge dirty 路径，详细例外以 Runtime reference 为准。失败、缺失或过期依据回到 Build 修复。
 - 手工观察必须显式提供 `status: PASS|FAIL`；当前 FAIL 阻断对应 Acceptance，旧 v3 无状态 manual 记录仅可读取、不贡献通过依据。`status.next_action=recover-approval` 时重跑 approve 恢复已提交批准，不重复确认。无 active 且用户当前明确给出恢复/归档 ID 时，只定点访问该 archive 并调用 archive，不进入新建的起点 clean 或分支流程；未指定 ID、目标冲突或多个 active 均不猜测目标。

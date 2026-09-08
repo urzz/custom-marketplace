@@ -4,9 +4,9 @@
 
 ## Phase read order
 
-- **Shape**：所有 Git 命令均显式使用 `git -C "${NUCLIO_PROJECT_DIR}" ...`，不依赖当前目录。通过 Plan Mode fail-closed 边界后、active change discovery 前，立即只读运行 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`：从可解析输出记录 Git 仓库与 attached `HEAD` 是否可用；可用时捕获 `start_branch`、`start_head`，并观察起点 staged、unstaged、untracked 是否均为空。命令或解析异常为 snapshot unavailable。不写文件、不调用 Runtime、也不进行网络、远程或分支操作 -> 仅检查 active change 候选。快照 unavailable 或起点 dirty 不得阻止 discovery。若有唯一或多个候选，丢弃快照并走既有恢复或歧义路径，绝不创建或切换分支。无候选时先处理显式归档恢复例外；需要新建时，才要求有效 attached snapshot 和调用起点 staged、unstaged、untracked 均为空；否则 fail closed，即使 Shape 期间外部清理工作区也不得新建。然后继续：用户请求与项目规则 -> `index.md` -> 有明确相关性的知识文件/heading -> 相关代码、测试、配置和仓库事实 -> 确定合法 `<change-id>` 和类型（仅 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`）。这全程只读；完成 Shape 后，重新运行同一 `git -C ... status` 命令，核对 branch/HEAD 分别仍等于快照且工作区仍 clean；完成本地精确 ref 检查并成功执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>` 前，不写本次 change 或产品文件。switch 成功后还必须按 workflow 完成 post-switch branch/HEAD/clean 与 remote-ref 校验，才能 `create`。
-- **Build / recovery**：主会话先保留或读取紧凑控制信息：`status --id <change-id> --json` 工作包、当前合同、milestone/handoff 和由 `.dev-docs/index.md` 路由的相关知识；派发时仅将当前控制信息、相关知识路径及读取理由和必要范围交给 Agent，不复制知识正文 -> 先作出派发判断。若派发：主会话不预读该委派范围的局部代码、测试、配置或测试诊断，Agent 在必要范围内读取代码、测试和配置并吸收局部探索、测试诊断和原始输出；主会话只处理短回传、milestone/handoff、Runtime 和 Verify。若直接实施：主会话才读取相关代码、测试和配置并实施。
-- **Verify**：批准合同、delivery、当前 diff、检查与观察优先；相关知识仅提供稳定约束，不能替代验证依据。
+- **Shape**：所有 Git 命令均显式使用 `git -C "${NUCLIO_PROJECT_DIR}" ...`，不依赖当前目录。通过 Plan Mode fail-closed 边界后、active change discovery 前，立即只读运行 `git -C "${NUCLIO_PROJECT_DIR}" status --porcelain=v2 --branch -z --untracked-files=all`：从可解析输出记录 Git 仓库与 attached `HEAD` 是否可用；可用时捕获 `start_branch`、`start_head`，并观察起点 staged、unstaged、untracked 是否均为空。命令或解析异常为 snapshot unavailable。不写文件、不调用 Runtime、也不进行网络、远程或分支操作 -> 仅检查 active change 候选。快照 unavailable 或起点 dirty 不得阻止 discovery。若有唯一或多个候选，丢弃快照并走既有恢复或歧义路径，绝不创建或切换分支。无候选时先处理显式归档恢复例外；需要新建时，才要求有效 attached snapshot 和调用起点 staged、unstaged、untracked 均为空；否则 fail closed，即使 Shape 期间外部清理工作区也不得新建。然后继续：用户请求与项目规则 -> `index.md` -> 有明确相关性的知识文件/heading -> 相关代码、测试、配置和仓库事实 -> 确定合法 `<change-id>` 和类型（仅 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`）。每个调查开始前按独立性、上下文隔离收益和协调成本判断直接调查或积极委派；由模型自主拆成互斥、有停止条件且只回答当前合同缺口的调查包，复用已有结论而不派发重叠调查。委派后的范围排他、原生等待、短回传和失败恢复遵循下文。这全程只读；完成 Shape 后，重新运行同一 `git -C ... status` 命令，核对 branch/HEAD 分别仍等于快照且工作区仍 clean；完成本地精确 ref 检查并成功执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>` 前，不写本次 change 或产品文件。switch 成功后还必须按 workflow 完成 post-switch branch/HEAD/clean 与 remote-ref 校验，才能 `create`。
+- **Build / recovery**：主会话先保留或读取紧凑控制信息：`status --id <change-id> --json` 工作包、当前合同、milestone/handoff 和由 `.dev-docs/index.md` 路由的相关知识 -> 在读取局部实现或诊断前，按独立性、隔离收益和协调成本判断直接执行或积极委派，由模型自主拆分。派发只传当前控制信息、相关知识路径及读取理由和可独立验收的必要范围，不复制知识正文。若派发：代理读取必要代码、测试和配置，吸收局部探索、测试诊断和原始输出；活动范围对主会话排他，主会话只接收短回传并做定点验收或目的明确的独立复核。若直接实施：主会话才读取相关代码、测试和配置并实施。
+- **Verify**：批准合同、delivery、稳定候选的当前 diff、检查与观察优先；主会话运行 exact checks，只保留命令、exit code 和短摘要。失败即回 Build；需要大输出或多文件诊断时优先隔离委派，简单明确失败可直接修复。相关知识仅提供稳定约束，不能替代验证依据。
 - **Finish**：产品结果与 diff -> 索引路由的受影响知识，用同一次分析判断新增候选和既有结论是否失效。
 
 除非问题明确需要，不读取整个 `.dev-docs/knowledge/**`、archive、legacy、全部 State 或完整 Git diff。先使用 `status --json`，只在漂移或诊断时扩展到精确 Git 状态和相关 artifact。
@@ -32,9 +32,13 @@
 
 ## Agent and reviewer
 
-主会话仍是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`。保护主会话上下文是优先使用一个有界原生 Agent 的判断条件：开始当前 milestone 前，以读取广度、预期实现/诊断迭代、原始命令输出体量、必要范围能否清楚界定和已确认结果合同是否保持不变为启发式；不使用 token 或 ctx 数值硬阈值。阅读或诊断密集、合同稳定、范围清晰且可由预期检查验证的局部工作，优先派发 Agent，让其吸收局部探索、测试诊断和原始输出。极小、单一且实现路径明确的工作，以及产品语义、兼容性、权限、外部副作用、不可逆结果、跨 milestone 架构取舍、用户交互、Runtime、Verify、Finish 等控制决定，仍由主会话直接处理，不为形式而派发。agent dispatch 只传递当前 milestone、相关 Acceptance、Constraints/Non-goals、handoff、相关知识路径及读取理由、必要仓库范围和预期检查；不得复制完整知识正文。agent 仅短回传改动、检查和未完成项，不调用 Skill、不继续委派、不接管 Runtime。不新增专用 implementer、固定任务流水线、任务级路径 ownership 或 Runtime 状态。
+主会话仍是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`；产品写入保持顺序。每个 Shape 调查和 Build/返修工作包开始前，主会话都获得条件性积极委派的明确授权，由模型按工作独立性、上下文隔离收益和协调成本自主决定拆分，不使用 token/ctx 硬阈值，也不依赖模型名、具体工具、固定代理数量或自动委派模式。多文件/多模块调查、大输出失败诊断、可独立验收实现轨道、只需摘要的工作和 fresh-context review，在能改善速度、覆盖或上下文质量时应积极委派；少量工具调用、单文件小改、紧密顺序依赖、共享资源争用或需要持续共享上下文时直接执行。产品语义、兼容性、权限、外部副作用、不可逆结果、跨 milestone 架构取舍、用户交互、Runtime、Verify、Finish 等控制决定也由主会话处理，不为形式而派发。
 
-独立 reviewer 只接受明确审查问题、合同、当前 HEAD、changed paths 和必要材料，并遵循 `readonly-review.md`；它只返回 findings。Claude Code 的 `nuclio:readonly-reviewer` 没有 Bash、写入、Skill、Agent 或继续委派能力。Codex 的有效只读限制和能力缺失处理遵循 `host-runtime.md`。独立审查是按风险和 oracle 需要选择，不是 per-milestone 协议。
+工作包必须覆盖相关 Acceptance、Constraints/Non-goals、必要路径边界、实现、集成接缝、预期 changed paths 和 exact checks，使其可独立交付与验收；dispatch 只传紧凑控制信息、相关知识路径及读取理由，不复制完整知识正文。代理不调用 Skill、不继续委派、不接管 Runtime。代理活动期间，其产品路径和诊断主题对主会话排他：主会话不读取、编辑、写入、运行同题诊断或重复派发；可以处理明确不重叠的控制工作，并可为验收定点核对必要证据或执行目的明确的独立复核，但不得借机吸收完整调查。真正依赖结果时使用宿主完成通知或原生等待，禁止 shell `sleep`、Git 状态或反复消息轮询和催促。
+
+代理回传最多 15 行，只使用 `status`、`changed`、`checks`、`handoff`、`concerns`；`status` 仅为 `DELIVERED|BLOCKED`。代码、搜索过程、日志和完整测试输出留在代理上下文，但必须保留 Controller 决策所需的文件、检查和错误定位。`BLOCKED`、异常、超时或缺少合格回传时优先 resume；不可 resume 或范围不再合适时缩小/重切或重新委派。主会话只有在重新判断共享上下文收益高于隔离收益后才能接管，并在 handoff 写一句理由，不得静默重复宽范围探索。无原生代理时按同一工作包顺序直做；其他能力降级遵循 `host-runtime.md`，不得跨宿主调用 CLI 或模拟能力。
+
+独立 reviewer 派发前，主会话必须确定性预检明确审查问题、合同、当前 HEAD、changed paths、`readonly-review.md` 和必要材料均已提供；reviewer 只返回 findings。只读限制必须由宿主真实强制；无法满足时报告 `CANNOT_VERIFY: isolated read-only reviewer unavailable`，不得以自然语言约束或主会话自检冒充独立审查。独立审查按风险和 oracle 需要选择，不是 per-milestone 协议。
 
 ## Output
 

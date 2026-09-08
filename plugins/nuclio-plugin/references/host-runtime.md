@@ -36,10 +36,19 @@ python3 "/opt/plugin cache/nuclio/scripts/change.py" --project-root "/work/my pr
 
 安装目录与 Marketplace cache 始终只读。Runtime 的状态和知识产物只在目标项目的 `.dev-docs/**`；其既有 approval/archive Git 元数据提交也只作用于显式目标项目。切换宿主恢复 change 时读取同一份三件套，不迁移 schema，也不增加宿主状态。
 
-## 有界委派
+## 原生代理能力映射
 
-- Claude Code 使用原生 `Agent`；Codex 使用当前会话实际提供的原生子代理工具。此技能在工作流规定的有界条件下请求委派，主会话保留全部控制决定。
-- 派发时传入明确项目目录、当前合同、milestone/handoff、必要范围及检查；禁止继续委派和写 Runtime State。代理不可用时由主会话顺序完成工作，不调用另一套 CLI 或新增代理服务。
-- Claude Code 的 `nuclio:readonly-reviewer` 有 `Read`、`Grep`、`Glob` 三个工具，不运行 shell。Codex 不自动加载插件根级 `agents/*.md`。
-- Codex 需要独立审查时，只能选择当前环境**已提供有效只读限制**的原生子代理，并将 [只读审查合同](readonly-review.md) 传入。只读限制必须由宿主工具限制或有效 sandbox 提供；`explorer` 名称、自然语言约束以及可能被父会话覆盖的配置都不能证明权限隔离。只允许读取材料；若只能通过 shell 读取，可用只读命令，但不执行测试、构建、Git mutation、网络或写文件。
-- 无法满足只读边界时不派发该审查，报告 `CANNOT_VERIFY: isolated read-only reviewer unavailable`。主会话仍自检；可选审查可明确跳过，用户或项目要求独立审查时必须保留未满足项，不能声称审查通过或据此完成归档。
+共享 workflow 只规定能力语义：有界原生代理、完成通知或原生阻塞等待、可选 resume，以及由宿主强制的只读 reviewer。独立线程、输入上下文传播、回传、共享工作区和权限限制是不同边界，不能因其中一项存在而推定其他项成立。模型或宿主可能不会自动达到 workflow 期望的委派频率；技能已显式授权条件性积极委派，由模型按工作独立性、上下文隔离收益与协调成本自主拆分。不得把模型名、具体代理工具名、固定代理数量或某种自动委派模式写入共享决策合同。
+
+| 能力语义 | Claude Code 映射 | Codex 映射 | 缺失时降级 |
+|---|---|---|---|
+| 有界原生代理 | 使用原生 `Agent` 派发 | 使用 native subagent `spawn` 派发；`/agent` 只查看或切换已有线程 | 主会话按同一工作包顺序直做；不启动另一宿主 CLI、不安装代理配置或新增服务 |
+| 完成通知/等待 | 需要结果后再继续时以前台运行阻塞等待；后台运行的完成结果由宿主在后续 turn 通过 completion notification 送达 | 使用 native subagent `wait` 阻塞等待已派发代理的结果；`/agent` 不是等待或轮询机制 | 无异步通知时使用当前宿主原生阻塞等待；不得用 shell `sleep`、Git 状态、反复消息或其他轮询模拟 |
+| resume | 对返回可寻址 agent ID/name 的普通代理，可用原生 `SendMessage` 继续原线程；内置 Explore/Plan 或用户手动停止的代理不可 resume | 当前支持基线未定义已完成代理的 resume；`steer` 仅用于仍在运行的代理，`stop`、`close` 也不提供 resume | resume 不可用时缩小/重切工作包或重新派发；仍不合适时才按 workflow 留理由后由主会话接管 |
+| 强制只读 reviewer | `nuclio:readonly-reviewer` 的工具限制 | 当前环境提供有效只读工具限制或 sandbox 的原生子代理 | 报告 `CANNOT_VERIFY: isolated read-only reviewer unavailable`；不得用自然语言声明模拟权限 |
+
+派发实现或调查时，映射到当前宿主真实机制，并传入明确项目目录、当前合同、milestone/handoff、相关 Acceptance 与 Constraints/Non-goals、必要路径边界、集成接缝、预期 changed paths 和 exact checks；禁止继续委派、调用 Skill 和写 Runtime State。代理活动范围、最多 15 行结构化回传、失败恢复与有理由接管均遵循 workflow。主会话保持唯一 Controller，产品写入顺序执行。
+
+独立 reviewer 派发前，先预检审查问题、当前合同、当前 HEAD、changed paths、[只读审查合同](readonly-review.md) 和必要材料完整。Claude Code 的 `nuclio:readonly-reviewer` 只有 `Read`、`Grep`、`Glob`，不运行 shell。Codex 不自动加载插件根级 `agents/*.md`；需要审查时只能选择当前环境**已提供有效只读限制**的原生子代理。只读限制必须由宿主工具限制或有效 sandbox 提供；角色名称、自然语言约束以及可能被父会话覆盖的配置都不能证明权限隔离。只允许读取材料；若只能通过 shell 读取，可用只读命令，但不执行测试、构建、Git mutation、网络或写文件。
+
+无法满足只读边界时不派发该审查并报告上述 `CANNOT_VERIFY`。主会话仍自检；可选审查可明确跳过，用户或项目要求独立审查时必须保留未满足项，不能声称审查通过或据此完成归档。任何能力降级都不得调用另一宿主 CLI、扩大权限、假装能力存在或新增代理服务。

@@ -14,8 +14,8 @@
     {
       "name": "nuclio",
       "source": "./plugins/nuclio-plugin",
-      "description": "面向 Claude Code 与 Codex 的 Nuclio v3 知识初始化和 change 交付：显式调用、结果合同确认、受控新分支、当前验证与可恢复归档。",
-      "version": "5.3.1"
+      "description": "面向 Claude Code 与 Codex 的 Nuclio v3 知识初始化与 change 交付：显式调用、结果合同、受控分支、上下文优先且工具无关的有界 Agent 编排、当前验证与可恢复归档。",
+      "version": "5.3.2"
     }
   ],
   "metadata": {

@@ -14,10 +14,10 @@ Nuclio 生命周期始终在调用开始时的当前模式内运行，不调用 
 Shape -> 一次明确的结果合同确认 -> Build <-> Verify -> Finish -> complete -> archive
 ```
 
-- **Shape**：无 active change 时，从 `.dev-docs/index.md` 路由相关知识并只读调查请求与仓库，确定合法 change ID、类型和结果合同；仅在下述分支隔离成功后创建 `change.md`。已有 active change 按恢复路径继续，不重复分支操作。合同包含 Goal、Context、Constraints、Non-goals 与可观察 Acceptance。
-- **确认**：只确认结果合同。milestone、路径、实现、Agent、review、检查增强和合同不变的失败修复由主会话自主决定。新产品语义、兼容性、外部副作用或不可逆结果才提升 revision 并重新确认。
-- **Build**：主会话创建和维护 `delivery.yaml`，用 milestone 覆盖所有 Acceptance；多 milestone 时最后一项为覆盖全部 Acceptance 的 integration。开始当前 milestone 时，主会话先保留或读取紧凑控制信息：`status --id <change-id> --json` 工作包、当前合同、milestone/handoff，以及经 `.dev-docs/index.md` 路由的相关知识；派发时仅将当前控制信息、相关知识路径及读取理由和必要范围交给 Agent，不复制知识正文。随后以读取广度、预期实现/诊断迭代、原始命令输出体量、必要范围能否清楚界定和已确认结果合同是否保持不变为启发式，先作出派发判断。保护主会话上下文是优先使用一个有界原生 Agent 的判断条件，不使用 token 或 ctx 数值硬阈值。阅读或诊断密集、合同稳定、范围清晰且可由预期检查验证的局部工作优先派发 Agent；若派发，主会话不预读该委派范围的局部代码、测试、配置或测试诊断，Agent 在必要范围内读取代码、测试和配置，并吸收局部探索、测试诊断和原始输出；主会话只处理短回传、milestone/handoff、Runtime 和 Verify。极小、单一且实现路径明确的工作，以及产品语义、兼容性、权限、外部副作用、不可逆结果、跨 milestone 架构取舍、用户交互、Runtime、Verify、Finish 等控制决定仍由主会话直接处理，不为形式而派发；若直接实施，主会话才读取相关代码、测试和配置并完成实现和检查。dispatch 只含当前 milestone、相关 Acceptance、Constraints/Non-goals、handoff、相关知识路径及读取理由、必要范围和预期检查，不复制完整知识正文；agent 只短回传改动、检查和未完成项，不调用 Skill、不继续委派、不写 Runtime 状态。
-- **Verify**：主会话在当前 HEAD 直接执行 exact argv，并以 `record-check` 记录结果，随后调用 `verify`。失败、缺失或过期依据回到 Build；不引入旧的修复审批或用户确认。
+- **Shape**：无 active change 时，从 `.dev-docs/index.md` 路由相关知识并只读调查请求与仓库，确定合法 change ID、类型和结果合同；仅在下述分支隔离成功后创建 `change.md`。每个调查开始前按工作独立性、上下文隔离收益和协调成本判断直接调查或积极委派，由模型自主切成互斥、有停止条件且只回答当前合同缺口的调查包；复用已有结论，不派发重叠调查。已有 active change 按恢复路径继续，不重复分支操作。合同包含 Goal、Context、Constraints、Non-goals 与可观察 Acceptance。
+- **确认**：只确认结果合同。milestone、路径、实现、代理、review、检查增强和合同不变的失败修复由主会话自主决定。新产品语义、兼容性、外部副作用或不可逆结果才提升 revision 并重新确认。
+- **Build**：主会话创建和维护 `delivery.yaml`，用 milestone 覆盖所有 Acceptance；多 milestone 时最后一项为覆盖全部 Acceptance 的 integration。每个 Build/返修工作包开始前只读取紧凑控制信息，并按独立性、隔离收益与协调成本判断直接执行或积极委派，由模型自主拆分，不依赖模型名、具体代理工具、固定代理数量或宿主自动委派模式。多文件/多模块调查、大输出诊断、可独立验收的实现轨道、只需摘要的任务和 fresh-context review，在预期改善速度、覆盖或上下文质量时应积极委派；少量工具调用、单文件小改、紧密顺序依赖、共享资源争用或需要持续共享上下文时直接执行。委派必须覆盖相关 Acceptance、Constraints/Non-goals、实现边界、集成接缝、预期 changed paths 与 exact checks，使工作包可独立验收；只传当前合同、milestone/handoff、索引路由的知识路径及读取理由和必要范围，不复制知识正文。代理吸收局部探索、诊断和原始输出，不调用 Skill、不继续委派、不写 Runtime 状态；产品写入保持顺序。
+- **Verify**：仅在候选 HEAD/工作区稳定后，由主会话执行 exact argv，以 `record-check` 记录命令、exit code 和短摘要，随后调用 `verify`。失败、缺失或过期依据结束本轮 Verify 并回到 Build；大输出或多文件诊断优先隔离委派，简单明确失败可直接修复，不在 Verify 中边诊断边改代码，也不引入旧的修复审批或用户确认。
 - **Finish**：验证通过后，从索引读取受影响知识，同时审查新增候选和存量失效。无候选使用 `NO_OP`；有候选只作一次“写入并归档（推荐）/跳过并归档”决定，再连续 complete/archive。
 
 ## Runtime
@@ -30,17 +30,23 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
 
 调用。`${NUCLIO_SKILL_DIR}` 只定位 bundled script；`${NUCLIO_PROJECT_DIR}` 是唯一写入根目录。插件源码和 Marketplace cache 只读。
 
-`status --id <change-id> --json` 是已知唯一 active change 的恢复入口：先仅检查 `.dev-docs/changes/` 的直接子目录并排除 `archive/`。无候选时不调用 `status`，进入 Shape；恰有一个候选时，以目录名作为 change ID 调用 `status`；多个候选时 fail closed，报告歧义而不猜测或调用 Runtime。随后先保留或读取紧凑工作包、当前合同、milestone/handoff 和由索引路由的相关知识，并按当前 evidence 计算的 `next_action` 恢复到合同确认、Build、Verify、Finish 或 archive。进入 Build 时遵循上述先判断后读取的分支：若派发，主会话不预读该委派范围的局部代码、测试、配置或测试诊断，由 Agent 在必要范围内读取并吸收局部探索、测试诊断和原始输出；若直接实施，主会话才读取相关代码、测试和配置。`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。不要以旧聊天、全部 archive 或整个知识库恢复工作。v2 active 输入（包括 `plan.yaml`）必须 fail closed；旧 archive 不扫描、不解析、不修改。
+`status --id <change-id> --json` 是已知唯一 active change 的恢复入口：先仅检查 `.dev-docs/changes/` 的直接子目录并排除 `archive/`。无候选时不调用 `status`，进入 Shape；恰有一个候选时，以目录名作为 change ID 调用 `status`；多个候选时 fail closed，报告歧义而不猜测或调用 Runtime。随后先保留或读取紧凑工作包、当前合同、milestone/handoff 和由索引路由的相关知识，并按当前 evidence 计算的 `next_action` 恢复到合同确认、Build、Verify、Finish 或 archive。进入 Build 时遵循上述先判断后读取的分支：若派发，主会话不预读该委派范围的局部代码、测试、配置或测试诊断，由代理在必要范围内读取并吸收局部探索、测试诊断和原始输出；活动范围对主会话排他，只有定点验收和目的明确的独立复核例外。若直接实施，主会话才读取相关代码、测试和配置。`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。不要以旧聊天、全部 archive 或整个知识库恢复工作。v2 active 输入（包括 `plan.yaml`）必须 fail closed；旧 archive 不扫描、不解析、不修改。
 
 两种中断有专门恢复路径。`status.next_action=recover-approval` 表示批准提交已存在、State 尚未写回，主会话重跑 `approve --id <change-id>` 后重新读取 status，不重复确认。无 active 候选且用户当前明确提供恢复/归档 ID 时，Shape 先定点检查该 ID 的 archive 目录；存在则直接 `archive --id <change-id>`，不进入新建的起点 clean 检查或分支流程。目标缺失或与现有 active ID 冲突时停止；没有 ID 时要求用户明确目标，不扫描或猜测 archive。多个 active 仍 fail closed。此例外适用于移动后提交失败及确认既有归档，仅由 Runtime 验证指定 v3 完成态。
 
+## 活动委派与回传
+
+委派启动后，其产品路径和诊断主题在活动期间对主会话排他：主会话不得读取、编辑、写入、执行同题诊断、重复派发或重新吸收完整调查；仍可处理明确不重叠的控制工作。为验收定点核对必要证据或执行目的明确的独立复核不算重复，但不得借此通读整个实现范围。真正依赖结果时使用宿主原生完成通知或等待机制，不使用 shell `sleep`、Git 状态或反复消息轮询、催促。
+
+代理回传最多 15 行，仅使用 `status`、`changed`、`checks`、`handoff`、`concerns`；`status` 为 `DELIVERED|BLOCKED`。不得粘贴代码、搜索过程、日志或完整测试输出，但要保留 Controller 决策所需的文件、检查和错误定位。`BLOCKED`、异常、超时或缺少合格回传时，先 resume；能力不支持或范围不再合适时缩小/重切或重新委派。主会话只有在重新判断共享上下文收益高于隔离收益后才能接管，并在 handoff 留一句理由；不得静默重复宽范围探索。宿主能力缺失的降级遵循 `host-runtime.md`，不得调用另一宿主 CLI 或模拟能力。
+
 ## Verification and review
 
-`delivery.yaml` 定义 check argv；宿主主会话直接运行它们，Runtime 的 `record-check` 绝不执行 argv。合同、HEAD、check 定义或未登记的产品工作区漂移均使旧验证失效。正常 `verify` 要求当前合同、完整覆盖、当前检查和干净产品工作区；stale complete 恢复仅允许 State 已精确登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty，其他 dirty 路径继续 fail closed。`complete` 还要求完成 section 与明确知识结果。
+`delivery.yaml` 定义 check argv；宿主主会话直接运行它们，Runtime 的 `record-check` 绝不执行 argv。主会话只保存 exact argv、exit code 和短摘要；大量失败输出留给回到 Build 后的隔离诊断。合同、HEAD、check 定义或未登记的产品工作区漂移均使旧验证失效。正常 `verify` 要求当前合同、完整覆盖、当前检查和干净产品工作区；stale complete 恢复仅允许 State 已精确登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty，其他 dirty 路径继续 fail closed。`complete` 还要求完成 section 与明确知识结果。
 
 手工观察使用 `verify --manual`，必须明确 `status: PASS|FAIL`，完整字段见 `change-format.md`。只有当前 `PASS` 贡献 Acceptance 依据，当前 `FAIL` 优先阻断对应验收，并通过 `manual_blocker` 路由回 Build；新的完整批次可替换旧观察。无 `status` 的旧 v3 记录可读取，但不能作为通过依据，不能根据 `result` 自由文本补猜结论。
 
-主会话始终 self-review。独立审查只在用户/项目要求或安全、权限、迁移、并发、公共 API、不可逆行为或弱 oracle 等实际需要时使用。独立 reviewer 遵循 [只读审查合同](readonly-review.md) 与宿主适配的有效权限检查。Claude Code 使用 `nuclio:readonly-reviewer`，不运行 shell；Codex 只使用已提供有效只读限制的原生代理。主会话传入共享合同的绝对路径或完整正文，以及必要审查材料。能力不足时按宿主适配报告 CANNOT_VERIFY，不以主会话自检冒充独立审查。
+主会话始终 self-review。独立审查只在用户/项目要求或安全、权限、迁移、并发、公共 API、不可逆行为或弱 oracle 等实际需要时使用。派发前先确定性预检审查问题、当前合同、当前 HEAD、changed paths、[只读审查合同](readonly-review.md) 的绝对路径或完整正文及必要材料均已提供，再按宿主适配核对有效只读权限。能力不足时报告 `CANNOT_VERIFY: isolated read-only reviewer unavailable`，不以自然语言限制或主会话自检冒充独立审查。
 
 ## 新 change 分支隔离
 

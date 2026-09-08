@@ -120,60 +120,146 @@ class HostContracts(unittest.TestCase):
         for boundary in ("不运行 shell", "不创建、编辑、删除", "不调用 Skill、Agent、Task、Workflow", "只返回 findings"):
             self.assertIn(boundary, reviewer)
 
-    def test_build_agent_dispatch_is_context_aware_and_bounded(self):
-        build_guides = (
-            read(WORK),
-            read(REFERENCES / "workflow.md"),
-            read(REFERENCES / "context-hygiene.md"),
-        )
-        for guide in build_guides:
-            self.assertRegex(guide, r"主会话(?:仍)?是唯一控制器")
-            for required in (
-                "保护主会话上下文是优先使用一个有界原生 Agent 的判断条件",
-                "读取广度",
-                "预期实现/诊断迭代",
-                "原始命令输出体量",
-                "必要范围能否清楚界定",
-                "已确认结果合同是否保持不变",
-                "不使用 token 或 ctx 数值硬阈值",
-                "阅读或诊断密集、合同稳定、范围清晰且可由预期检查验证",
-                "极小、单一且实现路径明确",
-                "仍由主会话直接处理",
-                "不为形式而派发",
-                "短回传改动、检查和未完成项",
-            ):
-                self.assertIn(required, guide)
-            self.assertRegex(guide, r"(?:不得|不)复制完整知识正文")
-            for required in (
-                "先保留或读取紧凑控制信息",
-                "`status --id <change-id> --json` 工作包",
-                "当前合同",
-                "milestone/handoff",
-                "相关知识",
-                "先作出派发判断",
-                "仅将当前控制信息、相关知识路径及读取理由和必要范围交给 Agent",
-                "主会话不预读该委派范围的局部代码、测试、配置或测试诊断",
-                "Agent 在必要范围内读取代码、测试和配置",
-                "吸收局部探索、测试诊断和原始输出",
-                "主会话只处理短回传、milestone/handoff、Runtime 和 Verify",
-                "主会话才读取相关代码、测试和配置",
-            ):
-                self.assertIn(required, guide)
-        self.assertIn("不新增专用 implementer、固定任务流水线", build_guides[2])
-        self.assertIn("固定实现流水线", build_guides[0])
+    def test_conditional_delegation_is_model_directed_and_bounded(self):
+        work_build = read(WORK).split("### 2. Build", 1)[1].split("### 3. Verify", 1)[0]
+        workflow_build = read(REFERENCES / "workflow.md").split("- **Build**：", 1)[1].split("- **Verify**：", 1)[0]
+        context_agent = read(REFERENCES / "context-hygiene.md").split("## Agent and reviewer", 1)[1].split("## Output", 1)[0]
+        host_agents = read(REFERENCES / "host-runtime.md").split("## 原生代理能力映射", 1)[1]
 
-    def test_fresh_session_eval_prompts_cover_dispatch_reading_roles(self):
-        eval_prompts = read(REFERENCES / "eval-prompts.md")
+        for section in (work_build, workflow_build, context_agent):
+            self.assertRegex(
+                section,
+                r"多文件(?:或|/)?多模块[^。\n]*(?:大输出|日志/测试失败)[^。\n]*可独立验收[^。\n]*"
+                r"(?:改善速度、覆盖或上下文质量时)?应积极委派",
+            )
+            self.assertRegex(
+                section,
+                r"少量工具调用[^。\n]*单文件小改[^。\n]*紧密顺序依赖[^。\n]*共享资源争用[^。\n]*"
+                r"持续共享上下文[^。\n]*直接执行",
+            )
+            self.assertRegex(section, r"模型[^。\n]{0,100}自主")
+            self.assertRegex(section, r"(?:不按|不依赖)[^。\n]*模型名[^。\n]*具体(?:代理)?工具[^。\n]*固定代理数量[^。\n]*自动委派")
+            self.assertRegex(
+                section,
+                r"Acceptance[^。\n]*Constraints/Non-goals[^。\n]*集成接缝[^。\n]*预期 changed paths[^。\n]*exact checks",
+            )
+            self.assertRegex(section, r"产品写入(?:始终|保持)顺序")
+
+        self.assertRegex("\n".join((work_build, workflow_build, context_agent)), r"不为形式(?:而派发|机械委派|机械派发)")
+        self.assertRegex(host_agents, r"技能已显式授权条件性积极委派[^。\n]*模型[^。\n]*自主拆分")
+        self.assertRegex(host_agents, r"不得把模型名、具体代理工具名、固定代理数量[^。\n]*自动委派模式写入共享决策合同")
+        self.assertRegex(host_agents, r"主会话保持唯一 Controller，产品写入顺序执行")
+
+    def test_active_delegation_has_exclusive_scope_native_wait_and_short_return(self):
+        work_active = read(WORK).split("委派一经启动", 1)[1].split("Open Design change", 1)[0]
+        workflow_active = read(REFERENCES / "workflow.md").split("## 活动委派与回传", 1)[1].split("## Verification and review", 1)[0]
+        context_active = read(REFERENCES / "context-hygiene.md").split("代理活动期间", 1)[1].split("独立 reviewer", 1)[0]
+        for section in (work_active, workflow_active, context_active):
+            self.assertRegex(
+                section,
+                r"产品路径(?:与|和)诊断主题[^。\n]*排他[^。\n]*主会话(?:不得|不)"
+                r"[^。\n]*读取[^。\n]*编辑[^。\n]*写入[^。\n]*(?:运行|执行)[^。\n]*诊断[^。\n]*重复派发",
+            )
+            self.assertRegex(section, r"(?:允许|可以|可|不算重复)[^。\n]*定点|定点[^。\n]*独立复核[^。\n]*不算重复")
+            self.assertRegex(section, r"定点[^。\n]*(?:目的明确[^。\n]*)?独立复核|目的明确[^。\n]*独立复核")
+            self.assertRegex(section, r"最多 15 行[^。\n]*`status`[^。\n]*`changed`[^。\n]*`checks`[^。\n]*`handoff`[^。\n]*`concerns`")
+            self.assertRegex(section, r"Controller[^。\n]*(?:文件|路径)[^。\n]*检查[^。\n]*错误[^。\n]*定位")
+
+        host = read(REFERENCES / "host-runtime.md")
+        capability_table = host.split("| 能力语义 |", 1)[1].split("\n\n派发实现或调查时", 1)[0]
+        self.assertRegex(
+            capability_table,
+            r"\| 有界原生代理 \| 使用原生 `Agent` 派发 \| 使用 native subagent `spawn` 派发；`/agent` 只查看或切换已有线程 \|",
+        )
+        self.assertRegex(
+            capability_table,
+            r"\| 完成通知/等待 \| 需要结果后再继续时以前台运行阻塞等待；后台运行的完成结果由宿主在后续 turn 通过 completion notification 送达 \|"
+            r" 使用 native subagent `wait` 阻塞等待已派发代理的结果；`/agent` 不是等待或轮询机制 \|",
+        )
+        self.assertRegex(
+            capability_table,
+            r"\| resume \| 对返回可寻址 agent ID/name 的普通代理，可用原生 `SendMessage` 继续原线程；内置 Explore/Plan 或用户手动停止的代理不可 resume \|"
+            r" 当前支持基线未定义已完成代理的 resume；`steer` 仅用于仍在运行的代理，`stop`、`close` 也不提供 resume \|"
+            r" resume 不可用时缩小/重切工作包或重新派发；",
+        )
+        self.assertRegex(
+            capability_table,
+            r"无异步通知时使用当前宿主原生阻塞等待；不得用 shell `sleep`、Git 状态、反复消息或其他轮询模拟",
+        )
+
+    def test_delegation_failure_recovery_and_capability_degradation_are_explicit(self):
+        core_guides = (
+            read(WORK),
+            read(REFERENCES / "context-hygiene.md"),
+            read(REFERENCES / "workflow.md"),
+            read(REFERENCES / "host-runtime.md"),
+        )
+        for guide in core_guides:
+            for required in ("resume", "重切", "接管", "理由"):
+                self.assertIn(required, guide)
+            self.assertRegex(guide, r"重新(?:委派|派发)")
+            self.assertRegex(guide, r"(?:另一|跨)宿主(?:调用)? CLI")
+
+        host = core_guides[3]
+        for required in ("有界原生代理", "完成通知/等待", "resume", "强制只读 reviewer"):
+            self.assertIn(required, host)
         for required in (
-            "多文件阅读与测试诊断的 Build 派发",
-            "多个回调、服务、配置和测试文件",
-            "主会话不预读委派范围的局部材料",
-            "agent 在支付子系统必要范围内吸收局部探索、测试诊断和原始输出",
-            "不以 token 或 ctx 数值硬阈值决定派发",
+            "主会话按同一工作包顺序直做",
+            "无异步通知时使用当前宿主原生阻塞等待",
+            "缩小/重切工作包或重新派发",
+            "CANNOT_VERIFY: isolated read-only reviewer unavailable",
+            "任何能力降级都不得调用另一宿主 CLI",
+        ):
+            self.assertIn(required, host)
+        for boundary in ("独立线程", "输入上下文传播", "回传", "共享工作区", "权限限制"):
+            self.assertIn(boundary, host)
+
+    def test_verify_failure_and_reviewer_preflight_return_to_controller(self):
+        work = read(WORK)
+        workflow = read(REFERENCES / "workflow.md")
+        context = read(REFERENCES / "context-hygiene.md")
+        for guide in (work, workflow, context):
+            for required in ("Verify", "回到 Build", "大输出", "多文件", "简单明确", "exact"):
+                self.assertIn(required, guide)
+        for guide in (work, workflow):
+            self.assertIn("不在 Verify 中", guide)
+
+        for path in (WORK, REFERENCES / "context-hygiene.md", REFERENCES / "workflow.md", REFERENCES / "host-runtime.md"):
+            guide = read(path)
+            for required in ("审查问题", "合同", "当前 HEAD", "changed paths", "必要材料"):
+                self.assertIn(required, guide)
+            self.assertRegex(guide, r"(?:预检|派发前先).*审查")
+
+    def test_fresh_session_evals_cover_positive_failure_and_direct_work(self):
+        eval_prompts = read(REFERENCES / "eval-prompts.md")
+        for scenario in (
+            "复杂跨层 Build 的条件性积极委派",
+            "Agent BLOCKED、异常或无合格回传",
+            "Verify 大输出失败回到 Build",
+            "Shape 重叠调查抑制",
             "单文件确定性 Build 不机械派发",
-            "不因进入 Build 或存在 Agent 能力而机械委派",
+            "紧密共享上下文或共享资源争用不机械委派",
+        ):
+            self.assertIn(scenario, eval_prompts)
+        for required in (
+            "该宿主真实提供的原生代理",
+            "不按模型名、具体代理工具名、固定代理数量或固定并发数、宿主是否自动委派",
+            "模型根据独立性、上下文隔离收益和协调成本自主决定具体拆分",
+            "`SKIP: <不可用原因>`",
+            "不把所有宿主/模型组合均可用作为发布前提",
+            "范围清晰、可独立验收的实现轨道",
+            "不规定代理数量或并发数",
+            "最多 15 行回传",
+            "只允许为验收定点核对必要证据或执行目的明确的独立复核",
+            "不以 shell `sleep`、Git 状态、反复消息或催促模拟轮询",
+            "缩小/重切工作包或重新派发",
+            "在 handoff 留下一句理由",
+            "本轮 Verify 结束并回到 Build",
+            "大量原始 Maven 输出不进入主会话",
+            "不派发同题调查",
             "主会话直接完成改动和检查",
-            "直接实施时主会话才读取相关代码、测试和配置",
+            "协调成本高于隔离收益",
+            "不并行写同一迁移文件或共享夹具",
         ):
             self.assertIn(required, eval_prompts)
 
@@ -427,12 +513,12 @@ class PackageSyncContracts(unittest.TestCase):
         for key in ("name", "version", "description"):
             self.assertEqual(claude[key], codex[key])
             self.assertEqual(claude[key], entry[key])
-        self.assertEqual(claude["version"], "5.3.1")
+        self.assertEqual(claude["version"], "5.3.2")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         self.assertIn("Claude Code", claude["description"])
         self.assertIn("Codex", claude["description"])
         self.assertIn("@AGENTS.md", read(ROOT / "CLAUDE.md"))
-        self.assertIn("Nuclio v3 5.3.1", read(ROOT / "AGENTS.md"))
+        self.assertIn("Nuclio v3 5.3.2", read(ROOT / "AGENTS.md"))
         for filename in ("README.md", "AGENTS.md"):
             text = read(ROOT / filename)
             self.assertIn(".agents/plugins/marketplace.json", text)

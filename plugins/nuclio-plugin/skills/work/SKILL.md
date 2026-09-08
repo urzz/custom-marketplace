@@ -5,7 +5,7 @@ disable-model-invocation: true
 ---
 # Nuclio Work
 
-`/nuclio:work` 只能由用户显式调用。宿主主会话是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`，并按宿主适配规则决定是否使用原生 Agent。被委派 agent 只完成有界工作、不得调用 Skill 或继续委派，也不接管 Runtime 状态。
+`/nuclio:work` 只能由用户显式调用。宿主主会话是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`。主会话按本技能的条件性积极委派合同决定直接执行或使用宿主原生代理；被委派代理只完成有界工作，不调用 Skill、不继续委派，也不接管 Runtime 状态。
 
 ## Plan Mode 边界
 
@@ -56,7 +56,7 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
 无候选时不调用 `status`。以下起点 clean 和分支规则仅适用于新建，不适用于上述显式归档恢复。主会话必须按以下确定性顺序处理：
 
 1. 确认调用起点快照有效：项目是 Git 仓库、`HEAD` 为 attached，且起点的 staged、unstaged、untracked 均为空。快照 unavailable 或起点 dirty 时立即 fail closed；即使 Shape 期间外部清理了工作区也不得继续新建。
-2. 只读调查用户请求、仓库事实和通过 `.dev-docs/index.md` 路由的相关长期知识，确定遵守 `change-format.md` 的合法 `<change-id>`、结果合同和固定类型前缀。类型仅可为 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`。目标分支为 `<type>/<change-id>`。
+2. 只读调查用户请求、仓库事实和通过 `.dev-docs/index.md` 路由的相关长期知识，确定遵守 `change-format.md` 的合法 `<change-id>`、结果合同和固定类型前缀。每个 Shape 调查开始前，主会话按下文 Build 相同的独立性、上下文隔离收益和协调成本标准，显式判断直接调查或积极委派，并由模型自主切成互斥、有停止条件且只回答当前合同缺口的调查包；复用已有结论，不派发重叠调查。活动调查同样适用范围排他、宿主原生等待、短回传和失败恢复合同。类型仅可为 `feat`、`fix`、`refactor`、`docs`、`test`、`chore`，无法明确时为 `feat`。目标分支为 `<type>/<change-id>`。
 3. 完成只读 Shape 后、调用 Runtime `create` 或写入任何本次 change 或产品文件前，重新运行以下命令并以其输出重新读取当前 branch、`HEAD` 与 clean 状态：
 
    ```bash
@@ -102,9 +102,13 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
 
 ### 2. Build
 
-下述委派仅在当前宿主提供对应能力时执行；能力不可用时由主会话在同一合同内顺序完成，不新增代理配置或外部服务。
+主会话对每个 Build 或返修工作包都获得**条件性积极委派**的明确授权；具体是否委派及如何拆分由模型根据工作独立性、上下文隔离收益与协调成本自主决定，不按模型名、具体代理工具、固定代理数量或宿主自动委派模式分支，也不使用 token 或 ctx 数值硬阈值。多文件或多模块调查、日志/测试失败等大输出诊断、可独立验收的实现轨道、只需结论的工作和 fresh-context review，在预期改善速度、覆盖或上下文质量时应积极委派。少量工具调用即可完成、单文件小改、紧密顺序依赖、共享资源争用、需要持续共享上下文，或涉及产品语义、兼容性、权限、外部副作用、不可逆结果、跨 milestone 架构取舍、用户交互、Runtime、Verify、Finish 等控制决定时直接执行，不为形式机械委派。当前宿主没有可用原生代理时，主会话按同一工作包顺序直做；不得新增代理配置或服务、调用另一宿主 CLI 或模拟缺失能力。
 
-主会话自主维护 milestone、状态和短 handoff；合同不变时可重排、拆分或合并 milestone。开始当前 milestone 时，主会话先保留或读取紧凑控制信息：`status --id <change-id> --json` 工作包、当前合同、milestone/handoff，以及经 `.dev-docs/index.md` 路由的相关知识；派发时仅将当前控制信息、相关知识路径及读取理由和必要范围交给 Agent，不复制知识正文。随后以读取广度、预期实现/诊断迭代、原始命令输出体量、必要范围能否清楚界定和已确认结果合同是否保持不变为启发式，先作出派发判断。保护主会话上下文是优先使用一个有界原生 Agent 的判断条件，不使用 token 或 ctx 数值硬阈值。阅读或诊断密集、合同稳定、范围清晰且可由预期检查验证的局部工作优先派发 Agent；若派发，主会话不预读该委派范围的局部代码、测试、配置或测试诊断，Agent 在必要范围内读取代码、测试和配置，并吸收局部探索、测试诊断和原始输出；主会话只处理短回传、milestone/handoff、Runtime 和 Verify。极小、单一且实现路径明确的工作，以及产品语义、兼容性、权限、外部副作用、不可逆结果、跨 milestone 架构取舍、用户交互、Runtime、Verify、Finish 等控制决定，仍由主会话直接处理，不为形式而派发；若直接实施，主会话才读取相关代码、测试和配置并完成实现和检查。agent dispatch 只提供当前 milestone、相关 Acceptance、Constraints/Non-goals、handoff、相关知识路径及读取理由、必要范围和预期检查；不得复制完整知识正文。agent 只短回传改动、检查和未完成项，不调用 Skill、不继续委派、不接管 Runtime。
+主会话自主维护 milestone、状态和短 handoff；合同不变时可重排、拆分或合并 milestone，产品写入始终顺序进行。开始工作包前只保留或读取紧凑控制信息：`status --id <change-id> --json` 工作包、当前合同、milestone/handoff，以及经 `.dev-docs/index.md` 路由的相关知识。实际委派必须形成可独立验收的工作包，覆盖相关 Acceptance、Constraints/Non-goals、实现边界、集成接缝、预期 changed paths 与 exact checks；只传当前控制信息、相关知识路径及读取理由和必要范围，不复制知识正文。代理在必要范围内读取代码、测试和配置，吸收局部探索、测试诊断和原始输出；不调用 Skill、不继续委派、不接管 Runtime。
+
+委派一经启动，工作包的产品路径与诊断主题在其活动期间对主会话排他：主会话不得读取、编辑、写入或运行诊断命令重复该范围，也不得重复派发同题工作；可继续明确不重叠的控制工作或其他顺序工作包。仅允许为验收定点核对必要证据，或执行目的明确的独立复核，不得借此重新通读实现范围或吸收完整调查。真正依赖结果时，使用宿主原生完成通知或等待机制；不得以 shell `sleep`、Git 状态或反复消息轮询、催促进度。
+
+代理回传最多 15 行，只使用 `status`、`changed`、`checks`、`handoff`、`concerns` 字段；`status` 仅为 `DELIVERED` 或 `BLOCKED`。不粘贴代码、搜索过程、完整日志或测试输出，但 `changed`、`checks` 或 `concerns` 必须保留 Controller 判断所需的文件、检查、错误等必要证据定位。主会话只吸收该短回传和定点证据。收到 `BLOCKED`、代理异常/超时或缺少合格回传时，先按宿主能力 resume；不可 resume 或原工作包不再合适时，缩小/重切或重新委派。仅当重新判断共享上下文收益确实高于隔离收益时才由主会话接管，并在 handoff 留下一句理由；不得无声重复代理已做的宽范围探索。能力降级细节见宿主适配。
 
 Open Design change 在批准后的首个相关 milestone 中把已接受的设计交付固化到固定目录 `.dev-docs/artifacts/open-design/`，随后只以仓库快照恢复和实施；不得按 UUID 分层、把完整交付写入 knowledge，也不得在同一合同下静默拉取更新后的外部设计。
 
@@ -112,7 +116,7 @@ Open Design change 在批准后的首个相关 milestone 中把已接受的设�
 
 ### 3. Verify
 
-先执行 `status --id <change-id> --json`，读取工作包、当前合同、milestone/handoff，并经索引读取相关知识。`next_action=recover-approval` 时先重跑 `approve --id <change-id>`，恢复已经提交但尚未写回的批准，再重新读取 status；不重复确认同一合同。宿主主会话在当前 HEAD 按 check 的 `cwd` 和 `timeout_seconds` 直接执行 delivery 中的 exact argv；随后为每项检查调用 `record-check`，再调用 `verify`。Runtime 不执行检查。
+先执行 `status --id <change-id> --json`，读取工作包、当前合同、milestone/handoff，并经索引读取相关知识。`next_action=recover-approval` 时先重跑 `approve --id <change-id>`，恢复已经提交但尚未写回的批准，再重新读取 status；不重复确认同一合同。只在候选实现及 HEAD/工作区稳定后进入 Verify；宿主主会话按 check 的 `cwd` 和 `timeout_seconds` 直接执行 delivery 中的 exact argv，并只在主上下文保留命令、exit code 和短摘要，随后为每项检查调用 `record-check`，再调用 `verify`。Runtime 不执行检查。
 
 ```bash
 python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_PROJECT_DIR}" status --id <change-id> --json
@@ -122,7 +126,7 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
 
 手工观察通过 `verify --manual` 记录，JSON 必须包含 `acceptance`、`status: PASS|FAIL`、`steps`、`result`、`executor`。仅 `PASS` 贡献通过依据；当前 `FAIL` 使对应 Acceptance 保持未通过，即使其他检查或 reviewer 覆盖它。`manual_blocker` 非空时回到 Build 修复，并以新的完整手工批次复验。旧 v3 manual 记录缺少 `status` 时可读取恢复，但不再贡献通过依据；补做观察后替换，不推测旧 `result` 文本的结论。
 
-恢复时按 `status --json` 基于当前 evidence 给出的 `next_action` 继续到合同确认、Build、Verify、Finish 或 archive；`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。Verify FAIL、缺失或过期依据时回到 Build 自主修复；向 Runtime 提交当前 reviewer `FAIL` 同样回到 Build。HEAD、合同或 check 定义变化会使旧依据失效。先进行主会话整体自检；用户或项目要求、较高后果或验证不足时，按 [宿主适配](../../references/host-runtime.md) 选择具有有效只读限制的 fresh reviewer，传入 [只读审查合同](../../references/readonly-review.md) 的绝对路径或完整正文与必要材料。reviewer 只返回 findings，主会话自行决定后续工作和 Runtime 输入。代理不可用时主会话继续自检并明确独立审查未执行；若独立审查为用户或项目要求，则保留未满足项，不宣称完成。
+恢复时按 `status --json` 基于当前 evidence 给出的 `next_action` 继续到合同确认、Build、Verify、Finish 或 archive；`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。Verify FAIL、缺失或过期依据时结束本轮 Verify 并回到 Build，不在 Verify 中边诊断边修代码；简单明确的失败可由主会话直接修复，需要大量失败输出或多文件诊断时按 Build 合同优先隔离委派，再在稳定候选上重跑最终 exact check。向 Runtime 提交当前 reviewer `FAIL` 同样回到 Build。HEAD、合同或 check 定义变化会使旧依据失效。先进行主会话整体自检；用户或项目要求、较高后果或验证不足时，派发 fresh reviewer 前必须确定性预检输入包已包含审查问题、当前合同、当前 HEAD、changed paths、只读审查合同和必要材料，再按 [宿主适配](../../references/host-runtime.md) 选择具有有效只读限制的 reviewer。reviewer 只返回 findings，主会话自行决定后续工作和 Runtime 输入。代理不可用时主会话继续自检并明确独立审查未执行；无法强制有效只读权限时报告 `CANNOT_VERIFY`，不得以自然语言约束冒充隔离。若独立审查为用户或项目要求，则保留未满足项，不宣称完成。
 
 ### 4. Finish
 
