@@ -1,6 +1,6 @@
 {
   "name": "jade-tools-cc-marketplace",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Claude Code、Codex 与 DeepSeek Harness 的共享开发技能 Marketplace bundle。",
   "type": "module",
   "main": "dsh/index.mjs",
@@ -19,6 +19,7 @@
     "plugins/nuclio-plugin/agents/**",
     "plugins/nuclio-plugin/docs/**",
     "plugins/nuclio-plugin/references/**",
+    "plugins/nuclio-plugin/scripts/*.py",
     "plugins/nuclio-plugin/skills/*/SKILL.md",
     "plugins/nuclio-plugin/skills/*/agents/**",
     "plugins/nuclio-plugin/skills/*/references/**",
