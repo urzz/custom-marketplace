@@ -1,24 +1,23 @@
 {
   "name": "jade-tools-marketplace",
   "owner": {
-    "name": "Jade Liu",
-    "email": "[redacted-email]"
+    "name": "Jade Liu"
   },
   "plugins": [
     {
       "name": "dev-stack",
       "source": "./plugins/dev-stack",
-      "description": "面向 Claude Code 与 Codex 的 Skill 创建、修改和只读审查，以及安全的单次 Conventional Commit 与普通推送。",
+      "description": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Skill 创建、修改和只读审查，以及安全的单次 Conventional Commit 与普通推送。",
       "version": "0.5.0"
     },
     {
       "name": "nuclio",
       "source": "./plugins/nuclio-plugin",
-      "description": "面向 Claude Code 与 Codex 的 Nuclio v3 知识初始化与 change 交付：显式调用、结果合同、受控分支、上下文优先且工具无关的有界 Agent 编排、当前验证与可恢复归档。",
+      "description": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Nuclio v3 知识初始化与 change 交付：显式调用、结果合同、受控分支、上下文优先且工具无关的有界 Agent 编排、当前验证与可恢复归档。",
       "version": "5.3.3"
     }
   ],
   "metadata": {
-    "description": "组织和分发同时支持 Claude Code 与 Codex 的开发技能插件。"
+    "description": "组织和分发同时支持 Claude Code、Codex 与 DeepSeek Harness bundle 的开发技能插件。"
   }
 }

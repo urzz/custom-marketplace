@@ -1,0 +1,58 @@
+{
+  "name": "jade-tools-cc-marketplace",
+  "version": "0.1.0",
+  "description": "Claude Code、Codex 与 DeepSeek Harness 的共享开发技能 Marketplace bundle。",
+  "type": "module",
+  "main": "dsh/index.mjs",
+  "files": [
+    "dsh/**",
+    "plugins/dev-stack/.claude-plugin/**",
+    "plugins/dev-stack/.codex-plugin/**",
+    "plugins/dev-stack/agents/**",
+    "plugins/dev-stack/references/**",
+    "plugins/dev-stack/skills/*/SKILL.md",
+    "plugins/dev-stack/skills/*/agents/**",
+    "plugins/dev-stack/skills/*/references/**",
+    "plugins/dev-stack/skills/*/scripts/*.py",
+    "plugins/nuclio-plugin/.claude-plugin/**",
+    "plugins/nuclio-plugin/.codex-plugin/**",
+    "plugins/nuclio-plugin/agents/**",
+    "plugins/nuclio-plugin/docs/**",
+    "plugins/nuclio-plugin/references/**",
+    "plugins/nuclio-plugin/skills/*/SKILL.md",
+    "plugins/nuclio-plugin/skills/*/agents/**",
+    "plugins/nuclio-plugin/skills/*/references/**",
+    "plugins/nuclio-plugin/skills/*/scripts/*.py",
+    ".agents/plugins/**",
+    ".claude-plugin/**",
+    "cordis.patch.yml",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/**"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "chokidar": "5.0.0",
+    "yaml": "2.8.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.4",
+    "@deepseek-ai/dsh-skill": ">=0.1.7-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-skill": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -2,7 +2,7 @@
 
 ## 仓库定位
 
-本仓库是同时支持 Claude Code 与 Codex 的插件 Marketplace，不是应用项目。核心层级为：
+本仓库是同时支持 Claude Code、Codex 与 DeepSeek Harness 的插件 Marketplace 和 bundle 源码，不是应用项目。核心层级为：
 
 ```text
 .claude-plugin/marketplace.json
@@ -10,9 +10,12 @@
 plugins/<plugin-dir>/.claude-plugin/plugin.json
 plugins/<plugin-dir>/.codex-plugin/plugin.json
 plugins/<plugin-name>/skills/<skill-name>/SKILL.md
+package.json
+cordis.patch.yml
+dsh/index.mjs
 ```
 
-插件可按需提供 skill 级或插件级 `references/`、`scripts/`、测试和 agent 定义。不要假设存在 `package.json`、npm、pnpm、bun 或统一构建流程。
+插件可按需提供 skill 级或插件级 `references/`、`scripts/`、测试和 agent 定义。Claude Code 与 Codex 仍没有统一应用构建流程；仅在 DSH bundle 任务中使用根 `package.json`、npm/pnpm 依赖和 `cordis.patch.yml`。
 
 ## 语言规则
 
@@ -38,7 +41,7 @@ plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 
 ### skill-forge
 
-- `/skill-forge` 仅显式调用，用于 CREATE、MODIFY、AUDIT Claude Code、Codex 或双平台 skill。
+- `/skill-forge` 仅显式调用，用于 CREATE、MODIFY、AUDIT Claude Code、Codex、DeepSeek Harness 或多平台 skill。
 - CREATE/MODIFY 先完成 Focused 或 Grill 澄清并确认 `spec.md`，再生成和校验精简 `plan.yaml`；只有删除、依赖、权限、外部副作用或用户选择变化时追加 Plan 确认。
 - `plan_contract.py` 是唯一 Plan validator，负责重复 YAML key、Spec hash、repo-relative path、Task ownership、文件前置条件、placeholder、字段类型和空 checks。
 - 主 Session 是唯一 Controller，产品写入按 Task 顺序执行。bounded implementer 只修改一个 Task 的精确路径；bounded reviewer 只读；两者都不写 report、不递归委派、不 commit。Claude Code 保留原生 agents；Codex 按 `platforms.md` 传递共享角色合同，代理不可用时顺序实施，无法满足有效只读权限时明确报告独立审查未完成。
@@ -101,13 +104,15 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 
 ## 验证命令
 
-基础检查（需要 Python 3.10+、PyYAML、Git；原生校验另需对应 CLI）：
+基础检查（需要 Python 3.10+、PyYAML、Git；原生校验另需对应 CLI；DSH provider 测试另需根 `package.json` 中的 Node 依赖）：
 
 ```bash
 python3 scripts/validate_marketplace.py
 python3 -m unittest discover -s scripts -p 'test_*.py'
 python3 scripts/smoke_codex.py
 claude plugin validate . --strict
+node dsh/test_provider.mjs
+node --check dsh/index.mjs
 ```
 
 `smoke_codex.py` 只调用本地 app-server 的目录读取 RPC，在临时副本验证加载，不安装到个人配置，也不启动模型会话。公共目录上架校验与本地兼容性校验的差异见 `docs/compatibility.md`。

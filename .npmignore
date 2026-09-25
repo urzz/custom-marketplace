@@ -1,0 +1,24 @@
+# Keep generated and local state out of the published bundle
+**/__pycache__/
+**/*.py[cod]
+.claude/
+.skill-forge/
+.dsh/
+node_modules/
+
+# Keep local configuration and credentials out of the published bundle
+.env
+.env.*
+!.env.example
+**/*.local.json
+**/*.local.yaml
+**/*.local.yml
+**/*.secret
+**/*.token
+**/credentials.json
+**/secrets.json
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.crt

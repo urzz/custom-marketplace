@@ -1,9 +1,8 @@
 {
   "name": "dev-stack",
-  "description": "面向 Claude Code 与 Codex 的 Skill 创建、修改和只读审查，以及安全的单次 Conventional Commit 与普通推送。",
+  "description": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Skill 创建、修改和只读审查，以及安全的单次 Conventional Commit 与普通推送。",
   "version": "0.5.0",
   "author": {
-    "name": "Jade Liu",
-    "email": "[redacted-email]"
+    "name": "Jade Liu"
   }
 }

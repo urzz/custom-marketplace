@@ -1,18 +1,18 @@
 # cc-marketplace
 
-用于组织和分发 **Claude Code 与 Codex** 插件的轻量级 Marketplace 仓库。两端使用各自原生入口，共用技能正文、参考资料和 Python 实现。
+用于组织和分发 **Claude Code、Codex 与 DeepSeek Harness** 插件技能的轻量级 Marketplace 仓库。Claude Code 与 Codex 使用各自原生入口；根级 DSH bundle 通过动态 provider 读取同一份技能正文、参考资料和 Python 实现。
 
 ## 插件与调用
 
-| 插件 / 版本 | Claude Code | Codex | 用途 |
-|---|---|---|---|
-| `dev-stack` / `0.5.0` | `/dev-stack:skill-forge` | `$dev-stack:skill-forge` | 为 Claude Code、Codex 或双平台创建、修改、审查 skill |
-| `dev-stack` / `0.5.0` | `/dev-stack:commit` | `$dev-stack:commit` | 分析改动并安全创建单个 Conventional Commit |
-| `dev-stack` / `0.5.0` | `/dev-stack:commit-and-push` | `$dev-stack:commit-and-push` | 创建并验证单个提交后普通推送当前分支 |
-| `nuclio` / `5.3.3` | `/nuclio:init` | `$nuclio:init` | 创建或安全修复 `.dev-docs` 知识骨架 |
-| `nuclio` / `5.3.3` | `/nuclio:work` | `$nuclio:work` | 创建、恢复、验证和归档一个 change |
+| 插件 / 版本 | Claude Code | Codex | DSH | 用途 |
+|---|---|---|---|---|
+| `dev-stack` / `0.5.0` | `/dev-stack:skill-forge` | `$dev-stack:skill-forge` | `/dev-stack-skill-forge` | 为 Claude Code、Codex、DSH 或多平台创建、修改、审查 skill |
+| `dev-stack` / `0.5.0` | `/dev-stack:commit` | `$dev-stack:commit` | `/dev-stack-commit` | 分析改动并安全创建单个 Conventional Commit |
+| `dev-stack` / `0.5.0` | `/dev-stack:commit-and-push` | `$dev-stack:commit-and-push` | `/dev-stack-commit-and-push` | 创建并验证单个提交后普通推送当前分支 |
+| `nuclio` / `5.3.3` | `/nuclio:init` | `$nuclio:init` | `/nuclio-init` | 创建或安全修复 `.dev-docs` 知识骨架 |
+| `nuclio` / `5.3.3` | `/nuclio:work` | `$nuclio:work` | `/nuclio-work` | 创建、恢复、验证和归档一个 change |
 
-`skill-forge` 与 Nuclio 的两个技能仅显式调用。commit 系列保留自动发现，实际暂存、提交和推送仍遵守各自的用户请求与授权合同。
+`skill-forge` 与 Nuclio 的对应技能仅显式调用。commit 系列保留自动发现，实际暂存、提交和推送仍遵守各自的用户请求与授权合同。DSH 名称使用插件前缀，避免不同插件的同名 skill 发生冲突。
 
 ## 安装
 
@@ -36,21 +36,29 @@ codex plugin add nuclio@jade-tools-marketplace
 
 按需选择插件安装，之后开启新会话。Codex 也可用 `/plugins` 打开插件浏览器。Git 托管分发时，将 `marketplace add` 的 `.` 换成该仓库的 Git 地址。
 
+DeepSeek Harness：
+
+1. 在 DSH Web 的插件管理器中选择安装 bundle。
+2. 将该仓库的 Git URL 作为 bundle spec；插件管理器会读取根目录 `package.json` 的 `dsh.bundle.patch`，并安装 `cordis.patch.yml` 声明的 provider。
+3. 安装完成后刷新或重新启动目标 profile，再使用 `/nuclio-work`、`/nuclio-init`、`/dev-stack-skill-forge`、`/dev-stack-commit` 或 `/dev-stack-commit-and-push`。
+
+本地开发使用绝对路径的 `link:` spec；DSH 会把 `plugins/*/skills/*/SKILL.md` 动态注册为带插件前缀的技能。GitHub 安装使用 bundle 中的快照，修改仓库后需重新安装/更新 bundle；不需要把本机绝对路径写入 profile。Provider 使用 `resourceBase` 保留各技能相邻 `references/`、`scripts/` 等资源的相对解析位置。
+
 本地开发可直接以 `claude --plugin-dir ./plugins/dev-stack` 加载 Claude 插件。Codex 的目录加载检查见下文；修改已安装插件后需通过客户端更新/重新安装并在新会话验证，安装缓存中的内容不应手工编辑。
 
 当前验证基线为 Claude Code `2.1.201` 与 Codex CLI `0.153.4`，不是声明的最低版本。客户端能力和未覆盖项见 [兼容性说明](docs/compatibility.md)。
 
 ## 工作流
 
-**Skill Forge** 先确定目标平台与需求，确认 Spec，再生成并校验 Plan，按 Task 顺序实施。宿主与目标可以不同，例如在 Codex 中维护 Claude Code skill。两端共用 Plan validator 和代理角色合同；工具与权限按实际宿主适配。
+**Skill Forge** 先确定目标平台与需求，确认 Spec，再生成并校验 Plan，按 Task 顺序实施。宿主与目标可以不同，例如在 Codex 中维护 Claude Code skill，或在 DSH 中维护多宿主 skill。各目标共用 Plan validator 和代理角色合同；工具与权限按实际宿主适配。
 
-**Nuclio v3 5.3.3** 共用七命令 Runtime，active change 和新 archive 都保留 `change.md`、`delivery.yaml`、`state.yaml`。在另一宿主恢复时继续读取同一份文件，无需转换状态。
+**Nuclio v3 5.3.3** 共用七命令 Runtime，active change 和新 archive 都保留 `change.md`、`delivery.yaml`、`state.yaml`。在另一宿主恢复时继续读取同一份文件，无需转换状态；DSH provider 只负责发现并加载共享正文，项目路径和 Runtime 边界仍按宿主适配落实。
 
-Nuclio 在 Claude Code Plan Mode 或 Codex Plan mode 中均停止并要求退出后重新显式调用。普通模式下，work 在 discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。唯一 active change 按 ID 恢复，多个候选报告歧义；仅无 active change 且需要新建时才要求起点 attached 且 clean，并在只读 Shape 后完成分支/HEAD/工作区及全部已配置 remote 的缓存 remote-tracking refs 检查，创建受控新分支，再进行 post-switch 复核与 Runtime create。
+Nuclio 在 Claude Code Plan Mode、Codex Plan mode 或 DSH 当前 profile 的等价计划模式中均停止并要求退出后重新显式调用。普通模式下，work 在 discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。唯一 active change 按 ID 恢复，多个候选报告歧义；仅无 active change 且需要新建时才要求起点 attached 且 clean，并在只读 Shape 后完成分支/HEAD/工作区及全部已配置 remote 的缓存 remote-tracking refs 检查，创建受控新分支，再进行 post-switch 复核与 Runtime create。
 
 用户确认结果合同后，主会话管理交付与检查。每个 Shape 调查和 Build/返修工作包开始前，主会话按独立性、上下文隔离收益与协调成本决定直接执行或条件性积极委派，由模型自主选择拆分；多文件调查、大输出诊断和可独立验收轨道在有收益时积极委派，单文件小改、紧密依赖或共享资源争用时直接处理，不机械要求 agent-first。实际委派形成可独立验收的工作包；活动期间产品路径和诊断主题对主会话排他，调查与实施代理（含返修）仅作最多 15 行的五字段结构化回传，独立 reviewer 使用专用审查格式，不套用该字段或行数限制。依赖结果时使用宿主原生完成通知或等待，失败则优先按实际能力继续原线程（resume），无法继续或工作包不再适合时才缩小/重切或重新委派。
 
-Claude Code 与 Codex 共用模型和工具无关的能力合同，并按当前宿主真实提供的原生 Agent、等待、resume 与强制只读能力适配。Codex 依据当前工具定义及代理状态判断能否继续原线程，不按固定版本或文档遗漏推定恢复能力缺失。能力不足时按语义降级：无原生 Agent 则主会话顺序直做，无 resume 则重切或重新委派，无异步通知则使用宿主原生阻塞等待，无法强制只读则 reviewer 报告 `CANNOT_VERIFY`；不跨宿主调用 CLI 或模拟缺失能力。Runtime 记录当前检查依据、判断完成条件，并支持知识决定与可恢复归档。可选 Open Design 只使用用户已配置的 MCP 和明确绑定的 `project-id`，批准后的设计交付固定保存到 `.dev-docs/artifacts/open-design/`。
+Claude Code、Codex 与 DSH 共用模型和工具无关的能力合同，并按当前宿主真实提供的原生 Agent、等待、resume 与强制只读能力适配。Codex 依据当前工具定义及代理状态判断能否继续原线程，不按固定版本或文档遗漏推定恢复能力缺失。能力不足时按语义降级：无原生 Agent 则主会话顺序直做，无 resume 则重切或重新委派，无异步通知则使用宿主原生阻塞等待，无法强制只读则 reviewer 报告 `CANNOT_VERIFY`；不跨宿主调用 CLI 或模拟缺失能力。Runtime 记录当前检查依据、判断完成条件，并支持知识决定与可恢复归档。可选 Open Design 只使用用户已配置的 MCP 和明确绑定的 `project-id`，批准后的设计交付固定保存到 `.dev-docs/artifacts/open-design/`。
 
 手工验收必须明确 `PASS` 或 `FAIL`；旧 v3 无状态手工记录不再作为通过依据，需要重新观察。批准提交回写中断通过 status 的 `recover-approval` 恢复；归档移动中断后，可明确请求“恢复并归档 `<change-id>`”，直接恢复指定 ID。Runtime 支持 Git 子目录项目、中文路径，并在归档移动前检查知识改动和忽略规则；已完成归档可在后续提交后幂等确认，归档内容漂移会被拒绝。
 
@@ -74,11 +82,14 @@ plugins/
     ├── references/                    # 可选：共享资料与宿主适配
     └── scripts/                       # 可选：共享 helper 与测试
 scripts/                               # 仓库级兼容性检查
+dsh/index.mjs                           # DSH 动态 skill provider
+package.json                             # DSH bundle manifest
+cordis.patch.yml                         # DSH Cordis patch
 ```
 
-插件标识 `nuclio` 的目录仍为 `plugins/nuclio-plugin/`，由两端 source 显式映射。Nuclio 当前权威位于 `skills/`、`references/` 和 `scripts/`；`plugins/nuclio-plugin/docs/research/` 是历史设计背景。
+插件标识 `nuclio` 的目录仍为 `plugins/nuclio-plugin/`，由两端 source 显式映射。Nuclio 当前权威位于 `skills/`、`references/` 和 `scripts/`；`plugins/nuclio-plugin/docs/research/` 是历史设计背景。根级 `package.json` 仅为 DSH bundle 提供安装入口，不改变 Claude Code 与 Codex 的 Marketplace 结构。
 
-维护规则见 [AGENTS.md](AGENTS.md)。这是插件仓库，没有独立应用构建流程。
+维护规则见 [AGENTS.md](AGENTS.md)。Claude Code 与 Codex 没有统一应用构建流程；DSH bundle 安装时由插件管理器在 profile 中解析 npm 依赖。
 
 ## 验证
 
@@ -91,6 +102,8 @@ python3 -m unittest discover -s plugins/dev-stack/skills/skill-forge/scripts -p 
 python3 -m unittest discover -s plugins/nuclio-plugin/scripts -p 'test_*.py'
 python3 plugins/dev-stack/skills/skill-forge/scripts/plan_contract.py --help
 python3 plugins/nuclio-plugin/scripts/change.py --help
+node dsh/test_provider.mjs
+node --check dsh/index.mjs
 ```
 
 两端原生检查：

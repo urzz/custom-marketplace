@@ -5,7 +5,7 @@ description: Use when the user asks to analyze staged, unstaged, or untracked Gi
 
 # Commit
 
-本技能在 Claude Code 与 Codex 中共用同一提交合同。插件入口分别为 `/dev-stack:commit` 与 `$dev-stack:commit`；相对 references 路径以实际加载的技能目录为基准。按调用起点的用户项目定位 Git 仓库，确认根目录后所有 Git 命令显式使用 `git -C <repo-root>`，不从插件缓存目录推断目标。需要人工判断时使用宿主允许的提问方式并等待明确回复；空答案或超时不是批准。在只读/Plan mode 下仅提供分析，不 stage、commit 或 push。
+本技能在 Claude Code、Codex 与 DeepSeek Harness 中共用同一提交合同。插件入口分别为 `/dev-stack:commit`、`$dev-stack:commit` 与 `/dev-stack-commit`；相对 references 路径以实际加载的技能目录为基准。按调用起点的用户项目定位 Git 仓库，确认根目录后所有 Git 命令显式使用 `git -C <repo-root>`，不从插件缓存目录推断目标。需要人工判断时使用宿主允许的提问方式并等待明确回复；空答案或超时不是批准。在只读/Plan mode 下仅提供分析，不 stage、commit 或 push。
 
 此 skill 用于把当前仓库的 staged、unstaged 与 untracked 变更整理为一个语义清晰、边界受控的 Conventional Commit，并在本轮新鲜分析证明安全资格满足时默认自动创建恰好一个 commit。它不适用于历史查看、push、fetch、pull、merge、rebase、amend、squash、reset、revert、tag、switch、clean、配置修改或任何需要改写历史的请求；遇到这些请求时必须说明不处理并停止。
 

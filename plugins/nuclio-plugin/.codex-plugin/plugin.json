@@ -1,16 +1,15 @@
 {
   "name": "nuclio",
-  "description": "面向 Claude Code 与 Codex 的 Nuclio v3 知识初始化与 change 交付：显式调用、结果合同、受控分支、上下文优先且工具无关的有界 Agent 编排、当前验证与可恢复归档。",
+  "description": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Nuclio v3 知识初始化与 change 交付：显式调用、结果合同、受控分支、上下文优先且工具无关的有界 Agent 编排、当前验证与可恢复归档。",
   "version": "5.3.3",
   "author": {
-    "name": "Jade Liu",
-    "email": "[redacted-email]"
+    "name": "Jade Liu"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Nuclio",
     "shortDescription": "建立项目知识骨架，以可恢复的结果合同驱动交付、验证和归档。",
-    "longDescription": "面向 Claude Code 与 Codex 的 Nuclio v3 知识初始化与 change 交付：显式调用、结果合同、受控分支、上下文优先且工具无关的有界 Agent 编排、当前验证与可恢复归档。",
+    "longDescription": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Nuclio v3 知识初始化与 change 交付：显式调用、结果合同、受控分支、上下文优先且工具无关的有界 Agent 编排、当前验证与可恢复归档。",
     "developerName": "Jade Liu",
     "category": "Developer Tools",
     "capabilities": [
@@ -18,7 +17,7 @@
       "Write"
     ],
     "defaultPrompt": [
-      "显式使用 Nuclio work 处理当前项目的一个变更。"
+      "显式使用 Nuclio work 处理当前项目的一个变更，并按当前宿主读取对应资源。"
     ]
   }
 }

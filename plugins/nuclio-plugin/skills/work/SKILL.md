@@ -5,15 +5,15 @@ disable-model-invocation: true
 ---
 # Nuclio Work
 
-`/nuclio:work` 只能由用户显式调用。宿主主会话是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`。主会话按本技能的条件性积极委派合同决定直接执行或使用宿主原生代理；被委派代理只完成有界工作，不调用 Skill、不继续委派，也不接管 Runtime 状态。
+`/nuclio:work`（DSH 为 `/nuclio-work`，Codex 为 `$nuclio:work`）只能由用户显式调用。宿主主会话是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`。主会话按本技能的条件性积极委派合同决定直接执行或使用宿主原生代理；被委派代理只完成有界工作，不调用 Skill、不继续委派，也不接管 Runtime 状态。
 
 ## Plan Mode 边界
 
-从显式调用开始直到完成或停止，Shape、Build、Verify 和 Finish 始终在当前模式执行，不得调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若调用开始时已处于 Claude Code Plan Mode 或 Codex Plan mode，立即 fail closed：不创建或恢复 change、不进行 Git 分支检查或创建、不调用 Runtime、不自行调用 `ExitPlanMode`；报告阻塞，并要求用户先退出 Plan Mode 后重新显式调用 `/nuclio:work`。
+从显式调用开始直到完成或停止，Shape、Build、Verify 和 Finish 始终在当前模式执行，不得调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若调用开始时已处于 Claude Code Plan Mode 或 Codex Plan mode，立即 fail closed：不创建或恢复 change、不进行 Git 分支检查或创建、不调用 Runtime、不自行调用 `ExitPlanMode`；报告阻塞，并要求用户先退出 Plan Mode 后重新显式调用当前宿主入口（Claude `/nuclio:work`、Codex `$nuclio:work`、DSH `/nuclio-work`）。
 
 ## 宿主与路径
 
-通过上述模式边界后，先读取 [宿主适配](../../references/host-runtime.md)，固定本次 `NUCLIO_SKILL_DIR` 与 `NUCLIO_PROJECT_DIR` 的绝对路径并选择当前宿主的确认/委派方式；后续命令中的变量是路径记号，必须在每次调用中落实。
+通过上述模式边界后，先读取 [宿主适配](../../references/host-runtime.md)，固定本次 `NUCLIO_SKILL_DIR` 与 `NUCLIO_PROJECT_DIR` 的绝对路径并选择当前宿主的确认/委派方式；DSH 通过 bundle provider 的 `resourceBase.path` 定位 `NUCLIO_SKILL_DIR`，不会把 bundle 安装目录当作项目根目录；后续命令中的变量是路径记号，必须在每次调用中落实。
 
 路径解析后，第一条针对目标项目的命令必须是下述调用起点快照。普通项目目录清单、workflow 等阶段 reference 和问题调查均后置；不能先读项目再补记起点。
 

@@ -1,2 +1,36 @@
+# Local agent state and generated files
 .claude/
+.skill-forge/
+.dsh/
 __pycache__/
+*.py[cod]
+
+# JavaScript package manager output
+node_modules/
+.npm-cache/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.local.json
+*.local.yaml
+*.local.yml
+*.secret
+*.token
+credentials.json
+secrets.json
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+
+# OS files
+.DS_Store
+Thumbs.db

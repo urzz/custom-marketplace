@@ -5,7 +5,7 @@
 ## 1. 项目定位与版本证据
 
 - **研究对象**：`https://github.com/mattpocock/skills`
-- **本地克隆路径**：`[redacted-local-path]/.claude/jobs/00bd17fd/tmp/nuclio-mattpocock-skills-research`
+- **本地克隆路径**：已在本地研究副本中核查；具体路径不纳入公开文档
 - **默认分支**：`main`
 - **分析 HEAD**：`9603c1cc8118d08bc1b3bf34cf714f62178dea3b`
 - **盘点范围**：README、Claude Code plugin manifest、promoted skills、非 promoted buckets、skill-local references/templates、dev-only scripts、项目 ADR、changeset 元数据与 package scripts；README 只作为入口索引，核心结论均回查实际文件。

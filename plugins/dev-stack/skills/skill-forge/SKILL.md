@@ -1,12 +1,12 @@
 ---
 name: skill-forge
-description: Use when explicitly creating, modifying, optimizing, or auditing Claude Code or Codex skills, including SKILL.md, supporting references/scripts/assets, plugin agents, trigger behavior, and skill validation.
+description: Use when explicitly creating, modifying, optimizing, or auditing Claude Code, Codex, or DeepSeek Harness skills, including SKILL.md, supporting references/scripts/assets, plugin agents, trigger behavior, and skill validation.
 disable-model-invocation: true
 ---
 
 # Skill Forge
 
-为 Claude Code、Codex 或两者共用的目标创建、修改和审查 Skill。先通过需求澄清理解真实问题，再用 Spec、Plan、确定性验证和按需行为评测完成工作；不要把普通 Skill 维护扩张为通用软件交付状态机。
+为 Claude Code、Codex、DeepSeek Harness 或多宿主共用的目标创建、修改和审查 Skill。先通过需求澄清理解真实问题，再用 Spec、Plan、确定性验证和按需行为评测完成工作；不要把普通 Skill 维护扩张为通用软件交付状态机。
 
 ## Contents
 
@@ -51,7 +51,7 @@ CHANGE_AUDIT 以用户指定范围为入口，并读取直接受影响的稳定�
 ### 1. Discovery 与需求澄清
 
 1. 读取适用的仓库规则和目标 Skill 结构。
-2. CREATE 明确目标平台（Claude Code、Codex 或双平台）、用户问题、目标用户、最小能力、输入、输出、触发边界、副作用和验证方式。
+2. CREATE 明确目标平台（Claude Code、Codex、DeepSeek Harness 或多平台）、用户问题、目标用户、最小能力、输入、输出、触发边界、副作用和验证方式。
 3. MODIFY 读取目标 `SKILL.md`、直接引用的 supporting files、相关 scripts/tests、插件级 agents、metadata 和同步文档；区分根因与表面症状，明确必须保持的行为。
 4. 把 review 或设计文档当作输入，用当前源码和可执行检查验证；不要把旧结论直接当成当前事实。
 5. 读取 [需求澄清协议](references/clarification.md)。默认使用 Focused；用户说 `grill me`、要求苏格拉底式追问，或存在会改变架构、权限、副作用或验收的重大不确定性时使用 Grill。

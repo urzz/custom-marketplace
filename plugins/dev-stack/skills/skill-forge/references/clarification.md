@@ -75,7 +75,7 @@ Grill 通过更多对话轮次获得更可靠的 Spec，但仍遵守一次一个
 CREATE 重点确认：
 
 - 用户真正要解决的问题；
-- 目标平台（Claude Code、Codex 或双平台）、目标用户与使用场景；
+- 目标平台（Claude Code、Codex、DeepSeek Harness 或多平台）、目标用户与使用场景；
 - 是否确实需要 Skill；
 - 最小能力、触发边界、输出和副作用；
 - supporting resources 是否真正需要复用。

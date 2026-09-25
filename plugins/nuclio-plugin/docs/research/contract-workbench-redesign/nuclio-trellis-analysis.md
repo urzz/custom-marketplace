@@ -5,7 +5,7 @@
 ## 1. 项目定位与版本证据
 
 - **研究对象**：`https://github.com/mindfold-ai/trellis`
-- **本地克隆路径**：`[redacted-local-path]/.claude/jobs/00bd17fd/tmp/nuclio-trellis-research`
+- **本地克隆路径**：已在本地研究副本中核查；具体路径不纳入公开文档
 - **默认分支**：`origin/main`
 - **分析 HEAD**：`51a5674ce6ce5a12cb585c5dcb21e7b76a51bdbc`
 - **盘点范围**：CLI 入口、`.trellis/` dogfood 实例、平台 hooks、agent/command prompt、task/workspace scripts、模板源、channel runtime 源码；README 只用作入口索引，下面主张均回查实际文件。
@@ -235,4 +235,4 @@ Trellis 的简洁性并非只来自更少文件，而来自三种取舍：
 - 已对关键主张回查本地克隆仓库文件，并使用记录的 SHA 构造 GitHub permalink。
 - Mermaid fence 共 2 组，均为 ` ```mermaid ` 与 ` ``` ` 成对。
 - 本报告没有把 README 叙述当作已验证实现；主要证据来自 `.trellis/` dogfood 文件、CLI source、hook scripts、agent/command templates。
-- 外部源码只位于 `[redacted-local-path]/.claude/jobs/00bd17fd/tmp/nuclio-trellis-research`，未写入当前仓库。
+- 外部源码仅存在于本地研究副本，未写入当前仓库。

@@ -1,21 +1,25 @@
-# Claude Code 与 Codex 兼容性
+# Claude Code、Codex 与 DSH 兼容性
 
-本仓库提供两端原生 Marketplace 入口，共用 2 个插件、5 个技能和确定性脚本。支持范围是本地/Git Marketplace 分发；OpenAI 公共目录上架属于单独的发布工作。
+本仓库提供 Claude Code、Codex 两端原生 Marketplace 入口，并提供 DeepSeek Harness 的根级 bundle，共用 2 个插件、5 个技能和确定性脚本。Claude Code/Codex 支持范围是本地/Git Marketplace 分发；OpenAI 公共目录上架属于单独的发布工作。
 
 ## 格式与行为映射
 
-| 项目 | Claude Code | Codex |
-|---|---|---|
-| Marketplace | `.claude-plugin/marketplace.json` | `.agents/plugins/marketplace.json` |
-| 本地 source | `"./plugins/…"` | `{"source":"local","path":"./plugins/…"}`，相对仓库根目录 |
-| 插件清单 | `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` |
-| 技能入口 | `/plugin:skill` | `$plugin:skill`；可从 `/skills` 选择 |
-| 显式调用控制 | `disable-model-invocation: true` | `agents/openai.yaml` 的 `allow_implicit_invocation: false` |
-| 技能目录 | `CLAUDE_SKILL_DIR` | 实际加载的 `SKILL.md` 目录 |
-| 项目目录 | 用户指定目录或 `CLAUDE_PROJECT_DIR` | 用户指定目录或宿主会话项目目录 |
-| 用户确认 | 原生 `AskUserQuestion` | 对话中等待明确回复，或宿主明确允许的确认工具 |
-| 子代理 | 原生 Agent / 插件 `agents/*.md` | 当前宿主的原生子代理，共用角色合同 |
-| 项目维护规则 | `CLAUDE.md` 引用 `AGENTS.md` | `AGENTS.md` |
+| 项目 | Claude Code | Codex | DeepSeek Harness |
+|---|---|---|---|
+| Marketplace | `.claude-plugin/marketplace.json` | `.agents/plugins/marketplace.json` | 根 `package.json` 的 `dsh.bundle.patch` |
+| 本地 source | `"./plugins/…"` | `{"source":"local","path":"./plugins/…"}`，相对仓库根目录 | 绝对路径 `link:` spec 指向 bundle 根目录 |
+| 插件清单 | `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` | provider 读取两者，优先 Codex 清单 |
+| 技能入口 | `/plugin:skill` | `$plugin:skill`；可从 `/skills` 选择 | `/<plugin>-<skill>`，例如 `/nuclio-work` |
+| 显式调用控制 | `disable-model-invocation: true` | `agents/openai.yaml` 的 `allow_implicit_invocation: false` | provider 映射为 `modelInvocable: false`，保留 `userInvocable: true` |
+| 技能目录 | `CLAUDE_SKILL_DIR` | 实际加载的 `SKILL.md` 目录 | provider 返回 `resourceBase` 为技能目录 |
+| 项目目录 | 用户指定目录或 `CLAUDE_PROJECT_DIR` | 用户指定目录或宿主会话项目目录 | DSH 当前会话工作目录；skill 正文要求显式落实项目根 |
+| 用户确认 | 原生 `AskUserQuestion` | 对话中等待明确回复，或宿主明确允许的确认工具 | 使用 DSH 当前 profile 的确认能力，不由 bundle 放宽权限 |
+| 子代理 | 原生 Agent / 插件 `agents/*.md` | 当前宿主的原生子代理，共用角色合同 | 使用 DSH 原生 subagent 能力；bundle 不安装代理配置 |
+| 项目维护规则 | `CLAUDE.md` 引用 `AGENTS.md` | `AGENTS.md` | bundle 内共享 `AGENTS.md` |
+
+DSH adapter 的实现位于 [dsh/index.mjs](../dsh/index.mjs)。它动态扫描安装 bundle 中的 `plugins/*/skills/*/SKILL.md`，从两端插件清单取得插件标识，注册 `<plugin>-<skill>` 名称，并把技能目录作为 `resourceBase`。它会监听 `add`、`change`、`unlink`，通过 `SkillProviderControl.invalidate()` 让 DSH 重新读取目录；GitHub 安装的 bundle 内容在更新/重新安装前保持版本快照。
+
+当前 DSH 验证边界是：provider 的发现、命名空间、frontmatter 调用策略、相对资源基准、增删改刷新和重复名称处理已有本地测试；尚未修改任何个人 DSH profile，也尚未把该 bundle 装入目标 profile 做真实 UI/会话 smoke。因此在完成该 profile smoke 前，不把 DSH 兼容性写成与两端原生插件校验同等级的最终通过。
 
 技能内的任务路径变量只是已解析路径的记号，不是 Codex 自动注入的环境变量。每次执行需使用实际绝对路径或在同一次 shell 调用内赋值。Nuclio 不因进入 Git 子目录而静默改变项目边界；从子目录启动且要管理顶层项目时，应明确提供顶层项目路径。
 
@@ -49,7 +53,7 @@ Claude agent frontmatter 的工具限制不自动适用于 Codex。Claude 的 Nu
 
 ## 行为用例
 
-Nuclio 的完整场景位于 `plugins/nuclio-plugin/references/eval-prompts.md`，在两个宿主各执行一次；Codex 将 `/nuclio:*` 换成 `$nuclio:*`。
+Nuclio 的完整场景位于 `plugins/nuclio-plugin/references/eval-prompts.md`，在目标宿主分别执行；Codex 将 `/nuclio:*` 换成 `$nuclio:*`，DSH 将其换成 `/nuclio-init` 与 `/nuclio-work`。
 
 重点验证：
 

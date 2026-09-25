@@ -1,0 +1,4 @@
+# 将 Marketplace 内的技能注册到 DSH 的 skill registry。
+- insert:
+    - id: jade-tools-marketplace-skills
+      name: jade-tools-cc-marketplace

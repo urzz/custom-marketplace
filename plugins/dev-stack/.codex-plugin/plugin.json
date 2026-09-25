@@ -1,16 +1,15 @@
 {
   "name": "dev-stack",
-  "description": "面向 Claude Code 与 Codex 的 Skill 创建、修改和只读审查，以及安全的单次 Conventional Commit 与普通推送。",
+  "description": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Skill 创建、修改和只读审查，以及安全的单次 Conventional Commit 与普通推送。",
   "version": "0.5.0",
   "author": {
-    "name": "Jade Liu",
-    "email": "[redacted-email]"
+    "name": "Jade Liu"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "开发工具集",
-    "shortDescription": "创建和维护双平台技能，检查改动并安全提交或推送当前分支。",
-    "longDescription": "面向 Claude Code 与 Codex 的 Skill 创建、修改和只读审查，以及安全的单次 Conventional Commit 与普通推送。",
+    "shortDescription": "创建和维护多宿主技能，检查改动并安全提交或推送当前分支。",
+    "longDescription": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Skill 创建、修改和只读审查，以及安全的单次 Conventional Commit 与普通推送。",
     "developerName": "Jade Liu",
     "category": "Developer Tools",
     "capabilities": [
@@ -18,7 +17,7 @@
       "Write"
     ],
     "defaultPrompt": [
-      "使用 skill-forge 为 Claude Code 和 Codex 创建一个代码审查技能。"
+      "使用 skill-forge 为 Claude Code、Codex 和 DeepSeek Harness 创建一个代码审查技能。"
     ]
   }
 }

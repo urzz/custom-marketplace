@@ -40,7 +40,7 @@
 
 ## 目标平台
 
-[Claude Code、Codex 或双平台；说明与当前执行宿主的关系，以及显式/自动调用策略]
+[Claude Code、Codex、DeepSeek Harness 或多平台；说明与当前执行宿主的关系，以及显式/自动调用策略]
 
 ## 当前问题
 
