@@ -34,7 +34,7 @@ class MarketplaceContracts(unittest.TestCase):
 
     def test_current_package_and_existing_invocation_policies(self):
         self.assertEqual(validate(self.root), {"plugins": 2, "skills": 5})
-        explicit = {"skill-forge", "init", "work"}
+        explicit = {"skill-forge", "init"}
         for path in self.root.glob("plugins/*/skills/*/SKILL.md"):
             metadata = frontmatter(path)
             policy = read_object(path.parent / "agents/openai.yaml")["policy"]
@@ -71,7 +71,7 @@ class MarketplaceContracts(unittest.TestCase):
 
     def test_implicit_invocation_drift_fails(self):
         path = self.root / "plugins/nuclio-plugin/skills/work/agents/openai.yaml"
-        path.write_text(path.read_text().replace("allow_implicit_invocation: false", "allow_implicit_invocation: true"))
+        path.write_text(path.read_text().replace("allow_implicit_invocation: true", "allow_implicit_invocation: false"))
         with self.assertRaisesRegex(Invalid, "调用策略"):
             validate(self.root)
 

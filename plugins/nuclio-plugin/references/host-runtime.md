@@ -8,7 +8,8 @@
 |---|---|---|
 | 初始化 | `/nuclio:init` | `$nuclio:init` |
 | 交付 | `/nuclio:work` | `$nuclio:work` |
-| 显式调用策略 | frontmatter `disable-model-invocation: true` | `agents/openai.yaml` 中 `policy.allow_implicit_invocation: false` |
+| init 调用策略 | frontmatter `disable-model-invocation: true` | `agents/openai.yaml` 中 `policy.allow_implicit_invocation: false` |
+| work 调用策略 | 不设置 `disable-model-invocation`，允许模型和用户调用 | `agents/openai.yaml` 中 `policy.allow_implicit_invocation: true` |
 | 结果合同与知识决定 | `AskUserQuestion` | 在对话中展示合同或知识候选，等待用户明确回复；也可使用宿主明确允许用于确认的交互工具 |
 
 文档中的 `/nuclio:init`、`/nuclio:work` 表示对应工作流，在 Codex 使用表中的 `$` 入口。默认选项、等待超时、工具返回空答案均不是确认。需要确认时停止依赖该决定的动作，明确回复到达后才继续。`request_user_input` 若仅在 Plan Mode 可用，不为提问而切换模式。

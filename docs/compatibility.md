@@ -10,7 +10,7 @@
 | 本地 source | `"./plugins/…"` | `{"source":"local","path":"./plugins/…"}`，相对仓库根目录 | 绝对路径 `link:` spec 指向 bundle 根目录 |
 | 插件清单 | `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` | provider 读取两者，优先 Codex 清单 |
 | 技能入口 | `/plugin:skill` | `$plugin:skill`；可从 `/skills` 选择 | `/<plugin>-<skill>`，例如 `/nuclio-work` |
-| 显式调用控制 | `disable-model-invocation: true` | `agents/openai.yaml` 的 `allow_implicit_invocation: false` | provider 映射为 `modelInvocable: false`，保留 `userInvocable: true` |
+| 技能调用控制 | `init` 使用 `disable-model-invocation: true`；`work` 不设置该字段 | `init` 使用 `allow_implicit_invocation: false`；`work` 使用 `allow_implicit_invocation: true` | `init` 映射为 `modelInvocable: false`；`work` 映射为 `modelInvocable: true`；两者均保留 `userInvocable: true` |
 | 技能目录 | `CLAUDE_SKILL_DIR` | 实际加载的 `SKILL.md` 目录 | provider 返回 `resourceBase` 为技能目录 |
 | 项目目录 | 用户指定目录或 `CLAUDE_PROJECT_DIR` | 用户指定目录或宿主会话项目目录 | DSH 当前会话工作目录；skill 正文要求显式落实项目根 |
 | 用户确认 | 原生 `AskUserQuestion` | 对话中等待明确回复，或宿主明确允许的确认工具 | 使用 DSH 当前 profile 的确认能力，不由 bundle 放宽权限 |
@@ -47,9 +47,9 @@ Claude agent frontmatter 的工具限制不自动适用于 Codex。Claude 的 Nu
 
 ### 本地插件与公共目录 ingestion
 
-双平台技能保留 Claude 的 `disable-model-invocation: true`，并独立声明 Codex 的 `allow_implicit_invocation: false`。本地 Codex CLI 能读取这份共享技能。当前内置 plugin-creator 的 `validate_plugin.py` 面向 ingestion，拒绝 `disable-model-invocation: true`；skill-creator 的 `quick_validate.py` 也不接受这个 Claude 扩展字段。
+双平台技能对 `init` 与 `skill-forge` 保留显式调用限制；`work` 不设置 Claude 的 `disable-model-invocation`，并在 Codex 中设置 `allow_implicit_invocation: true`，允许模型根据 change 请求调用。本地 Codex CLI 能读取这份共享技能。当前内置 plugin-creator 的 `validate_plugin.py` 面向 ingestion，拒绝 `disable-model-invocation: true`；skill-creator 的 `quick_validate.py` 也不接受这个 Claude 扩展字段。
 
-因此这两个外部校验器对 3 个显式调用技能的拒绝不能被写成 PASS，也不能通过删除 Claude 字段来规避。当前使用本仓库合同校验和两端原生加载证明本地兼容性。若今后要求公共目录上架，需要另行确认发布渠道的调用策略，并生成符合该渠道要求的发布包；本次不声称公共目录校验通过。
+因此这两个外部校验器对 2 个显式调用技能的拒绝不能被写成 PASS，也不能通过删除 Claude 字段来规避。当前使用本仓库合同校验和两端原生加载证明本地兼容性。若今后要求公共目录上架，需要另行确认发布渠道的调用策略，并生成符合该渠道要求的发布包；本次不声称公共目录校验通过。
 
 ## 行为用例
 
@@ -59,8 +59,8 @@ Nuclio 的完整场景位于 `plugins/nuclio-plugin/references/eval-prompts.md`�
 
 1. 显式 init 只在给定项目建立知识骨架；已有正文保持完整，插件缓存只读。
 2. 无 active change 且起点 dirty 的 work 停止；存在唯一 active change 时按 ID 读取恢复，不因 dirty 提前阻断 discovery。
-3. Plan mode 中显式调用 init/work 不写骨架、不查询 Runtime、不创建分支，并要求退出后重新调用。
-4. 普通功能请求不隐式运行 3 个仅显式调用技能；明确 commit-only 请求不执行 push。
+3. Plan mode 中调用 init/work 不写骨架、不查询 Runtime、不创建分支，并要求退出后重新调用。
+4. 普通功能请求不隐式运行 `init` 与 `skill-forge`；`work` 仅在识别到 change 请求时调用，明确 commit-only 请求不执行 push。
 5. Skill Forge 在 Codex 中维护 Claude Code 目标、在 Claude Code 中创建 Codex 目标，保留目标平台和调用策略。
 6. 无可用代理时顺序实施；无有效只读代理权限时，不以普通子代理冒充独立 reviewer。
 7. 分别从插件源码、含空格的缓存路径及不同工作目录调用共享 Python helper，产物只落在显式项目中。

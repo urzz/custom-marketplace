@@ -12,7 +12,7 @@
 | `nuclio` / `5.3.3` | `/nuclio:init` | `$nuclio:init` | `/nuclio-init` | 创建或安全修复 `.dev-docs` 知识骨架 |
 | `nuclio` / `5.3.3` | `/nuclio:work` | `$nuclio:work` | `/nuclio-work` | 创建、恢复、验证和归档一个 change |
 
-`skill-forge` 与 Nuclio 的对应技能仅显式调用。commit 系列保留自动发现，实际暂存、提交和推送仍遵守各自的用户请求与授权合同。DSH 名称使用插件前缀，避免不同插件的同名 skill 发生冲突。
+`skill-forge` 与 Nuclio 的 `init` 仅显式调用；Nuclio 的 `work` 可由模型根据 change 请求自动调用。commit 系列保留自动发现，实际暂存、提交和推送仍遵守各自的用户请求与授权合同。DSH 名称使用插件前缀，避免不同插件的同名 skill 发生冲突。
 
 ## 安装
 
@@ -54,7 +54,7 @@ DeepSeek Harness：
 
 **Nuclio v3 5.3.3** 共用七命令 Runtime，active change 和新 archive 都保留 `change.md`、`delivery.yaml`、`state.yaml`。在另一宿主恢复时继续读取同一份文件，无需转换状态；DSH provider 只负责发现并加载共享正文，项目路径和 Runtime 边界仍按宿主适配落实。
 
-Nuclio 在 Claude Code Plan Mode、Codex Plan mode 或 DSH 当前 profile 的等价计划模式中均停止并要求退出后重新显式调用。普通模式下，work 在 discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。唯一 active change 按 ID 恢复，多个候选报告歧义；仅无 active change 且需要新建时才要求起点 attached 且 clean，并在只读 Shape 后完成分支/HEAD/工作区及全部已配置 remote 的缓存 remote-tracking refs 检查，创建受控新分支，再进行 post-switch 复核与 Runtime create。
+Nuclio 在 Claude Code Plan Mode、Codex Plan mode 或 DSH 当前 profile 的等价计划模式中均停止并要求退出后重新调用。普通模式下，work 在 discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。唯一 active change 按 ID 恢复，多个候选报告歧义；仅无 active change 且需要新建时才要求起点 attached 且 clean，并在只读 Shape 后完成分支/HEAD/工作区及全部已配置 remote 的缓存 remote-tracking refs 检查，创建受控新分支，再进行 post-switch 复核与 Runtime create。
 
 用户确认结果合同后，主会话管理交付与检查。每个 Shape 调查和 Build/返修工作包开始前，主会话按独立性、上下文隔离收益与协调成本决定直接执行或条件性积极委派，由模型自主选择拆分；多文件调查、大输出诊断和可独立验收轨道在有收益时积极委派，单文件小改、紧密依赖或共享资源争用时直接处理，不机械要求 agent-first。实际委派形成可独立验收的工作包；活动期间产品路径和诊断主题对主会话排他，调查与实施代理（含返修）仅作最多 15 行的五字段结构化回传，独立 reviewer 使用专用审查格式，不套用该字段或行数限制。依赖结果时使用宿主原生完成通知或等待，失败则优先按实际能力继续原线程（resume），无法继续或工作包不再适合时才缩小/重切或重新委派。
 

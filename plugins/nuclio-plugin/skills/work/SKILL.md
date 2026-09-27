@@ -1,15 +1,14 @@
 ---
 name: work
-description: "仅在用户显式要求以 Nuclio v3 创建、恢复或交付一个 change 时使用；可按项目绑定读取 Open Design 设计交付。"
-disable-model-invocation: true
+description: "在需要以 Nuclio v3 创建、恢复或交付一个 change 时使用；可按项目绑定读取 Open Design 设计交付。"
 ---
 # Nuclio Work
 
-`/nuclio:work`（DSH 为 `/nuclio-work`，Codex 为 `$nuclio:work`）只能由用户显式调用。宿主主会话是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`。主会话按本技能的条件性积极委派合同决定直接执行或使用宿主原生代理；被委派代理只完成有界工作，不调用 Skill、不继续委派，也不接管 Runtime 状态。
+`/nuclio:work`（DSH 为 `/nuclio-work`，Codex 为 `$nuclio:work`）既可由用户显式调用，也可由模型根据用户的 change 请求调用。宿主主会话是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`。主会话按本技能的条件性积极委派合同决定直接执行或使用宿主原生代理；被委派代理只完成有界工作，不调用 Skill、不继续委派，也不接管 Runtime 状态。
 
 ## Plan Mode 边界
 
-从显式调用开始直到完成或停止，Shape、Build、Verify 和 Finish 始终在当前模式执行，不得调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若调用开始时已处于 Claude Code Plan Mode 或 Codex Plan mode，立即 fail closed：不创建或恢复 change、不进行 Git 分支检查或创建、不调用 Runtime、不自行调用 `ExitPlanMode`；报告阻塞，并要求用户先退出 Plan Mode 后重新显式调用当前宿主入口（Claude `/nuclio:work`、Codex `$nuclio:work`、DSH `/nuclio-work`）。
+从调用开始直到完成或停止，Shape、Build、Verify 和 Finish 始终在当前模式执行，不得调用 Claude Code 的 `EnterPlanMode` 或 `ExitPlanMode`。若调用开始时已处于 Claude Code Plan Mode 或 Codex Plan mode，立即 fail closed：不创建或恢复 change、不进行 Git 分支检查或创建、不调用 Runtime、不自行调用 `ExitPlanMode`；报告阻塞，并要求用户先退出 Plan Mode 后重新调用当前宿主入口（Claude `/nuclio:work`、Codex `$nuclio:work`、DSH `/nuclio-work`）。
 
 ## 宿主与路径
 

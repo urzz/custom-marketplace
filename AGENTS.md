@@ -73,8 +73,8 @@ plugins/nuclio-plugin/scripts/{change.py,test_change.py,test_static_plugin.py}
 
 `docs/research/` 仅是历史设计输入，不是 Runtime 权威。维护时遵守以下边界：
 
-- `/nuclio:init` 与 `/nuclio:work` 都只能由用户显式调用；init 只在 `${NUCLIO_PROJECT_DIR}/.dev-docs/` 创建或安全修复知识骨架后停止，普通 change 只通过 work。
-- 两个 Skill 始终在调用开始时的当前模式内运行，不调用 `EnterPlanMode` 或 `ExitPlanMode`；若调用时已处于 Claude Code Plan Mode 或 Codex Plan mode，则立即停止，不创建或恢复 change、不执行 Runtime，并要求用户退出后重新显式调用。`delivery.yaml` milestone 不等于宿主 Plan Mode。
+- `/nuclio:init` 只能由用户显式调用；它只在 `${NUCLIO_PROJECT_DIR}/.dev-docs/` 创建或安全修复知识骨架后停止。`/nuclio:work` 可由用户显式调用，也可由模型根据 change 请求调用，普通 change 只通过 work。
+- 两个 Skill 始终在调用开始时的当前模式内运行，不调用 `EnterPlanMode` 或 `ExitPlanMode`；若调用时已处于 Claude Code Plan Mode 或 Codex Plan mode，则立即停止，不创建或恢复 change、不执行 Runtime，并要求用户退出后重新调用对应入口。`delivery.yaml` milestone 不等于宿主 Plan Mode。
 - active change 与新 archive 都完整保留 `change.md`、`delivery.yaml`、`state.yaml`。主会话是唯一控制器；`change.py` 是唯一 State writer，只提供 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令。
 - `/nuclio:work` 通过 Plan Mode 边界后、discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。恢复唯一 active change 不创建或切换分支，多个 active 仍 fail closed；仅无 active change 且需要新建时才要求调用起点为 attached 且无 staged、unstaged、untracked 改动。
 - 无 active change 时，主会话只读完成 Shape 调查、确定合法 `<change-id>` 与 `feat|fix|refactor|docs|test|chore` 类型（无法明确时为 `feat`）后，复核 branch/HEAD 未漂移、当前仍 clean、本地 `refs/heads/...` 与全部本地配置 remote 的缓存 remote-tracking `refs/remotes/<remote>/...` 无精确冲突；只读本地 Git metadata，不 `fetch`、`ls-remote`、联网或刷新 refs。全部通过后执行 `git -C "${NUCLIO_PROJECT_DIR}" switch -c <type>/<change-id> <start-head>`；只有 post-switch 的 branch、HEAD、clean 和 remote-ref 二次校验成功才调用 `create`。

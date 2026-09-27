@@ -116,7 +116,7 @@
 
 - **Setup**：当前宿主已处于 Plan Mode（Claude Code 与 Codex 分别运行）。
 - **User Prompt**：`/nuclio:work 修复登录回跳并补测试`，或 `/nuclio:init 为这个项目建立 Nuclio 文档骨架`。
-- **Expected**：立即 fail closed，要求用户先退出 Plan Mode 后重新显式调用对应 Nuclio Skill。
+- **Expected**：立即 fail closed，要求用户先退出 Plan Mode 后重新调用对应 Nuclio Skill。
 - **Assertions**：不调用 `EnterPlanMode` 或 `ExitPlanMode`；work 不做调用起点 snapshot、不创建或恢复 change、不调用 Runtime、不检查或创建分支；init 不做 snapshot/分支操作，也不写入知识骨架。
 
 ## Boundary checks

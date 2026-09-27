@@ -76,12 +76,15 @@ class V3RuntimeContracts(unittest.TestCase):
 
 
 class HostContracts(unittest.TestCase):
-    def test_skills_are_explicit_and_work_uses_portable_paths(self):
-        for path, name in ((INIT, "init"), (WORK, "work")):
-            metadata = frontmatter(path)
-            self.assertIn(f"name: {name}", metadata)
-            self.assertIn("disable-model-invocation: true", metadata)
-            self.assertIn("只能由用户显式调用", read(path))
+    def test_skill_invocation_policies_and_work_uses_portable_paths(self):
+        init_metadata = frontmatter(INIT)
+        self.assertIn("name: init", init_metadata)
+        self.assertIn("disable-model-invocation: true", init_metadata)
+        self.assertIn("只能由用户显式调用", read(INIT))
+        work_metadata = frontmatter(WORK)
+        self.assertIn("name: work", work_metadata)
+        self.assertNotIn("disable-model-invocation", work_metadata)
+        self.assertIn("既可由用户显式调用，也可由模型根据用户的 change 请求调用", read(WORK))
         work = read(WORK)
         self.assertIn('"${NUCLIO_SKILL_DIR}/../../scripts/change.py"', work)
         self.assertIn('"${NUCLIO_PROJECT_DIR}"', work)
