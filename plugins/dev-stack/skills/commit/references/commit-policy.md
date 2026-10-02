@@ -1,6 +1,6 @@
 # 提交策略与执行合同
 
-本文定义 commit skill 的 provisional message/intent、最终消息生成、授权、选择性暂存、单次提交、失败处理和结果验证合同。调用方必须先完成逐路径分类、provisional message/intent 与授权判定；本文不链接其他 reference，也不授权修改工作树内容。最终 Conventional Commit 的 type、scope、summary 与 body 的唯一语义来源是完成选择性暂存并重新验证 index 边界后读取的最终 staged diff。
+本文定义 commit skill 的 provisional message/intent、最终消息生成、授权、选择性暂存、单次提交、失败处理和结果验证合同。调用方必须先完成逐路径分类、provisional message/intent 与授权判定；本文不链接其他 reference，也不授权修改工作树内容。普通安全变更在 `default-auto` 下由用户调用本 skill 直接授权本地 staging 和一次 commit；不需要为重复展示路径、消息或“是否继续”额外询问。风险路径必须被隔离并报告，不能因为它们存在就扩大授权。最终 Conventional Commit 的 type、scope、summary 与 body 的唯一语义来源是完成选择性暂存并重新验证 index 边界后读取的最终 staged diff。
 
 ## Contents
 
@@ -32,12 +32,12 @@
 
 授权判定必须在分类与 provisional message/intent 形成后、任何 Git mutation 前完成。此时只授权 exact include set 与语义边界，不授权最终 commit message；最终 authorized message 必须在 index 固定后仅由最终 staged diff 生成。
 
-- `default-auto`：仅当 eligibility 全部满足、mandatory-stop 为空、include 非空、uncertain 为空、状态/diff/分类证据新鲜且 provisional message/intent 可信时，才授权 exact include set 与 provisional 语义边界；自动模式不是风险接受。
+- `default-auto`：只要本轮有至少一个安全 `include`、整体状态和证据新鲜、provisional intent 可由变更支持，就授权该安全 exact include set 与语义边界。`uncertain`、风险和 deferred 路径不进入授权集合；它们无需先得到用户确认。自动模式不是风险接受，也不得把风险路径纳入提交。
 - 显式 `preview/approval-only`：必须在 Git mutation 前等待用户批准 exact include set 与 provisional message/intent 的语义边界；模糊同意、只批准消息或只批准路径均不足以执行。
 - 显式 `analysis-only`：禁止 staging、commit 或任何 Git mutation；只能输出分析、provisional message/intent、eligibility 与安全下一步。
 - 授权失效：状态、diff、分类、provisional message/intent、eligibility 或用户风险裁定发生变化时，现有授权立即失效，必须回到分析、provisional message/intent 形成与授权判定。
-- 最终消息漂移：final message 若与已批准语义边界不一致，必须停止并重新进入所需的人类裁定；不得静默扩大语义或把用户描述补入最终消息。
-- 资格失败或 mandatory-stop：必须停止在 Human-in-the-Loop，报告失败证据和最小裁定问题；不得部分自动执行或扩大授权范围。
+- 最终消息漂移：preview/approval-only 下 final message 若超出已批准语义边界，必须停止并重新进入所需的人类裁定；default-auto 下 provisional intent 只是候选边界提示，final message 可由最终 staged diff 完成措辞，但不得超出 authorized include set 或引入风险语义。不得把用户描述补入最终消息。
+- 资格失败或 workflow-level mandatory-stop：停止在 Human-in-the-Loop，报告失败证据和最小裁定问题；路径级风险应隔离后继续安全子集，不得扩大授权范围。
 
 ## Git 安全合同
 
@@ -55,21 +55,22 @@
 ## 选择性暂存流程
 
 1. 在暂存前记录执行前 HEAD、execution mode、authorized include set 与已批准语义边界；不得把 provisional message/intent 记录为最终 authorized message。
-2. 对 authorized include set 按路径执行暂存，确保 shell quoting 或 pathspec 处理不会扩大匹配范围。
-3. 对 untracked include 路径，先确认仍存在且仍与授权摘要一致。
-4. 对 delete include 路径，确认删除仍存在于 Git 状态，并用路径级暂存记录删除。
-5. 暂存命令失败时立即停止；不尝试扩大暂存范围，不使用破坏性清理。
+2. 对 authorized include set 中尚未进入 index 的路径按路径执行暂存，确保 shell quoting 或 pathspec 处理不会扩大匹配范围。
+3. 对同时存在 staged 与 unstaged 的路径，若暂存整条路径会越过已识别边界，则不执行该路径的 `git add`，保留现有 index 并把 unstaged 部分列为 deferred；不得用 reset、checkout 或其他命令修改用户已有 index。
+4. 对 untracked include 路径，先确认仍存在且仍与授权摘要一致。
+5. 对 delete include 路径，确认删除仍存在于 Git 状态，并用路径级暂存记录删除。
+6. 暂存命令失败时立即停止；不尝试扩大暂存范围，不使用破坏性清理。
 
 ## Index 边界验证
 
 暂存后必须重新读取 staged paths 与 staged diff，并验证：
 
-- staged path 集合与 authorized include set 完全一致；rename 应按 Git committed path 表示与授权记录对应。
-- staged diff 只包含授权摘要所覆盖的内容，没有混入 exclude、uncertain 或未授权路径。
-- unstaged 中残留的 exclude/uncertain 不影响 index 边界，但必须在最终报告中列出。
+- staged path 集合与 authorized include set 完全一致；对已授权且保留的既有 index，按最终实际提交路径对应授权记录；rename 应按 Git committed path 表示与授权记录对应。
+- staged diff 只包含授权摘要所覆盖的内容，没有混入 exclude、uncertain、deferred 或未授权路径。
+- unstaged 中残留的 exclude/uncertain/deferred 不影响 index 边界，但必须在最终报告中列出。
 - 若路径在授权后发生变化、消失或新增未授权内容，立即停止，不 commit。
 - 边界通过后，才可从最终 staged diff 生成 authorized final Conventional Commit message；该 diff 是 type、scope、summary 与 body 的唯一语义来源。
-- 若最终 staged diff 无法支撑可信消息，或 final message 与已批准语义边界不一致，立即停止并回到所需的人类裁定。
+- 若最终 staged diff 无法支撑可信消息，或 preview/approval-only 的 final message 与已批准语义边界不一致，立即停止并回到所需的人类裁定；default-auto 只检查是否超出 authorized include set 或引入风险语义。
 
 任何边界漂移都不得自动修复为新的提交；必须回到分析与授权。
 
@@ -86,7 +87,7 @@
 3. 新 commit subject 与 authorized final subject 精确一致。
 4. body 存在性与 authorized final body 一致；若有 body，内容不得丢失关键项目符号。
 5. 新 commit 中的路径集合与 authorized include set 一致。
-6. 工作区仍留存的 exclude 与 uncertain 变更被列出，且没有被提交。
+6. 工作区仍留存的 exclude、uncertain 与 deferred 变更被列出，且没有被提交。
 7. 无论 `default-auto` 还是 preview/approval-only，整个工作流只创建一个 Conventional Commit。
 
 只有所有验证满足时，才可报告提交成功。任一验证失败都必须说明不能宣称成功，并提供不一致证据。
@@ -101,8 +102,8 @@
 - body 是否存在。
 - 实际 committed paths。
 - 执行前 HEAD 与执行后 HEAD。
-- 仍留在工作区的 exclude/uncertain 路径。
-- Git truth 验证结论，包括 exact commit count、exact subject/body、exact committed path set，以及 excluded/uncertain 未被提交。
+- 仍留在工作区的 exclude/uncertain/deferred 路径。
+- Git truth 验证结论，包括 exact commit count、exact subject/body、exact committed path set，以及 excluded/uncertain/deferred 未被提交。
 
 停止或失败输出必须包含：
 

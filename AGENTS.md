@@ -52,9 +52,9 @@ dsh/index.mjs
 
 ### commit 与 commit-and-push
 
-- `/commit` 是自包含 Conventional Commit 流程，不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，也不执行 push。
-- `/commit-and-push` 复用 `/commit` 的 references 与完整提交合同，仅在提交 Git truth 验证通过后普通推送当前分支；无 upstream 时只通过既有 `origin` 建立 upstream。
-- 两者的 commit type、scope、summary 与 body 唯一语义来源都是选择性暂存后重新读取的最终 staged diff；未暂存内容不得影响最终消息。
+- `/commit` 是自包含 Conventional Commit 流程，不调用 `/verify`、其他 skill、agent、workflow、MCP、网络或外部服务，也不执行 push；默认对安全候选自动完成一次提交，只有显式预览/分析或 workflow-level 风险才等待确认。
+- `/commit-and-push` 复用 `/commit` 的 references 与完整提交合同，仅在提交 Git truth 验证通过后普通推送当前分支；无 upstream 时只通过既有 `origin` 建立 upstream。显式调用已授权发布当前分支已有的普通 outgoing commits，不为此重复确认。
+- 两者的 commit type、scope、summary 与 body 唯一语义来源都是选择性暂存后重新读取的最终 staged diff；未暂存内容不得影响最终消息，风险和 deferred 路径必须保留在工作区并报告。
 - `/commit-and-push` 禁止 force push、自动处理分叉和历史改写；push 失败时保留本地 commit 并报告部分成功。
 - 两者都不绑定 skill-forge 的 agent/script，不引入 runtime hook、daemon 或本地状态机制。
 

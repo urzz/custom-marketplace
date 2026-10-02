@@ -1,11 +1,11 @@
 ---
 name: commit
-description: Use when the user asks to analyze staged, unstaged, or untracked Git changes, generate a commit message, or safely create exactly one Conventional Commit; it defaults to automatic execution when all safety conditions are satisfied and pauses for human judgment when required.
+description: Use when the user asks to analyze staged, unstaged, or untracked Git changes, generate a commit message, or safely create exactly one Conventional Commit; it automatically commits safe candidates by default and pauses only for explicit preview/analysis or workflow-level safety decisions.
 ---
 
 # Commit
 
-本技能在 Claude Code、Codex 与 DeepSeek Harness 中共用同一提交合同。插件入口分别为 `/dev-stack:commit`、`$dev-stack:commit` 与 `/dev-stack-commit`；相对 references 路径以实际加载的技能目录为基准。按调用起点的用户项目定位 Git 仓库，确认根目录后所有 Git 命令显式使用 `git -C <repo-root>`，不从插件缓存目录推断目标。需要人工判断时使用宿主允许的提问方式并等待明确回复；空答案或超时不是批准。在只读/Plan mode 下仅提供分析，不 stage、commit 或 push。
+本技能在 Claude Code、Codex 与 DeepSeek Harness 中共用同一提交合同。插件入口分别为 `/dev-stack:commit`、`$dev-stack:commit` 与 `/dev-stack-commit`；相对 references 路径以实际加载的技能目录为基准。按调用起点的用户项目定位 Git 仓库，确认根目录后所有 Git 命令显式使用 `git -C <repo-root>`，不从插件缓存目录推断目标。普通安全变更在默认 `default-auto` 模式下直接完成 staging 与一次 commit；不得为重复展示路径、消息或“是否继续”主动提问。只有显式 preview/approval-only、analysis-only 或 workflow-level 安全门禁需要人工判断时，才使用宿主允许的提问方式并等待明确回复；空答案或超时不是批准。在只读/Plan mode 下仅提供分析，不 stage、commit 或 push。
 
 此 skill 用于把当前仓库的 staged、unstaged 与 untracked 变更整理为一个语义清晰、边界受控的 Conventional Commit，并在本轮新鲜分析证明安全资格满足时默认自动创建恰好一个 commit。它不适用于历史查看、push、fetch、pull、merge、rebase、amend、squash、reset、revert、tag、switch、clean、配置修改或任何需要改写历史的请求；遇到这些请求时必须说明不处理并停止。
 
@@ -31,13 +31,13 @@ description: Use when the user asks to analyze staged, unstaged, or untracked Gi
 3. **读取 diff 与安全摘要**
    - 输入：完整路径清单。
    - 输出：staged diff、unstaged diff、untracked 文件的安全摘要、二进制/大文件/无法读取标记。
-   - 停止条件：疑似密钥、凭据、环境文件、私钥、证书、异常二进制或大文件、无法安全读取，或冲突内容需要人工判断。
-   - 失败行为：不得展示敏感值本身；把相关路径标为 mandatory-stop 并进入 Human-in-the-Loop。
+   - 停止条件：风险内容已经在 index 中且无法安全隔离，或冲突内容需要 workflow-level 人工判断。
+   - 失败行为：不得展示敏感值本身；把风险路径标为 path-level mandatory-stop 并隔离。只要仍有安全候选就继续，最终报告隔离路径；没有安全候选时才进入 Human-in-the-Loop。
 4. **读取 `references/change-analysis.md` 并逐路径分类**
    - 输入：用户意图、路径状态、各状态面 diff/安全摘要。
-   - 输出：每个 changed path 恰好进入 `include`、`exclude` 或 `uncertain`，并带简短理由、证据、mandatory-stop 列表、用于暂存边界的 provisional intent，以及 auto-execution eligibility 布尔结论和逐项证据。
-   - 停止条件：无法推断可信主意图、任一路径为 `uncertain`、存在强制确认风险，或 eligibility 任一条件失败。
-   - 失败行为：请求用户补充意图或批准边界；不得静默纳入存疑路径。
+   - 输出：每个 changed path 恰好进入 `include`、`exclude` 或 `uncertain`，并带简短理由、证据、mandatory-stop 列表、deferred 结果、用于暂存边界的 provisional intent，以及 auto-execution eligibility 布尔结论和逐项证据。
+   - 停止条件：没有任何可信安全候选、存在 workflow-level mandatory-stop，或 eligibility 的整体条件失败。
+   - 失败行为：隔离 `uncertain`、风险和 deferred 路径并继续安全子集；只有无法形成安全提交候选时，才请求用户补充意图或批准边界，不得静默纳入存疑路径。
 5. **读取 `references/commit-policy.md` 并形成 provisional message/intent**
    - 输入：`include` 集、主意图、分类理由、多主题判断。
    - 输出：仅用于分类复核与授权路径边界的 provisional Conventional Commit subject/body 或 provisional intent；它不是最终 authorized message。
@@ -46,21 +46,21 @@ description: Use when the user asks to analyze staged, unstaged, or untracked Gi
 6. **授权判定**
    - 输入：执行模式、分类结果、mandatory-stop、auto-execution eligibility、exact include set 与 provisional message/intent。
    - 输出：authorized include set 与已批准语义边界、Human-in-the-Loop 问题，或 analysis-only 结果。
-   - `default-auto` 且 eligibility 全部满足时，不等待批准，授权 exact include set 与 provisional message/intent 的语义边界并直接进入暂存。
-   - 显式 `preview/approval-only` 时，在任何 Git mutation 前展示 exact include/exclude/uncertain、逐路径理由、风险、mandatory-stop、exact include set 与 provisional message/intent，并暂停等待用户批准。
+   - `default-auto` 且存在安全 `include` 时，不等待批准，授权安全 exact include set 与 provisional message/intent 的语义边界并直接进入暂存；`uncertain`、风险和 deferred 路径保持隔离。
+   - 显式 `preview/approval-only` 时，在任何 Git mutation 前展示 exact include/exclude/uncertain/deferred、逐路径理由、风险、mandatory-stop、exact include set 与 provisional message/intent，并暂停等待用户批准。
    - 显式 `analysis-only` 时输出分析、provisional message/intent 与 eligibility 后结束，禁止 Git mutation。
-   - eligibility 不满足时展示资格失败或 mandatory-stop 证据、受影响路径和最小裁定问题后暂停。
+   - 只有 workflow-level eligibility 不满足时展示资格失败或 mandatory-stop 证据、受影响路径和最小裁定问题后暂停；路径级风险不阻塞安全子集。
 7. **选择性暂存**
    - 输入：authorized include set 与已批准语义边界。
-   - 输出：仅包含 authorized include set 的 index。
-   - 停止条件：授权集合为空、路径不存在且不是授权删除、路径级暂存失败。
+   - 输出：仅包含 authorized include set 的 index；无法安全合并的同路径 unstaged 内容保持 deferred。
+   - 停止条件：授权集合为空、路径不存在且不是授权删除、风险内容已在 index，或路径级暂存失败。
    - 失败行为：保留现场，报告失败命令和路径，不做提交。
 8. **验证 index 边界并生成 final message**
    - 输入：authorized include set、重新读取的 staged paths 与 staged diff、已批准语义边界。
    - 输出：边界一致结论，以及仅从最终 staged diff 生成的 authorized final Conventional Commit message。
    - 规则：最终 type、scope、summary 与 body 的唯一语义来源是完成选择性暂存后重新读取的最终 staged diff；不得用用户描述、当前会话、ticket、历史提交、仓库文档、暂存前 diff、安全摘要或 provisional message/intent 补充最终消息语义。
-   - 停止条件：staged paths 与 authorized include set 不完全一致、staged diff 出现未授权内容、最终 staged diff 无法支持可信消息，或 final message 与已批准语义边界不一致。
-   - 失败行为：立即停止，不 commit，不静默扩大语义；必要时重新进入 Human-in-the-Loop 获取新的路径边界或语义裁定。
+   - 停止条件：staged paths 与 authorized include set 不完全一致、staged diff 出现未授权内容、最终 staged diff 无法支持可信消息，或 final message 超出 authorized include set（preview/approval-only 下还不得超出已批准语义边界）。
+   - 失败行为：立即停止，不 commit，不静默扩大语义；必要时重新进入 Human-in-the-Loop 获取新的路径边界或语义裁定。已隔离的 uncertain/risk/deferred 路径必须留在工作区并列入报告。
 9. **创建一个 commit**
    - 输入：已验证 index、authorized final Conventional Commit message、执行前 HEAD。
    - 输出：Git 创建的一个新 commit 或失败结果。
@@ -68,20 +68,20 @@ description: Use when the user asks to analyze staged, unstaged, or untracked Gi
    - 失败行为：不绕过 hooks 或签名，不规避性重试；报告失败并保留现场。
 10. **从 Git truth 验证并报告**
     - 输入：执行模式、执行前 HEAD、执行后 HEAD、authorized final message 与 authorized include set。
-    - 输出：execution mode、commit hash、完整 subject、body 是否存在、实际 committed paths、仍留在工作区的 exclude/uncertain、Git truth 结论。
-    - 停止条件：没有恰好新增一个 commit、subject/body 不一致、committed paths 与 authorized include set 不一致，或 excluded/uncertain 被提交。
+    - 输出：execution mode、commit hash、完整 subject、body 是否存在、实际 committed paths、仍留在工作区的 exclude/uncertain/deferred 与隔离风险路径、Git truth 结论。
+    - 停止条件：没有恰好新增一个 commit、subject/body 不一致、committed paths 与 authorized include set 不一致，或 excluded/uncertain/deferred 被提交。
     - 失败行为：不得宣称成功；报告不一致证据和需要人工处理的状态。
 
 ## 授权状态机
 
-- **Auto-first 默认值**：当前请求未明确要求 preview、approval-only 或 analysis-only 时，默认尝试 `default-auto`；默认自动授权必须来自本轮新鲜分析，不是持久偏好。
+- **Auto-first 默认值**：当前请求未明确要求 preview、approval-only 或 analysis-only 时，默认使用 `default-auto`；默认自动授权来自本轮新鲜分析，不是持久偏好。安全候选就地执行，不主动询问“是否继续”。
 - **显式覆盖**：当前请求明确要求先看方案、提交前批准或只分析时优先；preview/approval-only 必须在任何 Git mutation 前等待 exact include set 与 provisional message/intent 批准，analysis-only 不执行任何 Git mutation。
-- **自动资格**：仅当 include 非空、uncertain 为空、主意图和 provisional message/intent 可信、每个路径边界明确、mandatory-stop 为空、状态/diff 证据新鲜且 `change-analysis.md` 的 auto-execution eligibility 全部通过时，才可自动授权。
-- **Human-in-the-Loop 兜底**：任一资格失败、敏感或异常风险、冲突、低置信意图、不可读内容、边界歧义或状态漂移都阻止自动执行；只展示风险摘要与路径，并提出最小裁定问题。
+- **自动资格**：只要 include 非空、至少有一个安全候选、每个路径边界明确、状态/diff 证据新鲜且 `change-analysis.md` 的整体 eligibility 通过即可自动授权；uncertain、风险和 deferred 路径隔离，不因存在它们而阻塞。
+- **Human-in-the-Loop 兜底**：仅 workflow-level 冲突、整体状态漂移、没有安全候选、index 已含无法隔离的风险，或用户明确要求判断时暂停；路径级风险只展示摘要并继续安全子集。
 - **授权失效**：用户改变边界、provisional message/intent 或风险裁定，或状态、diff、分类、资格发生变化后，必须重新读取必要状态、重新分类、重新形成 provisional message/intent 并重新授权。
-- **最终消息一致性**：authorized final Conventional Commit message 只能在 staged diff 固定后生成；若它与 preview/approval-only 已批准的语义边界或 default-auto 的 provisional 语义边界不一致，必须停止并重新进入所需的人类裁定，不得静默扩大语义。
-- **授权语义**：authorized include set 与已批准语义边界表示通过全部 eligibility 的本轮自动授权，或用户在 preview 路径给出的明确批准；自动模式不是风险接受，暂存前 provisional message/intent 不是最终 authorized message。
+- **最终消息一致性**：authorized final Conventional Commit message 只能在 staged diff 固定后生成；preview/approval-only 下若它超出已批准语义边界必须停止。default-auto 下 provisional intent 只是安全候选的边界提示，final message 可以依据最终 staged diff 完成措辞和多主题 body；只有超出 authorized include set 或引入风险语义时才停止，不得静默扩大范围。
+- **授权语义**：authorized include set 与已批准语义边界表示通过整体 eligibility 的本轮自动授权，或用户在 preview 路径给出的明确批准；自动模式不是风险接受，暂存前 provisional message/intent 不是最终 authorized message。路径级 uncertain、风险和 deferred 内容不属于 authorized include set。
 
 ## 输出格式
 
-成功时报告：execution mode、新 commit hash、完整 subject、body 是否存在、实际 committed paths、执行前后 HEAD、仍留在工作区的 exclude/uncertain 变更，以及验证结论来自 Git truth。停止或失败时报告：停止阶段、资格失败或 mandatory-stop 证据、已执行/未执行的副作用、当前 staged paths、遗留变更、final message 是否已从最终 staged diff 生成，以及最小安全下一步；若任一验证失败，明确说明不能宣称提交成功。
+成功时报告：execution mode、新 commit hash、完整 subject、body 是否存在、实际 committed paths、执行前后 HEAD、仍留在工作区的 exclude/uncertain/deferred 与隔离风险路径，以及验证结论来自 Git truth。停止或失败时报告：停止阶段、资格失败或 mandatory-stop 证据、已执行/未执行的副作用、当前 staged paths、遗留变更、final message 是否已从最终 staged diff 生成，以及最小安全下一步；若任一验证失败，明确说明不能宣称提交成功。

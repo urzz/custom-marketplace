@@ -6,13 +6,13 @@
 
 | 插件 / 版本 | Claude Code | Codex | DSH | 用途 |
 |---|---|---|---|---|
-| `dev-stack` / `0.5.0` | `/dev-stack:skill-forge` | `$dev-stack:skill-forge` | `/dev-stack-skill-forge` | 为 Claude Code、Codex、DSH 或多平台创建、修改、审查 skill |
-| `dev-stack` / `0.5.0` | `/dev-stack:commit` | `$dev-stack:commit` | `/dev-stack-commit` | 分析改动并安全创建单个 Conventional Commit |
-| `dev-stack` / `0.5.0` | `/dev-stack:commit-and-push` | `$dev-stack:commit-and-push` | `/dev-stack-commit-and-push` | 创建并验证单个提交后普通推送当前分支 |
+| `dev-stack` / `0.5.1` | `/dev-stack:skill-forge` | `$dev-stack:skill-forge` | `/dev-stack-skill-forge` | 为 Claude Code、Codex、DSH 或多平台创建、修改、审查 skill |
+| `dev-stack` / `0.5.1` | `/dev-stack:commit` | `$dev-stack:commit` | `/dev-stack-commit` | 默认自动提交安全候选，并验证单个 Conventional Commit |
+| `dev-stack` / `0.5.1` | `/dev-stack:commit-and-push` | `$dev-stack:commit-and-push` | `/dev-stack-commit-and-push` | 默认自动提交安全候选，验证后普通推送当前分支 |
 | `nuclio` / `5.3.3` | `/nuclio:init` | `$nuclio:init` | `/nuclio-init` | 创建或安全修复 `.dev-docs` 知识骨架 |
 | `nuclio` / `5.3.3` | `/nuclio:work` | `$nuclio:work` | `/nuclio-work` | 创建、恢复、验证和归档一个 change |
 
-`skill-forge` 与 Nuclio 的 `init` 仅显式调用；Nuclio 的 `work` 可由模型根据 change 请求自动调用。commit 系列保留自动发现，实际暂存、提交和推送仍遵守各自的用户请求与授权合同。DSH 名称使用插件前缀，避免不同插件的同名 skill 发生冲突。
+`skill-forge` 与 Nuclio 的 `init` 仅显式调用；Nuclio 的 `work` 可由模型根据 change 请求自动调用。commit 系列保留自动发现，默认对安全候选直接暂存、提交和推送；显式 preview/analysis 或 workflow-level 风险才会等待用户裁定，具体边界仍遵守共享提交合同。DSH 名称使用插件前缀，避免不同插件的同名 skill 发生冲突。
 
 ## 安装
 

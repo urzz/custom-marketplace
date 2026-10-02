@@ -1,11 +1,11 @@
 ---
 name: commit-and-push
-description: Use only when the user explicitly asks to create one Conventional Commit from current staged, unstaged, or untracked changes and then push the current branch; do not use for commit-only, push-only, force-push, history-rewrite, pull/rebase, multi-commit, tag, or release requests.
+description: Use only when the user explicitly asks to create one Conventional Commit from current staged, unstaged, or untracked changes and then push the current branch; do not use for commit-only, push-only, force-push, history-rewrite, pull/rebase, multi-commit, tag, or release requests. It automatically handles safe candidates and ordinary outgoing commits, pausing only for explicit preview/analysis or workflow-level safety decisions.
 ---
 
 # Commit and Push
 
-本技能在 Claude Code、Codex 与 DeepSeek Harness 中共用同一提交合同。插件入口分别为 `/dev-stack:commit-and-push`、`$dev-stack:commit-and-push` 与 `/dev-stack-commit-and-push`；相对 references 路径以实际加载的技能目录为基准。按调用起点的用户项目定位 Git 仓库，确认根目录后所有 Git 命令显式使用 `git -C <repo-root>`，不从插件缓存目录推断目标。需要人工判断时使用宿主允许的提问方式并等待明确回复；空答案或超时不是批准。在只读/Plan mode 下仅提供分析，不 stage、commit 或 push。
+本技能在 Claude Code、Codex 与 DeepSeek Harness 中共用同一提交合同。插件入口分别为 `/dev-stack:commit-and-push`、`$dev-stack:commit-and-push` 与 `/dev-stack-commit-and-push`；相对 references 路径以实际加载的技能目录为基准。按调用起点的用户项目定位 Git 仓库，确认根目录后所有 Git 命令显式使用 `git -C <repo-root>`，不从插件缓存目录推断目标。显式调用本 skill 已授权对当前分支执行一次普通 push，也授权发布该分支已有的普通 outgoing commits；安全提交候选直接自动处理，不为重复展示路径、消息或 outgoing commits 主动提问。只有显式 preview/approval-only、analysis-only 或 workflow-level 安全门禁需要人工判断时，才使用宿主允许的提问方式并等待明确回复；空答案或超时不是批准。在只读/Plan mode 下仅提供分析，不 stage、commit 或 push。
 
 此 skill 将一次明确的“提交并推送”请求处理为两个严格顺序阶段：先安全创建并验证恰好一个 Conventional Commit，再把当前分支普通推送到其 upstream。用户显式调用本 skill 即授权第二阶段的普通 push，但不代表接受提交边界风险、敏感内容或其他强制停止项。
 
@@ -43,7 +43,7 @@ description: Use only when the user explicitly asks to create one Conventional C
    - 已有 upstream：读取对应的 branch remote 与 merge ref；remote 必须存在，merge ref 必须是单个 `refs/heads/<branch>`，对应远端跟踪引用必须可解析。若该引用不是当前 HEAD 的祖先，说明已知会产生 non-fast-forward，停止且不 commit。
    - 没有 upstream：确认名为 `origin` 的 remote 存在且具有 push URL；以 `origin/<当前分支>` 作为可选比较基线，并计划在成功提交后执行 `git push -u origin <当前分支>`。若该远端跟踪引用存在但不是当前 HEAD 的祖先，停止且不 commit；引用不存在时按首次发布分支处理。
 3. 记录精确 push target，但不连接远端、不 fetch，也不修改 Git config。
-4. 以已有 upstream 或存在的 `origin/<当前分支>` 远端跟踪引用为基线。若当前 HEAD 包含相对该基线尚未推送的既有 commits，push 会连同新 commit 一并发布；把这些 commit 的 hash 与 subject 作为 mandatory-stop，在任何 mutation 前请求用户确认。用户确认后重新读取状态和同一基线并继续。
+4. 以已有 upstream 或存在的 `origin/<当前分支>` 远端跟踪引用为基线。若当前 HEAD 包含相对该基线尚未推送的既有 commits，push 会连同新 commit 一并发布；记录这些 commit 的 hash 与 subject，作为预检报告和最终结果的一部分，但不额外请求确认。用户显式调用本 skill 已授权发布当前分支的普通 outgoing commits。
 
 任何预检失败都不得进入提交阶段。
 
@@ -52,9 +52,10 @@ description: Use only when the user explicitly asks to create one Conventional C
 按“必读合同”执行完整 commit 管道，包括 `default-auto`、显式 `preview/approval-only` 和显式 `analysis-only`：
 
 - `analysis-only` 输出提交分析和 push target 后结束，不 staging、不 commit、不 push。
+- `default-auto` 对安全 include 直接继续；path-level 风险、uncertain 和 deferred 路径隔离后在结果中报告。既有 outgoing commits 只报告，不等待确认。
 - `preview/approval-only` 必须在任何 Git mutation 前同时展示 exact include set、provisional message/intent、push target 和已确认的既有 outgoing commits，并等待批准。
 - 提交阶段任一停止、失败或 Git truth 验证不通过时，立即结束且不得 push。
-- 只有确认相对执行前 HEAD 恰好新增一个 commit、消息和 committed paths 精确一致、exclude/uncertain 未混入后，才记录该新 commit hash 并进入 push 阶段。
+- 只有确认相对执行前 HEAD 恰好新增一个 commit、消息和 committed paths 精确一致、exclude/uncertain/deferred 未混入后，才记录该新 commit hash 并进入 push 阶段。
 
 ### 3. 普通 Push
 
@@ -84,6 +85,6 @@ push 前重新验证：
 
 ## 输出
 
-成功时报告：execution mode、commit hash、完整 subject、body 是否存在、committed paths、执行前后 HEAD、push target、upstream、已发布的既有 outgoing commits（如有）、工作区遗留 exclude/uncertain，以及 commit 与 push 的 Git truth 验证结论。
+成功时报告：execution mode、commit hash、完整 subject、body 是否存在、committed paths、执行前后 HEAD、push target、upstream、已发布的既有 outgoing commits（如有）、工作区遗留 exclude/uncertain/deferred 与隔离风险路径，以及 commit 与 push 的 Git truth 验证结论。
 
 停止或失败时报告：停止阶段、已执行和未执行的副作用、当前 HEAD、是否已创建本地 commit、push 是否执行、push target、当前 staged paths、工作区遗留变更和最小安全下一步。若 commit 已成功但 push 失败，必须明确标记“本地提交成功，推送未确认”，并给出原样重试该普通 push 的命令；不得声称整体成功。
