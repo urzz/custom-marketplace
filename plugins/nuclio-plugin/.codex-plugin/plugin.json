@@ -1,15 +1,15 @@
 {
   "name": "nuclio",
-  "description": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Nuclio v3 知识初始化与 change 交付：按需调用、结果合同、受控分支、上下文优先且工具无关的有界 Agent 编排、当前验证与可恢复归档。",
-  "version": "5.3.3",
+  "description": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Nuclio v3 知识初始化与 change 交付：显式选择、完整方案批准、受控分支、工具无关的有界 Agent 编排、知识覆盖与当前验证、内容绑定的可恢复归档。",
+  "version": "5.4.0",
   "author": {
     "name": "Jade Liu"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Nuclio",
-    "shortDescription": "建立项目知识骨架，以可恢复的结果合同驱动交付、验证和归档。",
-    "longDescription": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Nuclio v3 知识初始化与 change 交付：按需调用、结果合同、受控分支、上下文优先且工具无关的有界 Agent 编排、当前验证与可恢复归档。",
+    "shortDescription": "显式建立项目知识骨架，以完整方案批准和知识覆盖驱动交付、验证与恢复归档。",
+    "longDescription": "面向 Claude Code、Codex 与 DeepSeek Harness bundle 的 Nuclio v3 知识初始化与 change 交付：显式选择、完整方案批准、受控分支、工具无关的有界 Agent 编排、知识覆盖与当前验证、内容绑定的可恢复归档。",
     "developerName": "Jade Liu",
     "category": "Developer Tools",
     "capabilities": [

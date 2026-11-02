@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import re
@@ -294,7 +295,7 @@ def parse_change(path: Path, change_id: str, *, completion: bool = False) -> dic
         final = ("Outcome", "Validation", "Knowledge Updates", "Residual Risks")
         if any(not parsed.get(name) for name in final) or order[-4:] != list(final):
             raise NuclioError("INCOMPLETE_CHANGE_RECORD", "completion sections must be non-empty and appended in canonical order")
-    contract = {"frontmatter": frontmatter, "title": title, "sections": {name: parsed[name] for name in required if name in parsed}}
+    contract = {"frontmatter": frontmatter, "title": title, "sections": {name: parsed[name] for name in (*required, "Design", "Scope") if name in parsed}}
     if "Decisions" in parsed:
         contract["sections"]["Decisions"] = parsed["Decisions"]
     return {"frontmatter": frontmatter, "title": title, "sections": parsed, "order": order, "acceptance": list(acceptance), "contract": contract}
@@ -405,8 +406,10 @@ def valid_sha_or_null(value: Any) -> bool:
 
 def validate_state(state: Any, change_id: str) -> dict[str, Any]:
     required = {"schema_version", "change_id", "revision", "phase", "base_head", "approval_head", "verified_head", "verification", "knowledge"}
-    if not isinstance(state, dict) or set(state) != required or state.get("schema_version") != 1 or state.get("change_id") != change_id:
+    if not isinstance(state, dict) or set(state) not in (required, required | {"approval_source"}) or state.get("schema_version") != 1 or state.get("change_id") != change_id:
         raise NuclioError("INVALID_STATE", "state.yaml schema or identity mismatch")
+    if "approval_source" in state and (not isinstance(state["approval_source"], str) or not state["approval_source"].strip()):
+        raise NuclioError("INVALID_STATE", "approval_source must be a non-empty main-session declaration")
     revision, phase = state["revision"], state["phase"]
     if (revision is not None and (not isinstance(revision, int) or isinstance(revision, bool) or revision < 1)) or not isinstance(phase, str) or phase not in {"shape", "build", "verified", "complete"}:
         raise NuclioError("INVALID_STATE", "state.yaml revision or phase is invalid")
@@ -428,11 +431,15 @@ def validate_state(state: Any, change_id: str) -> dict[str, Any]:
     if review is not None and (set(review) != {"status", "summary", "covers", "head"} or not isinstance(review["status"], str) or review["status"] not in {"PASS", "FAIL"} or not isinstance(review["summary"], str) or not review["summary"].strip() or not isinstance(review["covers"], list) or not all(isinstance(ac, str) and AC_ID_RE.fullmatch(ac) for ac in review["covers"]) or not valid_sha_or_null(review["head"])):
         raise NuclioError("INVALID_STATE", "state.yaml review evidence is invalid")
     knowledge = state["knowledge"]
-    if not isinstance(knowledge, dict) or set(knowledge) != {"result", "paths"} or knowledge["result"] is not None and (not isinstance(knowledge["result"], str) or knowledge["result"] not in KNOWLEDGE_RESULTS) or not isinstance(knowledge["paths"], list):
+    if not isinstance(knowledge, dict) or set(knowledge) not in ({"result", "paths"}, {"result", "paths", "assessment", "digests"}) or knowledge["result"] is not None and (not isinstance(knowledge["result"], str) or knowledge["result"] not in KNOWLEDGE_RESULTS) or not isinstance(knowledge["paths"], list):
         raise NuclioError("INVALID_STATE", "state.yaml knowledge is invalid")
     paths = [valid_knowledge_path(path) for path in knowledge["paths"]]
     if len(paths) != len(set(paths)) or ((knowledge["result"] in {None, "NO_OP", "REJECTED"}) and paths) or (knowledge["result"] in {"APPLIED", "PARTIAL"} and not paths):
         raise NuclioError("INVALID_STATE", "state.yaml knowledge result and paths are inconsistent")
+    if "digests" in knowledge:
+        digests = knowledge["digests"]
+        if not isinstance(knowledge["assessment"], str) or not knowledge["assessment"].strip() or not isinstance(digests, dict) or set(digests) != set(paths) or any(value is not None and (not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)) for value in digests.values()):
+            raise NuclioError("INVALID_STATE", "knowledge assessment or content digests are invalid")
     if revision is None and (phase != "shape" or any(state[key] is not None for key in ("base_head", "approval_head", "verified_head"))):
         raise NuclioError("INVALID_STATE", "unapproved state must be shape with null Git identities")
     if revision is not None and state["base_head"] is None:
@@ -478,7 +485,7 @@ def contract_from_approval(root: Path, change_id: str, state: dict[str, Any]) ->
     # Parse committed approval data in memory.
     frontmatter, body = parse_frontmatter(result.stdout)
     parsed, _ = sections(body)
-    required = ("Goal", "Context", "Constraints", "Non-goals", "Acceptance Criteria")
+    required = ("Goal", "Context", "Constraints", "Non-goals", "Acceptance Criteria") + tuple(name for name in ("Design", "Scope") if name in parsed)
     title = next((line[2:].strip() for line in body.splitlines() if line.startswith("# ") and line[2:].strip()), "")
     contract = {"frontmatter": frontmatter, "title": title, "sections": {key: parsed.get(key, "") for key in required}}
     if "Decisions" in parsed:
@@ -486,7 +493,21 @@ def contract_from_approval(root: Path, change_id: str, state: dict[str, Any]) ->
     return contract
 
 
-def require_current_contract(root: Path, change_id: str, state: dict[str, Any], change: dict[str, Any]) -> None:
+def require_proposal(change: dict[str, Any]) -> None:
+    missing = [name for name in ("Design", "Scope", "Knowledge Context") if not change["sections"].get(name)]
+    if missing:
+        raise NuclioError("INCOMPLETE_PROPOSAL", "complete the proposal before approval or completion", sections=missing)
+
+
+def require_current_contract(root: Path, change_id: str, state: dict[str, Any], change: dict[str, Any], *, legacy_archive: bool = False) -> None:
+    if state.get("approval_head") is None:
+        raise NuclioError("NOT_APPROVED", "change has not been approved")
+    if not legacy_archive and not state.get("approval_source"):
+        raise NuclioError("APPROVAL_SOURCE_REQUIRED", "legacy active change needs a complete proposal, higher revision and explicit approval source")
+    if state.get("approval_source"):
+        committed = read_approval_state(root, change_id, state["approval_head"])
+        if committed.get("approval_source") != state["approval_source"]:
+            raise NuclioError("CONTRACT_DRIFT", "approval source differs from the approval commit")
     if state.get("revision") != change["frontmatter"]["revision"] or contract_from_approval(root, change_id, state) != change["contract"]:
         raise NuclioError("CONTRACT_DRIFT", "change.md differs from the approved contract; revise and approve again")
 
@@ -518,6 +539,11 @@ def approval_commit_paths(root: Path, change_id: str) -> bool:
     return required <= changed <= allowed
 
 
+def read_approval_state(root: Path, change_id: str, commit: str) -> dict[str, Any]:
+    path = git_path(root, f".dev-docs/changes/{change_id}/state.yaml")
+    return validate_state(parse_yaml(git(root, "show", f"{commit}:{path}").stdout, "approved state.yaml"), change_id)
+
+
 def recoverable_approval(root: Path, change_id: str, state: dict[str, Any], revision: int) -> bool:
     if state.get("approval_head") is not None or commit_subject(root) != approval_subject(change_id, revision) or not approval_commit_paths(root, change_id):
         return False
@@ -528,6 +554,8 @@ def recoverable_approval(root: Path, change_id: str, state: dict[str, Any], revi
     try:
         approved_state = validate_state(require_yaml().load(committed.stdout, Loader=UniqueKeyLoader), change_id)
     except (NuclioError, Exception):
+        return False
+    if not approved_state.get("approval_source") or approved_state.get("approval_source") != state.get("approval_source"):
         return False
     if approved_state["revision"] != revision or approved_state["base_head"] != state["base_head"] or approved_state["approval_head"] is not None or approved_state["verified_head"] is not None or approved_state["phase"] != "build":
         return False
@@ -560,9 +588,10 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--id", required=True); create.add_argument("--title", required=True); create.add_argument("--goal", required=True)
     create.add_argument("--context", default="No additional context."); create.add_argument("--constraint", default="No additional constraints.")
     create.add_argument("--non-goal", default="No additional non-goals."); create.add_argument("--acceptance", action="append", default=[])
+    create.add_argument("--design", default=""); create.add_argument("--scope", default=""); create.add_argument("--knowledge-context", default="")
     create.set_defaults(func=cmd_create)
     approve = sub.add_parser("approve", help="confirm the current contract")
-    approve.add_argument("--id", required=True); approve.set_defaults(func=cmd_approve)
+    approve.add_argument("--id", required=True); approve.add_argument("--approval-source"); approve.set_defaults(func=cmd_approve)
     status = sub.add_parser("status", help="return a compact work package")
     status.add_argument("--id", required=True); status.add_argument("--json", action="store_true"); status.set_defaults(func=cmd_status)
     record = sub.add_parser("record-check", help="record a host-executed check without running it")
@@ -575,6 +604,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify.set_defaults(func=cmd_verify)
     complete = sub.add_parser("complete", help="record knowledge decision after verification")
     complete.add_argument("--id", required=True); complete.add_argument("--knowledge-result", required=True, choices=sorted(KNOWLEDGE_RESULTS)); complete.add_argument("--knowledge-path", action="append", default=[])
+    complete.add_argument("--knowledge-assessment", required=True)
     complete.set_defaults(func=cmd_complete)
     archive = sub.add_parser("archive", help="archive a completed v3 change")
     archive.add_argument("--id", required=True); archive.set_defaults(func=cmd_archive)
@@ -593,6 +623,8 @@ def cmd_create(args: argparse.Namespace, root: Path) -> int:
         raise NuclioError("CHANGE_EXISTS", "change ID already exists")
     if not all(isinstance(value, str) and value.strip() and "\n" not in value for value in (args.title, args.goal, args.context, args.constraint, args.non_goal)):
         raise NuclioError("INVALID_INPUT", "title and contract text must be non-empty single lines")
+    if any("\n" in value or "\r" in value for value in (args.design, args.scope, args.knowledge_context)):
+        raise NuclioError("INVALID_INPUT", "proposal options must be single lines")
     acceptance = args.acceptance or [args.goal]
     if not all(isinstance(value, str) and value.strip() and "\n" not in value and "\r" not in value for value in acceptance):
         raise NuclioError("INVALID_INPUT", "acceptance items must be non-empty single lines")
@@ -600,7 +632,7 @@ def cmd_create(args: argparse.Namespace, root: Path) -> int:
     directory.mkdir()
     frontmatter = require_yaml().safe_dump({"schema_version": 1, "change_id": change_id, "revision": 1}, sort_keys=False, allow_unicode=True).rstrip()
     criteria = "\n".join(f"- AC-{index}: {value}" for index, value in enumerate(acceptance, 1))
-    (directory / "change.md").write_text(f"---\n{frontmatter}\n---\n\n# {args.title}\n\n## Goal\n\n{args.goal}\n\n## Context\n\n{args.context}\n\n## Constraints\n\n{args.constraint}\n\n## Non-goals\n\n{args.non_goal}\n\n## Acceptance Criteria\n\n{criteria}\n", encoding="utf-8")
+    (directory / "change.md").write_text(f"---\n{frontmatter}\n---\n\n# {args.title}\n\n## Goal\n\n{args.goal}\n\n## Context\n\n{args.context}\n\n## Constraints\n\n{args.constraint}\n\n## Non-goals\n\n{args.non_goal}\n\n## Design\n\n{args.design}\n\n## Scope\n\n{args.scope}\n\n## Knowledge Context\n\n{args.knowledge_context}\n\n## Acceptance Criteria\n\n{criteria}\n", encoding="utf-8")
     dump_atomic(directory / "delivery.yaml", {"schema_version": 1, "change_id": change_id, "milestones": [{"id": "M1", "kind": "delivery", "outcome": args.goal, "covers": [f"AC-{index}" for index in range(1, len(acceptance) + 1)], "status": "pending", "handoff": None}], "verification": {"checks": []}})
     dump_atomic(directory / "state.yaml", {"schema_version": 1, "change_id": change_id, "revision": None, "phase": "shape", "base_head": None, "approval_head": None, "verified_head": None, "verification": {"checks": [], "acceptance": {}, "manual": [], "review": None}, "knowledge": {"result": None, "paths": []}})
     return emit_ok({"change_id": change_id, "path": rel(root, directory), "phase": "shape"})
@@ -611,10 +643,14 @@ def cmd_approve(args: argparse.Namespace, root: Path) -> int:
     change, _delivery, _checks = current_definition(root, change_id); state = load_state(root, change_id); revision = change["frontmatter"]["revision"]
     if try_recover_approval(root, change_id, state, revision):
         return emit_ok({"change_id": change_id, "approval_head": state["approval_head"], "recovered": True})
+    require_proposal(change)
+    if not args.approval_source or not args.approval_source.strip():
+        raise NuclioError("APPROVAL_SOURCE_REQUIRED", "new approval requires --approval-source (main-session declaration, not host authentication)")
     require_clean_index(root); require_product_clean(root, change_id)
-    if state.get("approval_head") and revision <= state.get("revision", 0):
+    if state.get("revision") is not None and revision <= state.get("revision", 0):
         raise NuclioError("REVISION_NOT_INCREMENTED", "reapproval requires a higher change.md revision")
     original = copy.deepcopy(state)
+    state["approval_source"] = args.approval_source.strip()
     state["base_head"] = state["base_head"] or head(root)
     state.update({"revision": revision, "approval_head": None, "verified_head": None, "phase": "build", "verification": {"checks": [], "acceptance": {ac: "missing" for ac in change["acceptance"]}, "manual": [], "review": None}, "knowledge": {"result": None, "paths": []}})
     paths = sorted(approval_paths(change_id)); expected_parent = head(root)
@@ -634,7 +670,8 @@ def cmd_approve(args: argparse.Namespace, root: Path) -> int:
 
 def cmd_status(args: argparse.Namespace, root: Path) -> int:
     change_id = validate_id(args.id); require_attached_head(root); change, delivery, checks = current_definition(root, change_id); state = load_state(root, change_id)
-    if state.get("approval_head"):
+    legacy_active = state["revision"] is not None and not state.get("approval_source")
+    if state.get("approval_head") and not legacy_active:
         require_current_contract(root, change_id, state, change)
     current = head(root)
     failed, passed, review_failed, stale_checks = current_evidence(checks, change["acceptance"], state["verification"], current)
@@ -651,7 +688,9 @@ def cmd_status(args: argparse.Namespace, root: Path) -> int:
     dirty_product = product_dirty_paths(root, change_id, allowed_dirty)
     dirty_index = not index_clean(root)
     clean_gate = not dirty_index and not dirty_product
-    if recoverable_approval(root, change_id, state, change["frontmatter"]["revision"]):
+    if legacy_active:
+        next_action = "revise-proposal"
+    elif recoverable_approval(root, change_id, state, change["frontmatter"]["revision"]):
         next_action = "recover-approval"
     elif phase == "shape" or state.get("approval_head") is None:
         next_action = "confirm-contract"
@@ -671,7 +710,7 @@ def cmd_status(args: argparse.Namespace, root: Path) -> int:
         next_action = "verify"
     review = state["verification"]["review"]
     review_blocker = review if review_failed else None
-    return emit_ok({"change_id": change_id, "phase": phase, "disposition": "await-user" if next_action == "confirm-contract" else "continue", "goal": change["sections"]["Goal"], "constraints": change["sections"]["Constraints"], "non_goals": change["sections"]["Non-goals"], "milestone": {"id": milestone["id"], "outcome": milestone["outcome"], "acceptance": milestone["covers"]}, "handoff": milestone["handoff"], "git": {"base_head": state.get("base_head"), "approval_head": state.get("approval_head"), "verified_head": state.get("verified_head"), "current_head": current}, "failed_checks": failed, "stale_checks": stale_checks, "missing_acceptance": missing_acceptance, "review_blocker": review_blocker, "manual_blocker": manual_blocker, "clean_gate": {"index_clean": not dirty_index, "dirty_product": dirty_product, "allowed_dirty": sorted(allowed_dirty)}, "next_action": next_action})
+    return emit_ok({"change_id": change_id, "phase": phase, "disposition": "await-user" if next_action in {"confirm-contract", "revise-proposal"} else "continue", "approval_source": state.get("approval_source"), "proposal_missing": [name for name in ("Design", "Scope", "Knowledge Context") if not change["sections"].get(name)], "design": change["sections"].get("Design"), "scope": change["sections"].get("Scope"), "knowledge_context": change["sections"].get("Knowledge Context"), "goal": change["sections"]["Goal"], "constraints": change["sections"]["Constraints"], "non_goals": change["sections"]["Non-goals"], "milestone": {"id": milestone["id"], "outcome": milestone["outcome"], "acceptance": milestone["covers"]}, "handoff": milestone["handoff"], "git": {"base_head": state.get("base_head"), "approval_head": state.get("approval_head"), "verified_head": state.get("verified_head"), "current_head": current}, "failed_checks": failed, "stale_checks": stale_checks, "missing_acceptance": missing_acceptance, "review_blocker": review_blocker, "manual_blocker": manual_blocker, "clean_gate": {"index_clean": not dirty_index, "dirty_product": dirty_product, "allowed_dirty": sorted(allowed_dirty)}, "next_action": next_action})
 
 
 def cmd_record_check(args: argparse.Namespace, root: Path) -> int:
@@ -787,6 +826,21 @@ def require_knowledge_paths_current(root: Path, knowledge: list[str]) -> None:
         raise NuclioError("KNOWLEDGE_PATH_MISMATCH", "knowledge paths must exactly match dirty knowledge paths", expected=dirty, actual=sorted(knowledge))
 
 
+def knowledge_digests(root: Path, paths: list[str]) -> dict[str, Any]:
+    digests = {}
+    for path in paths:
+        target = devdocs_path(root, root / path)
+        content = target.read_bytes() if target.exists() else None
+        digests[path] = hashlib.sha256(content).hexdigest() if content is not None else None
+    return digests
+
+
+def require_knowledge_content(root: Path, state: dict[str, Any]) -> None:
+    knowledge = state["knowledge"]
+    if "digests" in knowledge and knowledge["digests"] != knowledge_digests(root, knowledge["paths"]):
+        raise NuclioError("KNOWLEDGE_CONTENT_DRIFT", "knowledge content differs from the completed decision; rerun complete with a current assessment")
+
+
 def cmd_complete(args: argparse.Namespace, root: Path) -> int:
     change_id = validate_id(args.id); require_attached_head(root); change, _delivery, checks = current_definition(root, change_id); state = load_state(root, change_id)
     require_current_contract(root, change_id, state, change); require_clean_index(root)
@@ -794,13 +848,16 @@ def cmd_complete(args: argparse.Namespace, root: Path) -> int:
     if state.get("verified_head") != current or missing or stale_checks or passed != set(change["acceptance"]) or review_failed:
         raise NuclioError("VERIFICATION_NOT_CURRENT", "all current checks and Acceptance evidence must pass at the current HEAD", missing_checks=missing, missing_acceptance=sorted(set(change["acceptance"]) - passed))
     parse_change(active_dir(root, change_id) / "change.md", change_id, completion=True)
+    require_proposal(change)
+    if not args.knowledge_assessment.strip():
+        raise NuclioError("INVALID_KNOWLEDGE_ASSESSMENT", "knowledge assessment must explain the knowledge check and decision, including NO_OP")
     knowledge = [valid_knowledge_path(item) for item in args.knowledge_path]
     if len(knowledge) != len(set(knowledge)) or (args.knowledge_result in {"NO_OP", "REJECTED"} and knowledge) or (args.knowledge_result in {"APPLIED", "PARTIAL"} and not knowledge):
         raise NuclioError("INVALID_KNOWLEDGE_RESULT", "knowledge result and paths are inconsistent")
     allowed = set(knowledge)
     require_product_clean(root, change_id, allowed)
     require_knowledge_paths_current(root, knowledge)
-    state["knowledge"] = {"result": args.knowledge_result, "paths": knowledge}; state["phase"] = "complete"; write_state(root, change_id, state)
+    state["knowledge"] = {"result": args.knowledge_result, "paths": knowledge, "assessment": args.knowledge_assessment.strip(), "digests": knowledge_digests(root, knowledge)}; state["phase"] = "complete"; write_state(root, change_id, state)
     return emit_ok({"change_id": change_id, "phase": "complete", "knowledge": state["knowledge"]})
 
 
@@ -833,7 +890,9 @@ def validate_archive_record(root: Path, change_id: str, directory: Path, state: 
     if state["phase"] != "complete" or state["verified_head"] != current:
         raise NuclioError("CHANGE_NOT_COMPLETE", "archive requires a current completed and verified change")
     change = parse_change(devdocs_path(root, directory / "change.md"), change_id, completion=True)
-    require_current_contract(root, change_id, state, change)
+    require_current_contract(root, change_id, state, change, legacy_archive=directory == archive_dir(root, change_id))
+    if state.get("approval_source"):
+        require_proposal(change)
     delivery = parse_delivery(root, change_id, change["acceptance"], directory)
     checks = project_checks(root, change["acceptance"], current if historical else None) + delivery["checks"]
     if len({check["id"] for check in checks}) != len(checks):
@@ -902,6 +961,7 @@ def cmd_archive(args: argparse.Namespace, root: Path) -> int:
         paths = archive_paths(change_id, state)
         require_clean_index(root); require_product_clean(root, change_id, set(paths))
         require_knowledge_paths_current(root, state["knowledge"]["paths"])
+        require_knowledge_content(root, state)
         require_archive_target_visible(root, change_id)
         committed = commit_archive(root, change_id, state)
         return emit_ok({"change_id": change_id, "path": rel(root, target), "archive_commit": committed, "recovered": True})
@@ -911,6 +971,7 @@ def cmd_archive(args: argparse.Namespace, root: Path) -> int:
     validate_archive_record(root, change_id, source, state)
     require_clean_index(root); require_product_clean(root, change_id, set(state["knowledge"]["paths"]))
     require_knowledge_paths_current(root, state["knowledge"]["paths"])
+    require_knowledge_content(root, state)
     require_archive_target_visible(root, change_id)
     target.parent.mkdir(parents=True, exist_ok=True); source.rename(target)
     committed = commit_archive(root, change_id, state)

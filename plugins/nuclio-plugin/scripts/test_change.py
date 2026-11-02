@@ -50,12 +50,12 @@ class ChangeRuntimeTests(unittest.TestCase):
         self.temp.cleanup()
 
     def create(self):
-        result = run(self.root, "create", "--id", "alpha-change", "--title", "Alpha", "--goal", "Ship alpha", "--acceptance", "Alpha is observable")
+        result = run(self.root, "create", "--id", "alpha-change", "--title", "Alpha", "--goal", "Ship alpha", "--design", "Use alpha implementation.", "--scope", "Alpha only.", "--knowledge-context", "Index checked; no prior alpha facts.", "--acceptance", "Alpha is observable")
         self.assertEqual(result.returncode, 0, result.stderr)
         return self.root / ".dev-docs" / "changes" / "alpha-change"
 
     def approve(self):
-        result = run(self.root, "approve", "--id", "alpha-change")
+        result = run(self.root, "approve", "--id", "alpha-change", "--approval-source", "session:test/message:approval")
         self.assertEqual(result.returncode, 0, result.stderr)
         return output(result)
 
@@ -99,7 +99,7 @@ class ChangeRuntimeTests(unittest.TestCase):
         self.assertEqual(status["next_action"], "build")
         self.assertEqual(status["manual_blocker"], ["AC-1"])
         self.finish_sections(directory)
-        self.assertEqual(output(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP"))["code"], "VERIFICATION_NOT_CURRENT")
+        self.assertEqual(output(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP"))["code"], "VERIFICATION_NOT_CURRENT")
         self.assertFalse(output(run(self.root, "archive", "--id", "alpha-change"))["ok"])
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", self.manual()))["verified"])
 
@@ -117,7 +117,7 @@ class ChangeRuntimeTests(unittest.TestCase):
         self.assertEqual(status["missing_acceptance"], ["AC-1"])
         self.assertEqual(status["next_action"], "build")
         self.assertEqual((directory / "state.yaml").read_bytes(), before)
-        self.assertEqual(output(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP"))["code"], "VERIFICATION_NOT_CURRENT")
+        self.assertEqual(output(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP"))["code"], "VERIFICATION_NOT_CURRENT")
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", self.manual()))["verified"])
 
     def test_unicode_knowledge_archives_and_retries_with_default_git_quoting(self):
@@ -125,7 +125,7 @@ class ChangeRuntimeTests(unittest.TestCase):
         path = self.root / ".dev-docs/knowledge/认证.md"
         path.parent.mkdir(parents=True)
         path.write_text("# 认证约束\n", encoding="utf-8")
-        completed = run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "APPLIED", "--knowledge-path", path.relative_to(self.root).as_posix())
+        completed = run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "APPLIED", "--knowledge-path", path.relative_to(self.root).as_posix())
         self.assertEqual(completed.returncode, 0, completed.stderr)
         for _ in range(2):
             archived = run(self.root, "archive", "--id", "alpha-change")
@@ -136,7 +136,7 @@ class ChangeRuntimeTests(unittest.TestCase):
         self.verified_change()
         directory = self.root / ".dev-docs/knowledge"
         directory.mkdir(parents=True)
-        args = ["complete", "--id", "alpha-change", "--knowledge-result", "APPLIED"]
+        args = ["complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "APPLIED"]
         for filename in ('引号".md', "制表\t.md", "换行\n.md", "回车\r.md", "literal[1].md"):
             path = directory / filename
             path.write_text("# 项目事实\n")
@@ -160,7 +160,7 @@ class ChangeRuntimeTests(unittest.TestCase):
         self.assertEqual(first["base_head"], second["base_head"])
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", self.manual()))["verified"])
         self.finish_sections(directory)
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         for _ in range(2):
             result = run(self.root, "archive", "--id", "alpha-change")
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -175,7 +175,7 @@ class ChangeRuntimeTests(unittest.TestCase):
             if state["approval_head"] is not None:
                 raise change.NuclioError("INTERRUPTED", "模拟批准提交后的中断")
             real_write(root, change_id, state)
-        args = change.build_parser().parse_args(["approve", "--id", "alpha-change"])
+        args = change.build_parser().parse_args(["approve", "--id", "alpha-change", "--approval-source", "session:test/message:approval"])
         with mock.patch.object(change, "write_state", side_effect=interrupt_after_commit):
             with self.assertRaises(change.NuclioError):
                 change.cmd_approve(args, self.root)
@@ -184,14 +184,16 @@ class ChangeRuntimeTests(unittest.TestCase):
         status = output(run(self.root, "status", "--id", "alpha-change"))
         self.assertEqual(status["next_action"], "recover-approval")
         self.assertEqual((directory / "state.yaml").read_bytes(), before)
-        recovered = self.approve()
+        result = run(self.root, "approve", "--id", "alpha-change")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        recovered = output(result)
         self.assertTrue(recovered["recovered"])
         self.assertEqual(recovered["approval_head"], approved_head)
         self.assertEqual(git(self.root, "rev-parse", "HEAD"), approved_head)
 
     def test_archive_commit_failure_can_be_retried_by_explicit_id(self):
         directory = self.verified_change()
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         real_git = change.git
         def fail_commit(root, *args, **kwargs):
             if args[:1] == ("commit",):
@@ -215,7 +217,7 @@ class ChangeRuntimeTests(unittest.TestCase):
         git(self.root, "commit", "-m", "docs: prior knowledge")
         directory = self.verified_change()
         path.write_text("# 更新知识\n")
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "APPLIED", "--knowledge-path", ".dev-docs/knowledge/alpha.md").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "APPLIED", "--knowledge-path", ".dev-docs/knowledge/alpha.md").returncode, 0)
         path.write_text("# 原有知识\n")
         before = git(self.root, "rev-parse", "HEAD")
         for moved in (False, True):
@@ -234,7 +236,7 @@ class ChangeRuntimeTests(unittest.TestCase):
         git(self.root, "add", ".gitignore")
         git(self.root, "commit", "-m", "chore: ignored archive fixture")
         directory = self.verified_change()
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         result = run(self.root, "archive", "--id", "alpha-change")
         self.assertEqual(output(result)["code"], "ARCHIVE_TARGET_IGNORED")
         self.assertTrue(directory.exists())
@@ -242,7 +244,7 @@ class ChangeRuntimeTests(unittest.TestCase):
 
     def test_partial_archive_add_failure_unstages_only_transition_and_retries(self):
         self.verified_change()
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         real_git = change.git
         def fail_add(root, *args, **kwargs):
             if args[:2] == ("add", "-A"):
@@ -260,7 +262,7 @@ class ChangeRuntimeTests(unittest.TestCase):
 
     def test_archive_failure_preserves_concurrently_staged_unrelated_file(self):
         self.verified_change()
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         real_git = change.git
         def fail_add(root, *args, **kwargs):
             if args[:2] == ("add", "-A"):
@@ -277,7 +279,7 @@ class ChangeRuntimeTests(unittest.TestCase):
 
     def test_archive_recovery_add_failure_cleans_partial_index_and_retries(self):
         directory = self.verified_change()
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         directory.rename(self.root / ".dev-docs/changes/archive/alpha-change")
         real_git = change.git
         def fail_add(root, *args, **kwargs):
@@ -321,13 +323,13 @@ class ChangeRuntimeTests(unittest.TestCase):
         (self.root / ".dev-docs/changes/archive").mkdir(parents=True)
         self.create()
         (repository / "README.md").write_text("# 独立项目改动\n")
-        result = run(self.root, "approve", "--id", "alpha-change")
+        result = run(self.root, "approve", "--id", "alpha-change", "--approval-source", "session:test/message:approval")
         self.assertEqual(output(result)["code"], "DIRTY_PRODUCT_WORKTREE")
         self.assertEqual(output(result)["details"]["paths"], ["../../README.md"])
 
     def test_archive_retry_rejects_modified_artifacts_without_touching_them(self):
         self.verified_change()
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         self.assertEqual(run(self.root, "archive", "--id", "alpha-change").returncode, 0)
         target = self.root / ".dev-docs/changes/archive/alpha-change"
         for filename in change.ARTIFACTS:
@@ -343,7 +345,7 @@ class ChangeRuntimeTests(unittest.TestCase):
 
     def test_archive_is_idempotent_after_later_commits_and_project_check_changes(self):
         self.verified_change()
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         archived = output(run(self.root, "archive", "--id", "alpha-change"))
         (self.root / "README.md").write_text("# 后续产品改动\n")
         (self.root / ".dev-docs/nuclio.yaml").write_text("schema_version: 1\nchecks:\n- id: later\n  run: [python3, --version]\n")
@@ -394,7 +396,7 @@ verification:
         verified = run(self.root, "verify", "--id", "alpha-change")
         self.assertTrue(output(verified)["verified"], verified.stderr)
         self.finish_sections(directory)
-        complete = run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP")
+        complete = run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP")
         self.assertEqual(complete.returncode, 0, complete.stderr)
         state_path = directory / "state.yaml"
         terminal_state = state_path.read_bytes()
@@ -456,7 +458,7 @@ verification:
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change"))["verified"])
         delivery.write_text(delivery.read_text(encoding="utf-8").replace("unittest]", "unittest, discover]"), encoding="utf-8")
         self.finish_sections(directory)
-        complete = run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP")
+        complete = run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP")
         self.assertNotEqual(complete.returncode, 0)
         self.assertEqual(output(complete)["code"], "VERIFICATION_NOT_CURRENT")
 
@@ -493,7 +495,7 @@ verification:
             if args[:1] == ("commit",):
                 raise change.NuclioError("GIT_ERROR", "simulated commit failure")
             return real_git(root, *args, **kwargs)
-        args = change.build_parser().parse_args(["approve", "--id", "alpha-change"])
+        args = change.build_parser().parse_args(["approve", "--id", "alpha-change", "--approval-source", "session:test/message:approval"])
         with mock.patch.object(change, "git", side_effect=fail_commit), mock.patch.object(change, "write_state", wraps=change.write_state) as write_state:
             with self.assertRaises(change.NuclioError):
                 change.cmd_approve(args, self.root)
@@ -519,7 +521,7 @@ verification:
         self.approve()
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"status":"PASS","acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'))["verified"])
         self.finish_sections(directory)
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         archived = output(run(self.root, "archive", "--id", "alpha-change"))
         target = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
         self.assertFalse(directory.exists())
@@ -550,7 +552,7 @@ verification:
         self.assertEqual(run(self.root, "record-check", "--id", "alpha-change", "--check-id", "focused", "--head", current, "--exit-code", "0", "--summary", "pass", "--", "python3", "-m", "unittest").returncode, 0)
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change"))["verified"])
         self.finish_sections(directory)
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         target = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
         shutil.move(directory, target)
         recovered = run(self.root, "archive", "--id", "alpha-change")
@@ -565,7 +567,7 @@ verification:
         self.approve()
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"status":"PASS","acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'))["verified"])
         self.finish_sections(directory)
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         target = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
         shutil.move(directory, target)
         change_path = target / "change.md"
@@ -608,7 +610,7 @@ verification:
         knowledge = self.root / ".dev-docs" / "knowledge" / "alpha.md"
         knowledge.parent.mkdir(parents=True, exist_ok=True)
         knowledge.write_text("# Alpha\n", encoding="utf-8")
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "APPLIED", "--knowledge-path", ".dev-docs/knowledge/alpha.md").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "APPLIED", "--knowledge-path", ".dev-docs/knowledge/alpha.md").returncode, 0)
         (self.root / "README.md").write_text("# New head\n", encoding="utf-8")
         git(self.root, "add", "README.md")
         git(self.root, "commit", "-m", "feat: move head")
@@ -648,7 +650,7 @@ verification:
         manual = '{"status":"PASS","acceptance":"AC-1","steps":"check","result":"pass","executor":"test"}'
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", manual))["verified"])
         self.finish_sections(directory)
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         delivery.write_text(delivery.read_text(encoding="utf-8").replace("  checks:\n    - id: focused\n      run: [python3, -m, unittest]\n      covers: [AC-1]", "  checks: []"), encoding="utf-8")
         (self.root / "README.md").write_text("# New head\n", encoding="utf-8")
         git(self.root, "add", "README.md")
@@ -658,12 +660,12 @@ verification:
         self.assertEqual(status["next_action"], "verify")
         state_path = directory / "state.yaml"
         stale_state = state_path.read_bytes()
-        self.assertEqual(output(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP"))["code"], "VERIFICATION_NOT_CURRENT")
+        self.assertEqual(output(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP"))["code"], "VERIFICATION_NOT_CURRENT")
         self.assertEqual(state_path.read_bytes(), stale_state)
         self.assertEqual(output(run(self.root, "archive", "--id", "alpha-change"))["code"], "CHANGE_NOT_COMPLETE")
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change", "--manual", manual))["verified"])
         self.assertEqual(change.load_state(self.root, "alpha-change")["verification"]["checks"], [])
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
 
     def test_archive_recovery_rejects_changed_check_definition(self):
         self._assert_archive_rejects_changed_check_definition(moved=True)
@@ -694,7 +696,7 @@ verification:
         self.assertEqual(run(self.root, "record-check", "--id", "alpha-change", "--check-id", "focused", "--head", current, "--exit-code", "0", "--summary", "pass", "--", "python3", "-m", "unittest").returncode, 0)
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change"))["verified"])
         self.finish_sections(directory)
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         if moved:
             target = self.root / ".dev-docs" / "changes" / "archive" / "alpha-change"
             shutil.move(directory, target)
@@ -714,7 +716,7 @@ verification:
         status = output(run(self.root, "status", "--id", "alpha-change"))
         self.assertEqual(status["next_action"], "build")
         self.assertEqual(status["review_blocker"]["status"], "FAIL")
-        self.assertEqual(output(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP"))["code"], "VERIFICATION_NOT_CURRENT")
+        self.assertEqual(output(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP"))["code"], "VERIFICATION_NOT_CURRENT")
         passed = run(self.root, "verify", "--id", "alpha-change", "--review-status", "PASS", "--review-summary", "resolved", "--review-cover", "AC-1")
         self.assertTrue(output(passed)["verified"])
 
@@ -742,7 +744,7 @@ verification:
         self.assertEqual(candidate["next_action"], "finish")
         self.assertEqual(candidate["clean_gate"]["allowed_dirty"], [".dev-docs/knowledge/alpha.md"])
         self.finish_sections(directory)
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "APPLIED", "--knowledge-path", ".dev-docs/knowledge/alpha.md").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "APPLIED", "--knowledge-path", ".dev-docs/knowledge/alpha.md").returncode, 0)
         self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["next_action"], "archive")
         readme.write_text("# Dirty after complete\n", encoding="utf-8")
         blocked = output(run(self.root, "status", "--id", "alpha-change"))
@@ -766,7 +768,7 @@ verification:
         git(self.root, "restore", "--staged", "README.md")
         git(self.root, "restore", "README.md")
         self.finish_sections(directory)
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["next_action"], "archive")
         change_path = directory / "change.md"
         complete_change = change_path.read_text(encoding="utf-8")
@@ -785,7 +787,7 @@ verification:
         self.assertEqual(change.load_state(self.root, "alpha-change")["phase"], "build")
         delivery.write_text(original_delivery, encoding="utf-8")
         self.assertTrue(output(run(self.root, "verify", "--id", "alpha-change"))["verified"])
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         (self.root / "README.md").write_text("# Changed after complete\n", encoding="utf-8")
         git(self.root, "add", "README.md")
         git(self.root, "commit", "-m", "feat: drift after complete")
@@ -795,7 +797,7 @@ verification:
         refreshed = output(run(self.root, "verify", "--id", "alpha-change", "--manual", '{"status":"PASS","acceptance":"AC-1","steps":"recheck","result":"pass","executor":"test"}'))
         self.assertTrue(refreshed["verified"])
         self.assertEqual(change.load_state(self.root, "alpha-change")["phase"], "verified")
-        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "NO_OP").returncode, 0)
+        self.assertEqual(run(self.root, "complete", "--id", "alpha-change", "--knowledge-assessment", "Checked routed knowledge for new and invalidated facts; no other updates needed.", "--knowledge-result", "NO_OP").returncode, 0)
         repeated = run(self.root, "verify", "--id", "alpha-change")
         self.assertEqual(output(repeated)["code"], "CHANGE_COMPLETE")
         self.assertEqual(change.load_state(self.root, "alpha-change")["phase"], "complete")
@@ -849,9 +851,152 @@ verification:
 
     def test_create_rejects_multiline_acceptance_before_artifacts(self):
         for value in ("line one\nline two", "line one\rline two"):
-            result = run(self.root, "create", "--id", "alpha-change", "--title", "Alpha", "--goal", "Ship alpha", "--acceptance", value)
+            result = run(self.root, "create", "--id", "alpha-change", "--title", "Alpha", "--goal", "Ship alpha", "--design", "Use alpha implementation.", "--scope", "Alpha only.", "--knowledge-context", "Index checked; no prior alpha facts.", "--acceptance", value)
             self.assertEqual(output(result)["code"], "INVALID_INPUT")
             self.assertFalse((self.root / ".dev-docs" / "changes" / "alpha-change").exists())
+
+    def test_approval_requires_complete_proposal_and_explicit_source(self):
+        self.assertEqual(run(self.root, "create", "--id", "alpha-change", "--title", "Alpha", "--goal", "Ship alpha").returncode, 0)
+        before = git(self.root, "rev-parse", "HEAD")
+        result = run(self.root, "approve", "--id", "alpha-change", "--approval-source", "session:1/message:2")
+        self.assertEqual(output(result)["code"], "INCOMPLETE_PROPOSAL")
+        self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["next_action"], "confirm-contract")
+        path = self.root / ".dev-docs/changes/alpha-change/change.md"
+        text = path.read_text()
+        for heading in ("Design", "Scope", "Knowledge Context"):
+            text = text.replace(f"## {heading}\n\n", f"## {heading}\n\nExplicit proposal text.\n")
+        path.write_text(text)
+        for source in ([], ["--approval-source", "  "]):
+            self.assertEqual(output(run(self.root, "approve", "--id", "alpha-change", *source))["code"], "APPROVAL_SOURCE_REQUIRED")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), before)
+        self.approve()
+        committed = change.read_approval_state(self.root, "alpha-change", git(self.root, "rev-parse", "HEAD"))
+        self.assertEqual(committed["approval_source"], "session:test/message:approval")
+
+    def test_design_scope_source_frozen_and_knowledge_context_mutable(self):
+        directory = self.create()
+        self.approve()
+        path = directory / "change.md"
+        text = path.read_text()
+        for original in ("Use alpha implementation.", "Alpha only."):
+            path.write_text(text.replace(original, "Changed contract."))
+            self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["code"], "CONTRACT_DRIFT")
+        path.write_text(text.replace("Index checked; no prior alpha facts.", "Rechecked index; facts current."))
+        self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["next_action"], "verify")
+        state = change.load_state(self.root, "alpha-change")
+        state["approval_source"] = "session:forged/message:1"
+        change.write_state(self.root, "alpha-change", state)
+        self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["code"], "CONTRACT_DRIFT")
+
+    def test_complete_requires_assessment_and_knowledge_context(self):
+        directory = self.verified_change()
+        base = ["complete", "--id", "alpha-change", "--knowledge-result", "NO_OP"]
+        self.assertEqual(output(run(self.root, *base))["code"], "INVALID_ARGUMENTS")
+        self.assertEqual(output(run(self.root, *base, "--knowledge-assessment", " "))["code"], "INVALID_KNOWLEDGE_ASSESSMENT")
+        path = directory / "change.md"
+        original = path.read_text()
+        path.write_text(original.replace("Index checked; no prior alpha facts.", ""))
+        assessment = "Checked index; no new or invalidated facts."
+        self.assertEqual(output(run(self.root, *base, "--knowledge-assessment", assessment))["code"], "INCOMPLETE_PROPOSAL")
+        path.write_text(original)
+        result = run(self.root, *base, "--knowledge-assessment", assessment)
+        self.assertEqual(output(result)["knowledge"]["assessment"], assessment)
+        self.assertEqual(output(result)["knowledge"]["digests"], {})
+        path.write_text(original.replace("Index checked; no prior alpha facts.", ""))
+        self.assertEqual(output(run(self.root, "archive", "--id", "alpha-change"))["code"], "INCOMPLETE_PROPOSAL")
+        self.assertTrue(directory.is_dir())
+
+    def test_same_path_content_drift_blocks_active_and_moved_archive(self):
+        git(self.root, "config", "core.autocrlf", "true")
+        directory = self.verified_change()
+        path = self.root / ".dev-docs/knowledge/alpha.md"
+        path.parent.mkdir(parents=True)
+        original = b"approved knowledge\xff\r\n"
+        path.write_bytes(original)
+        result = run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "APPLIED", "--knowledge-path", ".dev-docs/knowledge/alpha.md", "--knowledge-assessment", "New stable fact; existing facts checked.")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        path.write_bytes(b"different knowledge\xff\r\n")
+        before = git(self.root, "rev-parse", "HEAD")
+        for moved in (False, True):
+            if moved:
+                directory.rename(self.root / ".dev-docs/changes/archive/alpha-change")
+            result = run(self.root, "archive", "--id", "alpha-change")
+            self.assertEqual(output(result)["code"], "KNOWLEDGE_CONTENT_DRIFT")
+            self.assertEqual(git(self.root, "rev-parse", "HEAD"), before)
+            self.assertEqual(git(self.root, "diff", "--cached", "--name-only"), "")
+        path.write_bytes(original)
+        result = run(self.root, "archive", "--id", "alpha-change")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        path.write_bytes(b"later facts\n")
+        git(self.root, "add", ".dev-docs/knowledge/alpha.md")
+        git(self.root, "commit", "-m", "docs: later knowledge")
+        result = run(self.root, "archive", "--id", "alpha-change")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_deleted_knowledge_has_null_digest(self):
+        self.root = self.root / "packages/app"
+        (self.root / ".dev-docs/changes/archive").mkdir(parents=True)
+        path = self.root / ".dev-docs/knowledge/old.md"
+        path.parent.mkdir(parents=True)
+        path.write_text("obsolete fact")
+        git(self.root, "add", ".dev-docs/knowledge/old.md")
+        git(self.root, "commit", "-m", "docs: old fact")
+        self.verified_change()
+        path.unlink()
+        result = run(self.root, "complete", "--id", "alpha-change", "--knowledge-result", "APPLIED", "--knowledge-path", ".dev-docs/knowledge/old.md", "--knowledge-assessment", "Removed obsolete fact after checking index.")
+        self.assertEqual(output(result)["knowledge"]["digests"], {".dev-docs/knowledge/old.md": None})
+        for _ in range(2):
+            result = run(self.root, "archive", "--id", "alpha-change")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_legacy_active_requires_higher_revision_and_explicit_approval(self):
+        directory = self.create()
+        self.approve()
+        state = change.load_state(self.root, "alpha-change")
+        del state["approval_source"]
+        change.write_state(self.root, "alpha-change", state)
+        before = (directory / "state.yaml").read_bytes()
+        status = output(run(self.root, "status", "--id", "alpha-change"))
+        self.assertEqual(status["next_action"], "revise-proposal")
+        self.assertEqual(status["disposition"], "await-user")
+        self.assertIsNone(status["approval_source"])
+        self.assertEqual((directory / "state.yaml").read_bytes(), before)
+        self.assertEqual(output(run(self.root, "verify", "--id", "alpha-change"))["code"], "APPROVAL_SOURCE_REQUIRED")
+        result = run(self.root, "approve", "--id", "alpha-change", "--approval-source", "session:new/message:2")
+        self.assertEqual(output(result)["code"], "REVISION_NOT_INCREMENTED")
+        path = directory / "change.md"
+        path.write_text(path.read_text().replace("revision: 1", "revision: 2"))
+        self.approve()
+        self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["next_action"], "verify")
+
+    def test_legacy_archive_keeps_old_snapshot_and_state_read_compatible(self):
+        directory = self.create()
+        path = directory / "change.md"
+        text = path.read_text()
+        for heading in ("Design", "Scope", "Knowledge Context"):
+            text = re.sub(r"## " + heading + r"\n.*?(?=## )", "", text, flags=re.S)
+        path.write_text(text)
+        state = change.load_state(self.root, "alpha-change")
+        state.update(revision=1, phase="build", base_head=git(self.root, "rev-parse", "HEAD"))
+        change.write_state(self.root, "alpha-change", state)
+        git(self.root, "add", ".dev-docs/changes/alpha-change")
+        git(self.root, "commit", "-m", change.approval_subject("alpha-change", 1))
+        state["approval_head"] = git(self.root, "rev-parse", "HEAD")
+        state["verified_head"] = state["approval_head"]
+        state["verification"]["manual"] = [{**json.loads(self.manual()), "head": state["verified_head"]}]
+        state["phase"] = "complete"
+        state["knowledge"] = {"result": "NO_OP", "paths": []}
+        change.write_state(self.root, "alpha-change", state)
+        self.finish_sections(directory)
+        self.assertEqual(output(run(self.root, "status", "--id", "alpha-change"))["next_action"], "revise-proposal")
+        self.assertEqual(output(run(self.root, "archive", "--id", "alpha-change"))["code"], "APPROVAL_SOURCE_REQUIRED")
+        target = self.root / ".dev-docs/changes/archive/alpha-change"
+        directory.rename(target)
+        before = {name: (target / name).read_bytes() for name in change.ARTIFACTS}
+        for _ in range(2):
+            result = run(self.root, "archive", "--id", "alpha-change")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(before, {name: (target / name).read_bytes() for name in change.ARTIFACTS})
 
 
 if __name__ == "__main__":

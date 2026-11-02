@@ -83,8 +83,9 @@ class HostContracts(unittest.TestCase):
         self.assertIn("只能由用户显式调用", read(INIT))
         work_metadata = frontmatter(WORK)
         self.assertIn("name: work", work_metadata)
-        self.assertNotIn("disable-model-invocation", work_metadata)
-        self.assertIn("既可由用户显式调用，也可由模型根据用户的 change 请求调用", read(WORK))
+        self.assertIn("disable-model-invocation: true", work_metadata)
+        self.assertIn("显式", read(WORK))
+        self.assertNotIn("也可由模型根据用户的 change 请求调用", read(WORK))
         work = read(WORK)
         self.assertIn('"${NUCLIO_SKILL_DIR}/../../scripts/change.py"', work)
         self.assertIn('"${NUCLIO_PROJECT_DIR}"', work)
@@ -492,6 +493,31 @@ class HostContracts(unittest.TestCase):
         self.assertIn("验证所绑定的 HEAD", change_format)
         self.assertIn("不直接批准只有单句概括的草稿", eval_prompts)
 
+    def test_complete_proposal_and_knowledge_coverage_are_explicit(self):
+        work = read(WORK)
+        change_format = read(REFERENCES / "change-format.md")
+        knowledge = read(REFERENCES / "knowledge.md")
+        for section in ("Design", "Scope", "Knowledge Context"):
+            self.assertIn(section, work)
+            self.assertIn(section, change_format)
+        for flag in ("--approval-source", "--knowledge-assessment"):
+            self.assertIn(flag, work)
+            self.assertIn(flag, change_format)
+        self.assertIn("revise-proposal", work)
+        self.assertIn("NO_OP", knowledge)
+        self.assertIn("失效", knowledge)
+        self.assertIn("未", knowledge)
+        self.assertNotIn("只确认结果、边界和 Acceptance", work)
+
+    def test_dsh_business_confirmation_and_native_lifecycle_are_mapped(self):
+        host = read(REFERENCES / "host-runtime.md")
+        for name in ("ask_user_question", "job_output", "job_kill", "send_message",
+                     "list_agents", "wait_agent", "CANNOT_VERIFY", "approval prompts disabled"):
+            self.assertIn(name, host)
+        self.assertIn("取消", host)
+        self.assertIn("业务批准", host)
+        self.assertIn("inactive", host)
+
     def test_open_design_handoff_is_conditional_read_only_intake(self):
         work = read(WORK)
         handoff = read(OPEN_DESIGN_HANDOFF)
@@ -529,12 +555,12 @@ class PackageSyncContracts(unittest.TestCase):
         for key in ("name", "version", "description"):
             self.assertEqual(claude[key], codex[key])
             self.assertEqual(claude[key], entry[key])
-        self.assertEqual(claude["version"], "5.3.3")
+        self.assertEqual(claude["version"], "5.4.0")
         self.assertEqual(entry["source"], "./plugins/nuclio-plugin")
         self.assertIn("Claude Code", claude["description"])
         self.assertIn("Codex", claude["description"])
         self.assertIn("@AGENTS.md", read(ROOT / "CLAUDE.md"))
-        self.assertIn("Nuclio v3 5.3.3", read(ROOT / "AGENTS.md"))
+        self.assertIn("Nuclio v3 5.4.0", read(ROOT / "AGENTS.md"))
         for filename in ("README.md", "AGENTS.md"):
             text = read(ROOT / filename)
             self.assertIn(".agents/plugins/marketplace.json", text)

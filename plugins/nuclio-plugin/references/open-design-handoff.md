@@ -31,13 +31,13 @@
 
 ### Shape
 
-读取绑定、MCP 交付和相关仓库事实，确认页面范围、交互、响应式、无障碍与数据边界。合同只描述可观察结果，不写 MCP 调用、复制路径或组件拆分等实现步骤。合同批准前不得把设计文件写入产品仓库。
+读取绑定、MCP 交付和相关仓库事实，确认页面范围、交互、响应式、无障碍与数据边界。proposal 在可观察结果之外，必需用 Design/Scope 说明关键架构增量、技术方案与重要取舍，以及页面/模块、接口、数据、部署与外部副作用影响；Knowledge Context 记录相关主题覆盖和冲突。不把 MCP 调用、逐文件复制或组件拆分变成审批清单。合同批准前不得把设计文件写入产品仓库。
 
 ### Build
 
 批准后在首个相关 milestone 中把接受的交付固化到固定目录 `.dev-docs/artifacts/open-design/`。每个代码仓库只维护一个由项目上下文绑定的 Open Design 交付，不再按 UUID 或其他内部 ID 分层。只写 `design-handoff.md` 声明的用户交付文件及其必要依赖，跳过 `*.artifact.json`，不删除目标目录中来源不明的文件。不得把完整 HTML/CSS 交付写入 `.dev-docs/knowledge/`，也不得默认写入项目的 `docs/`。
 
-固化后以仓库快照作为当前 change 的恢复输入，不在 Build 中静默重新拉取 Open Design。需要刷新设计时重新调用 MCP；若变化影响合同语义、兼容性或 Acceptance，回到 Shape 提升 revision。
+固化后以仓库快照作为当前 change 的恢复输入，不在 Build 中静默重新拉取 Open Design。需要刷新设计时重新调用 MCP；若变化实质影响结果、关键设计、影响范围、兼容性或 Acceptance，回到 Shape 提升 revision 并重新批准；普通快照内细节不逐文件审批。
 
 按共享框架和页面拆分 delivery milestone，最后保留覆盖全部 Acceptance 的 integration milestone。实现复用当前技术栈和 API；设计快照是规范，不是可直接搬运的生产业务模型。
 

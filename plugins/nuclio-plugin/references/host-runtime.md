@@ -4,30 +4,29 @@
 
 ## 入口与确认
 
-| 行为 | Claude Code | Codex |
-|---|---|---|
-| 初始化 | `/nuclio:init` | `$nuclio:init` |
-| 交付 | `/nuclio:work` | `$nuclio:work` |
-| init 调用策略 | frontmatter `disable-model-invocation: true` | `agents/openai.yaml` 中 `policy.allow_implicit_invocation: false` |
-| work 调用策略 | 不设置 `disable-model-invocation`，允许模型和用户调用 | `agents/openai.yaml` 中 `policy.allow_implicit_invocation: true` |
-| 结果合同与知识决定 | `AskUserQuestion` | 在对话中展示合同或知识候选，等待用户明确回复；也可使用宿主明确允许用于确认的交互工具 |
+| 行为 | Claude Code | Codex | DeepSeek Harness（DSH） |
+|---|---|---|---|
+| 初始化 | `/nuclio:init` | `$nuclio:init` | `/nuclio-init` |
+| 交付 | `/nuclio:work` | `$nuclio:work` | `/nuclio-work` |
+| 调用策略（两个入口） | frontmatter `disable-model-invocation: true` | `agents/openai.yaml` 中 `policy.allow_implicit_invocation: false` | bundle 沿用显式调用声明，不因普通 change 自动加载 |
+| 完整方案与知识决定 | `AskUserQuestion` | 展示方案/候选并等待明确回复，或使用当前宿主允许的确认工具 | `ask_user_question` 展示方案/候选并等待用户明确选择 |
 
 文档中的 `/nuclio:init`、`/nuclio:work` 表示对应工作流，在 Codex 使用表中的 `$` 入口。默认选项、等待超时、工具返回空答案均不是确认。需要确认时停止依赖该决定的动作，明确回复到达后才继续。`request_user_input` 若仅在 Plan Mode 可用，不为提问而切换模式。
 
-Claude Code Plan Mode 与 Codex Plan mode 均执行技能的停止规则。不要自行进入或退出模式；Codex 的 `update_plan` 或交付 milestone 不等于进入 Plan mode。权限由当前宿主控制，不能因为工作流获批而扩大 sandbox 或工具权限。
+Claude Code Plan Mode 与 Codex Plan mode 均执行技能的停止规则。不要自行进入或退出模式；Codex 的 `update_plan` 或交付 milestone 不等于进入 Plan mode。DSH 若实际暴露只读/规划模式，同样遵守停止边界，不把 todo/goal 或 milestone 当宿主模式。工具权限与业务批准是两层：sandbox、approval policy 或工具执行许可只决定工具能否运行；`ask_user_question` 的业务答复才可批准展示的方案。DSH 的 approval prompts disabled 不表示用户已批准业务，也不表示业务提问不可用。空回复、取消、等待中断或超时停止依赖该决定的动作并保留现场；不自动选推荐项。工具权限不足时停止报告，不因方案获批扩大权限。`approve --approval-source` 记录可定位会话/消息与明确决定，不伪称宿主签名认证或硬写入 Gate。
 
 ## 两个绝对路径
 
 技能正文中的 `NUCLIO_SKILL_DIR`、`NUCLIO_PROJECT_DIR` 是本次调用解析得到的路径记号，**不是宿主自动提供的环境变量**。
 
-1. `NUCLIO_SKILL_DIR`：当前实际加载的 `SKILL.md` 所在目录。Claude Code 从 `${CLAUDE_SKILL_DIR}` 取得；Codex 从技能目录清单或显式加载位置取得。支持插件缓存、路径含空格及符号链接；必须确认相邻 `../../scripts/change.py` 属于当前插件。
-2. `NUCLIO_PROJECT_DIR`：用户明确指定的项目根目录优先，否则使用宿主本次会话的项目目录（Claude Code 为 `${CLAUDE_PROJECT_DIR}`，Codex 为会话提供的工作目录）。不从插件目录或后来执行命令的 CWD 推断，不因为它在某个 Git 仓库内就静默改成另一层目录。项目边界不明确时先澄清。
+1. `NUCLIO_SKILL_DIR`：当前实际加载的 `SKILL.md` 所在目录。Claude Code 从 `${CLAUDE_SKILL_DIR}` 取得；Codex 从技能目录清单或显式加载位置取得；DSH 从当前 bundle provider 的 `resourceBase.path` 定位实际技能目录。支持插件缓存、路径含空格及符号链接；必须确认相邻 `../../scripts/change.py` 属于当前插件。
+2. `NUCLIO_PROJECT_DIR`：用户明确指定的项目根目录优先，否则使用宿主本次会话的项目目录（Claude Code 为 `${CLAUDE_PROJECT_DIR}`，Codex、DSH 为当前会话提供的工作目录）。不从插件目录或后来执行命令的 CWD 推断，不因为它在某个 Git 仓库内就静默改成另一层目录。项目边界不明确时先澄清。
 3. 在开始流程前固定两个绝对路径。每次 shell 调用都把记号替换成已核实且正确引用的绝对路径，或在**同一次 shell 调用**内设置这两个任务变量；不要依赖前一次 shell 的赋值。不会 shell 转义时使用结构化 argv。
 4. Git 始终显式传入 `-C`，Runtime 始终显式传入 `--project-root`。无法定位任一路径时停止并报告，不能退回插件源码仓库、猜测安装路径或借用 Claude 的残留变量。
 
 项目可以是 Git 仓库中的子目录；Runtime 负责转换项目相对路径与 Git 根目录相对路径，Git 的共享 index 和项目外 dirty 路径仍参与 clean gate。项目根路径可以解析符号链接；其下 `.dev-docs` 的目录、artifact、配置和知识路径不能再通过符号链接重定向。分支 ref 列举命令中的 `--format="%(refname)"` 必须保留 shell 引号。
 
-两个宿主都按 work 的显式归档恢复例外处理用户当前给出的恢复/归档 ID：没有 active 候选时，只定点检查该 archive 目录并调用 `archive --id`，不扫描 archive、不进入新建分支规则。`status` 返回 `recover-approval` 时重跑 `approve --id`，不重复确认已经提交的合同。
+三个宿主都按 work 的显式归档恢复例外处理用户当前给出的恢复/归档 ID：没有 active 候选时，只定点检查该 archive 目录并调用 `archive --id`，不扫描 archive、不进入新建分支规则。`status` 返回 `recover-approval` 时重跑 `approve --id`，不重复确认已经提交的合同。
 
 例如，本次加载技能位于 `/opt/plugin cache/nuclio/skills/work/SKILL.md`，目标项目为 `/work/my project`，实际命令是：
 
@@ -36,6 +35,14 @@ python3 "/opt/plugin cache/nuclio/scripts/change.py" --project-root "/work/my pr
 ```
 
 安装目录与 Marketplace cache 始终只读。Runtime 的状态和知识产物只在目标项目的 `.dev-docs/**`；其既有 approval/archive Git 元数据提交也只作用于显式目标项目。切换宿主恢复 change 时读取同一份三件套，不迁移 schema，也不增加宿主状态。
+
+## DSH 等待、恢复与取消
+
+- 调查/实施使用当前环境提供的 `subagent` 或 durable teammate，明确禁止递归委派、Skill 和 Runtime；共享工作区不代表权限隔离，产品写入仍顺序进行。
+- 异步任务保留返回 ID，优先原生完成通知；真正依赖后台 job 结果时 `job_output`，阻塞时可 `wait: true`，不重复启动同一工作。取消用 `job_kill` 并报告未完成项；取消不等于成功、归档或暂停 change。
+- durable teammate 用 `send_message` 向原 target 继续原线程；它会唤起 inactive，不能套用 Codex“仅递送不启动”的语义。inactive 仅表示没有 turn 运行，不等于任务完成。等待前按 `list_agents` 核对必要成员正在 running/provisioning；inactive 先发送消息，再用 `wait_agent` 等待之后的变化。发送成功不表示对方已处理；禁止消息/状态忙轮询。
+- 收到停止/取消后停止后续依赖动作，保留实际 Git/artifact 现场；恢复重新核对当前请求归属、版本/批准、知识覆盖和 `status`，不凭旧聊天声称已完成。
+- DSH 的代理若没有宿主强制的只读工具限制或有效 sandbox，就不能担任独立 reviewer。普通共享文件系统的代理加自然语言“只读”不够；正式报告 `CANNOT_VERIFY: isolated read-only reviewer unavailable`。主会话可自检，但不得冒充独立审查；要求的审查未满足不能宣称完成。
 
 ## 原生代理能力映射
 

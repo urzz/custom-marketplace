@@ -24,10 +24,10 @@ disable-model-invocation: true
 在 `${NUCLIO_PROJECT_DIR}` 中检查 `.dev-docs` 后，只可：
 
 - 创建缺失的 `.dev-docs/index.md`、`.dev-docs/knowledge/project.md`、`.dev-docs/knowledge/architecture.md`、`.dev-docs/knowledge/engineering.md` 与 `.dev-docs/changes/archive/`；
-- 为缺失的入口写入简短导航或空知识标题；索引只列出路径、摘要和何时读取，知识正文留在对应文件；
+- 为缺失的入口写入简短主题导航或空知识标题；索引条目包含主题、何时读、authority 路径/heading 和适用边界，知识正文留在对应文件。例如认证/权限变更触发 architecture 的相应 heading，构建/测试/发布变更触发 engineering；没有事实时保留明确待建立标记，不编造现状；
 - 安全修复缺失的目录或明显损坏且没有用户正文的根索引。
 
-已有知识正文、active change、archive、非空未知文件、符号链接或混合的旧流程痕迹必须保留。无法确认安全性时停止并报告精确路径。发现 v2 active change（特别是 `plan.yaml`）时停止；v3 不迁移或解析它。
+不批量迁移、拆分或重写已有项目知识；主题路由可指向现有 heading，不要求先重构所有知识文件。已有知识正文、active change、archive、非空未知文件、符号链接或混合的旧流程痕迹必须保留。无法确认安全性时停止并报告精确路径。发现 v2 active change（特别是 `plan.yaml`）时停止；v3 不迁移或解析它。
 
 ## Boundaries
 

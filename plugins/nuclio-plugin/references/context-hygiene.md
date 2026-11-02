@@ -30,6 +30,14 @@
 
 `next_action=recover-approval` 时直接重跑 `approve --id <change-id>` 恢复已提交批准，再读取 status；不得沿用缺失批准时的检查或重复确认同一合同。`manual_blocker` 与 `review_blocker` 一样先回到 Build 处理。手工记录缺少显式 `PASS|FAIL` 状态时不作为通过依据，按 `change-format.md` 重做观察。
 
+## 可恢复的知识覆盖与请求归属
+
+唯一 active 的 status 仅提供事实，不替代当前请求归属判断。核对 Goal、Design、Scope 后才恢复；不匹配/不明确则停止实施，提供“保留现场、本次停止/先完成旧项”，不自动吸收新请求、绕过 Nuclio或声称已暂停。恢复展示 ID/revision、批准状态、范围、知识覆盖和下一步。旧 active 缺完整 proposal/来源按 revise-proposal 补全并提升 revision 重批；recover-approval 仅恢复完整已提交批准。
+
+`Knowledge Context` 是必需但可更新的短覆盖记录：相关主题、已读 authority/heading 与理由、影响但未核对项、冲突/过期/缺失及处理。读取索引不等于读了正文，部分/截断读取不等于覆盖完整主题；恢复和每阶段按问题补读，不全量加载。当前实现行为与已接受约束冲突时区分 bug、过期和待裁决变更，不自动让代码覆盖产品约束。Design/Scope 属于冻结批准，知识覆盖记录不冻结；发现实质关键设计变化才提升 revision 重批。
+
+Finish 用最终 diff、批准决定与覆盖记录核对新增/失效；NO_OP 必须有主题核对依据。跳过失效记录风险，用户允许时让 index/主题入口可发现待处理定位；拒绝提示写入时明确报告入口风险未持久化，不偷偷写知识。详见 knowledge。
+
 ## Agent and reviewer
 
 主会话仍是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`；产品写入保持顺序。每个 Shape 调查和 Build/返修工作包开始前，主会话都获得条件性积极委派的明确授权，由模型按工作独立性、上下文隔离收益和协调成本自主决定拆分，不使用 token/ctx 硬阈值，也不依赖模型名、具体工具、固定代理数量或自动委派模式。多文件/多模块调查、大输出失败诊断、可独立验收实现轨道、只需摘要的工作和 fresh-context review，在能改善速度、覆盖或上下文质量时应积极委派；少量工具调用、单文件小改、紧密顺序依赖、共享资源争用或需要持续共享上下文时直接执行。产品语义、兼容性、权限、外部副作用、不可逆结果、跨 milestone 架构取舍、用户交互、Runtime、Verify、Finish 等控制决定也由主会话处理，不为形式而派发。

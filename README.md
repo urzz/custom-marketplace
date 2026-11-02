@@ -9,10 +9,10 @@
 | `dev-stack` / `0.5.1` | `/dev-stack:skill-forge` | `$dev-stack:skill-forge` | `/dev-stack-skill-forge` | 为 Claude Code、Codex、DSH 或多平台创建、修改、审查 skill |
 | `dev-stack` / `0.5.1` | `/dev-stack:commit` | `$dev-stack:commit` | `/dev-stack-commit` | 默认自动提交安全候选，并验证单个 Conventional Commit |
 | `dev-stack` / `0.5.1` | `/dev-stack:commit-and-push` | `$dev-stack:commit-and-push` | `/dev-stack-commit-and-push` | 默认自动提交安全候选，验证后普通推送当前分支 |
-| `nuclio` / `5.3.3` | `/nuclio:init` | `$nuclio:init` | `/nuclio-init` | 创建或安全修复 `.dev-docs` 知识骨架 |
-| `nuclio` / `5.3.3` | `/nuclio:work` | `$nuclio:work` | `/nuclio-work` | 创建、恢复、验证和归档一个 change |
+| `nuclio` / `5.4.0` | `/nuclio:init` | `$nuclio:init` | `/nuclio-init` | 创建或安全修复 `.dev-docs` 知识骨架 |
+| `nuclio` / `5.4.0` | `/nuclio:work` | `$nuclio:work` | `/nuclio-work` | 创建、恢复、验证和归档一个 change |
 
-`skill-forge` 与 Nuclio 的 `init` 仅显式调用；Nuclio 的 `work` 可由模型根据 change 请求自动调用。commit 系列保留自动发现，默认对安全候选直接暂存、提交和推送；显式 preview/analysis 或 workflow-level 风险才会等待用户裁定，具体边界仍遵守共享提交合同。DSH 名称使用插件前缀，避免不同插件的同名 skill 发生冲突。
+`skill-forge` 与 Nuclio 的 `init`、`work` 仅由用户显式选择；普通 change 请求不自动启用 Nuclio，也不受其全局拦截。commit 系列保留自动发现，默认对安全候选直接暂存、提交和推送；显式 preview/analysis 或 workflow-level 风险才会等待用户裁定，具体边界仍遵守共享提交合同。DSH 名称使用插件前缀，避免不同插件的同名 skill 发生冲突。
 
 ## 安装
 
@@ -52,15 +52,17 @@ DeepSeek Harness：
 
 **Skill Forge** 先确定目标平台与需求，确认 Spec，再生成并校验 Plan，按 Task 顺序实施。宿主与目标可以不同，例如在 Codex 中维护 Claude Code skill，或在 DSH 中维护多宿主 skill。各目标共用 Plan validator 和代理角色合同；工具与权限按实际宿主适配。
 
-**Nuclio v3 5.3.3** 共用七命令 Runtime，active change 和新 archive 都保留 `change.md`、`delivery.yaml`、`state.yaml`。在另一宿主恢复时继续读取同一份文件，无需转换状态；DSH provider 只负责发现并加载共享正文，项目路径和 Runtime 边界仍按宿主适配落实。
+**Nuclio v3 5.4.0** 共用七命令 Runtime，active change 和新 archive 都保留 `change.md`、`delivery.yaml`、`state.yaml`。在另一宿主恢复时继续读取同一份文件，无需转换状态；DSH provider 只负责发现并加载共享正文，项目路径和 Runtime 边界仍按宿主适配落实。
 
-Nuclio 在 Claude Code Plan Mode、Codex Plan mode 或 DSH 当前 profile 的等价计划模式中均停止并要求退出后重新调用。普通模式下，work 在 discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。唯一 active change 按 ID 恢复，多个候选报告歧义；仅无 active change 且需要新建时才要求起点 attached 且 clean，并在只读 Shape 后完成分支/HEAD/工作区及全部已配置 remote 的缓存 remote-tracking refs 检查，创建受控新分支，再进行 post-switch 复核与 Runtime create。
+Nuclio 在 Claude Code Plan Mode、Codex Plan mode 或 DSH 当前 profile 的等价计划模式中均停止并要求退出后重新调用。普通模式下，work 在 discovery 前只读捕获调用起点 snapshot；snapshot unavailable 或起点 dirty 不阻塞已有 active change 的 discovery 与恢复。唯一 active change 先核对当前请求归属再按 ID 恢复，不匹配则保留现场并让用户选择；多个候选报告歧义；仅无 active change 且需要新建时才要求起点 attached 且 clean，并在只读 Shape 后完成分支/HEAD/工作区及全部已配置 remote 的缓存 remote-tracking refs 检查，创建受控新分支，再进行 post-switch 复核与 Runtime create。
 
-用户确认结果合同后，主会话管理交付与检查。每个 Shape 调查和 Build/返修工作包开始前，主会话按独立性、上下文隔离收益与协调成本决定直接执行或条件性积极委派，由模型自主选择拆分；多文件调查、大输出诊断和可独立验收轨道在有收益时积极委派，单文件小改、紧密依赖或共享资源争用时直接处理，不机械要求 agent-first。实际委派形成可独立验收的工作包；活动期间产品路径和诊断主题对主会话排他，调查与实施代理（含返修）仅作最多 15 行的五字段结构化回传，独立 reviewer 使用专用审查格式，不套用该字段或行数限制。依赖结果时使用宿主原生完成通知或等待，失败则优先按实际能力继续原线程（resume），无法继续或工作包不再适合时才缩小/重切或重新委派。
+用户一次确认结果、关键设计、影响范围、知识依据与风险验证后，主会话管理交付与检查；关键方案或实质范围变化时提升 revision 并重新确认，普通实现细节不逐项审批。每个 Shape 调查和 Build/返修工作包开始前，主会话按独立性、上下文隔离收益与协调成本决定直接执行或条件性积极委派，由模型自主选择拆分；多文件调查、大输出诊断和可独立验收轨道在有收益时积极委派，单文件小改、紧密依赖或共享资源争用时直接处理，不机械要求 agent-first。实际委派形成可独立验收的工作包；活动期间产品路径和诊断主题对主会话排他，调查与实施代理（含返修）仅作最多 15 行的五字段结构化回传，独立 reviewer 使用专用审查格式，不套用该字段或行数限制。依赖结果时使用宿主原生完成通知或等待，失败则优先按实际能力继续原线程（resume），无法继续或工作包不再适合时才缩小/重切或重新委派。
 
 Claude Code、Codex 与 DSH 共用模型和工具无关的能力合同，并按当前宿主真实提供的原生 Agent、等待、resume 与强制只读能力适配。Codex 依据当前工具定义及代理状态判断能否继续原线程，不按固定版本或文档遗漏推定恢复能力缺失。能力不足时按语义降级：无原生 Agent 则主会话顺序直做，无 resume 则重切或重新委派，无异步通知则使用宿主原生阻塞等待，无法强制只读则 reviewer 报告 `CANNOT_VERIFY`；不跨宿主调用 CLI 或模拟缺失能力。Runtime 记录当前检查依据、判断完成条件，并支持知识决定与可恢复归档。可选 Open Design 只使用用户已配置的 MCP 和明确绑定的 `project-id`，批准后的设计交付固定保存到 `.dev-docs/artifacts/open-design/`。
 
 手工验收必须明确 `PASS` 或 `FAIL`；旧 v3 无状态手工记录不再作为通过依据，需要重新观察。批准提交回写中断通过 status 的 `recover-approval` 恢复；归档移动中断后，可明确请求“恢复并归档 `<change-id>`”，直接恢复指定 ID。Runtime 支持 Git 子目录项目、中文路径，并在归档移动前检查知识改动和忽略规则；已完成归档可在后续提交后幂等确认，归档内容漂移会被拒绝。
+
+新批准通过 `--approval-source` 保存当前方案版本对应的用户决定定位；这是主会话声明，不是宿主认证或不可绕过的写门禁。旧 v3 active 缺少完整方案／来源时先补全并重新批准，旧 archive 不批量迁移。每个 change 的 `Knowledge Context` 记录主题、读取覆盖和冲突；Finish 的 `--knowledge-assessment` 保存新增与失效核对、NO_OP 理由或跳过风险，知识写入内容摘要在归档前复核，防止同路径内容漂移。
 
 详细规则见 [Nuclio workflow](plugins/nuclio-plugin/references/workflow.md)、[宿主适配](plugins/nuclio-plugin/references/host-runtime.md) 和 [Skill Forge 平台适配](plugins/dev-stack/skills/skill-forge/references/platforms.md)。
 

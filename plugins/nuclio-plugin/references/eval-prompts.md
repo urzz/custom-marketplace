@@ -1,10 +1,10 @@
 # Nuclio v3 Eval Prompts
 
-以下 fresh-session 场景分别验证 Claude Code 与 Codex 的真实入口行为；Codex 使用 `$nuclio:init` / `$nuclio:work`，路径和交互遵循 `host-runtime.md`。Runtime 合同以 `change-format.md` 和 `change.py` 为准。
+以下 fresh-session 场景分别验证 Claude Code、Codex 与 DSH 的真实入口行为；Codex 使用 `$nuclio:init` / `$nuclio:work`，DSH 使用 `/nuclio-init` / `/nuclio-work`，路径和交互遵循 `host-runtime.md`。所有涉及合同确认的场景均批准结果 + Design/Scope 关键设计/影响面 + 知识依据/风险验证，而非只批准结果。Runtime 合同以 `change-format.md` 和 `change.py` 为准。
 
 ## Fresh-session 执行与判定规则
 
-- 每个场景从 fresh session 开始，在当前可用的 Claude Code 或 Codex harness 中使用该宿主真实提供的原生代理、完成通知/等待、resume 和只读能力；不得调用另一宿主 CLI、安装代理配置或用新增服务补齐能力。
+- 每个场景从 fresh session 开始，在当前可用的 Claude Code、Codex 或 DSH harness 中使用该宿主真实提供的原生代理、完成通知/等待、resume 和只读能力；不得调用另一宿主 CLI、安装代理配置或用新增服务补齐能力。
 - 只按可观察合同判定行为；不按模型名、具体代理工具名、固定代理数量或固定并发数、宿主是否自动委派来判定成功。Skill 显式授权条件性积极委派，模型根据独立性、上下文隔离收益和协调成本自主决定具体拆分；正例可因合理拆分产生不同派发数量，负例也不为形式机械派发。
 - 当前宿主、模型或所需原生能力不可用的组合必须明确记录 `SKIP: <不可用原因>`，不得伪造能力、把 `SKIP` 算作 `PASS`，也不把所有宿主/模型组合均可用作为发布前提。
 
@@ -200,3 +200,39 @@
 - **User Prompt**：`/nuclio:work 对当前 change 完成必要的独立审查并继续交付`
 - **Expected**：按只读审查合同接受 A/B/C 的格式。A 供主会话判断验证结果，B 按 findings 回到 Build，C 保留未满足审查；不将 B 或 C 当作通过。用户或项目要求独立审查时，C 阻止宣称完成。
 - **Assertions**：不要求 reviewer 输出调查与实施代理的五字段或 `DELIVERED|BLOCKED`，不因合法报告超过 15 行而裁剪 finding、判为缺少合格回传或触发恢复/重派。普通调查与实施代理仍执行原五字段及 15 行限制，reviewer 的只读权限与 Runtime 边界保持有效。
+
+### 29. 显式选择，不接管普通请求
+
+- **User Prompt**：`修复登录回跳并补测试`（未显式选择 Nuclio）。
+- **Expected**：不自动调用 work/init、不启动 Runtime，不声称项目全部写入受 Nuclio 强制管理；显式 `/nuclio-work` 或明确选择 Nuclio 后才进入。
+- **Assertions**：work frontmatter 禁止模型隐式调用，skill 级 openai.yaml 的 allow_implicit_invocation 为 false。
+
+### 30. 一次完整方案批准与实质重批
+
+- **Setup**：显式选择 Nuclio；小修与跨模块事务方案分别覆盖。
+- **Expected**：产品写入前展示 ID/revision、结果、Design（无增量明确无）、Scope、知识覆盖、风险与验证，等待明确回复并记录 approval-source。小修不强迫大文档。用户未回答/取消/超时均停止，不把工具权限批准当业务同意。
+- **Assertions**：新增测试文件、milestone 重排或同方案返修不重问；结果未变但权限、事务/事实源或关键架构变更必须提升 revision 重批；Knowledge Context 补读记录可更新而不使批准失效。
+
+### 31. 唯一 active 与新请求不匹配
+
+- **Setup**：唯一 active 是司机申请，当前显式 work 请求是 Banner 重试。
+- **Expected**：只读状态后核对语义归属，展示旧方案/批准/知识覆盖/剩余项，停止并提供保留现场或先完成旧项。
+- **Assertions**：不自动继续旧项或吸收新项，不推荐绕过 Nuclio，不伪造暂停，不 stash、移动三件套或开第二 active。
+
+### 32. 知识召回、NO_OP 与跳过失效
+
+- **Setup**：index 的 architecture 入口含认证、摄像头、司机审核、履约码多个 heading；相关知识可能在长文件后半部；一个规则与代码冲突。
+- **Expected**：按主题触发读取；Knowledge Context 分别列已读/未核对、冲突及证据，截断读取不算全覆盖；区分实现 bug 与过期约束，不自动让代码覆盖规范。Finish 用最终 diff/批准决定复核。
+- **Assertions**：合理 NO_OP 包含具体主题核对理由；跳过失效为 REJECTED/PARTIAL、记录风险，在用户允许时 index/主题入口可发现。用户拒绝连风险提示也写入时不得偷写，明确报告入口风险未持久化，不宣称闭环完成；不默认扫描 archive。
+
+### 33. DSH 原生交互、等待与权限
+
+- **Setup**：ask_user_question 返回空/取消；durable teammate inactive；后台 job 已返回 ID；reviewer 只有自然语言只读承诺。
+- **Expected**：空/取消停止依赖动作；send_message 可唤起原 inactive teammate，发送成功不等于已完成；依赖结果使用通知/wait_agent 或 job_output，取消 job 用 job_kill 并保留未完成事实。
+- **Assertions**：无有效只读限制则 CANNOT_VERIFY，不派普通代理冒充只读审查；approval prompts disabled 不等于业务已批准；不 sleep/忙轮询，不把 inactive 当成功。
+
+### 34. 新旧合同与知识内容漂移
+
+- **Setup**：旧 v3 active 缺 Design/Scope/Knowledge Context 或批准来源；完整新批准 State 回写中断；旧 v3 archive；complete 后同一知识路径正文变更。
+- **Expected**：旧 active 补全、提升 revision 重批，不伪造来源；完整新批准 recover-approval 可不传来源且不重问；旧 archive 仅显式 ID 按历史合同恢复、不批量迁移。complete 的 knowledge-assessment 必填，archive 拒绝同路径摘要漂移。
+- **Assertions**：已提交 archive 后正常知识更新不使其失效；保留现有中文路径、子项目、精确 dirty 集合、符号链接、Git 与三件套保护，不启动第二 Runtime/daemon/DAG。

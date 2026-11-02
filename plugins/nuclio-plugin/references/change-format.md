@@ -23,7 +23,7 @@
 
 项目根目录可位于 Git 仓库子目录；Runtime 显式转换项目相对路径和 Git 根目录相对路径，不改变项目边界，项目外的 dirty 路径仍参与共享 Git 工作区的 clean gate。Git 文件列表使用 NUL 分隔，支持中文及需要引用的文件名，不依赖 `core.quotePath`。`.dev-docs` 及其下 artifact/config/knowledge 路径的任一父目录或文件不得为符号链接；发现时返回 `UNSAFE_SYMLINK`，不通过链接写入其他目录。实际项目根路径的解析不受此限制。
 
-发现 active 目录中的 v2 `plan.yaml` 或旧 State 时，Runtime 返回 `V2_ACTIVE_UNSUPPORTED` 并停止；不迁移、不读取旧协议。archive 仅按用户明确的 change ID 操作；不扫描、解析、修改或删除旧 archive。
+发现 active 目录中的 v2 `plan.yaml` 或旧 State 时，Runtime 返回 `V2_ACTIVE_UNSUPPORTED` 并停止；不迁移、不读取旧协议。archive 仅按用户明确的 change ID 操作；不扫描、批量解析、修改或删除旧 archive。旧 v3 archive 的定点恢复按下文兼容边界处理，不给历史归档补造新批准。
 
 ## 新 change 的 Git 分支边界
 
@@ -73,14 +73,26 @@ revision: 1
 - AC-3: 非法或外站回跳地址不会离开本站，而是回到首页。
 - AC-4: 无回跳参数时继续使用现有默认落点。
 
+## Design
+
+沿用现有认证与会话边界；仅修正 callback 的站内路径归一化，保留 query string，并统一校验密码/SSO 两条回调。不引入新的架构组件。相比在两个入口分别补丁，共用现有归一化接缝避免规则分叉。
+
+## Scope
+
+影响认证回调模块、站内回跳接口及定向测试；不更改会话数据、数据库、权限模型或部署方式，无迁移和新增外部副作用。
+
+## Knowledge Context
+
+已读：认证主题 authority architecture.md 的认证 heading，核对现有会话与回跳边界。尚未核对：无。冲突/缺失：无；Finish 依据最终 diff 再核对。
+
 ## Decisions
 
 非法或外站回跳地址统一回退首页，不显示额外错误。
 ```
 
-frontmatter 必须且只能包含 `schema_version`、`change_id`、`revision`；schema 为 `1`，revision 是正整数。H1、Goal、Context、Constraints、Non-goals、Acceptance Criteria 必须唯一且非空。Acceptance 使用唯一的 `AC-*` ID。`Decisions` 可选，但存在时非空。批准后的 Goal、Context、Constraints、Non-goals、Acceptance Criteria 与批准时存在的 Decisions 是冻结合同；语义改变时 revision 必须递增并重新 `approve`。
+frontmatter 必须且只能包含 `schema_version`、`change_id`、`revision`；schema 为 `1`，revision 是正整数。H1、Goal、Context、Constraints、Non-goals、Acceptance Criteria、Design、Scope、Knowledge Context 必须唯一且非空。Acceptance 使用唯一的 `AC-*` ID。`Decisions` 可选，但存在时非空。批准后的 Goal、Context、Constraints、Non-goals、Acceptance Criteria、Design、Scope 与批准时存在的 Decisions 是冻结合同；关键语义改变时 revision 必须递增并重新 `approve`。Knowledge Context 可持续更新、不冻结；读取范围/核对记录更新无需重批，但知识冲突推翻已批准方案假设时必须更新 Design/Scope/Constraints、提升 revision 重批，不能借该可变 section 绕开 Gate。`create --design/--scope/--knowledge-context` 可省略并生成待补空节；空节不满足 approve/complete 的完整 proposal 要求。
 
-合同必须在不读取旧聊天、`delivery.yaml` 或 archive 的情况下说明做什么、为什么、边界和可观察完成条件。精简不等于单句：Goal 可以是一句明确结果；Context 保留理解需求所需的当前事实与影响；每项独立 Constraint 和 Non-goal 分开记录，存在多项时使用列表；每条 Acceptance 只表达一个可观察结果，并覆盖与合同有关的关键正常路径和边界，不写实现步骤或臆测信息。
+合同必须在不读取旧聊天、`delivery.yaml` 或 archive 的情况下说明做什么、为什么、边界和可观察完成条件。精简不等于单句：Goal 可以是一句明确结果；Context 保留理解需求所需的当前事实与影响；每项独立 Constraint 和 Non-goal 分开记录，存在多项时使用列表；每条 Acceptance 只表达一个可观察结果，并覆盖与合同有关的关键正常路径和边界，不写逐函数实现步骤或臆测信息。Design 必须交代当前系统、架构增量（无则明确无）、关键方案及重要备选取舍；Scope 说明影响模块/目录、接口、数据/迁移、部署、权限、外部副作用和不动边界。用户一次批准结果、关键设计和影响面，不逐文件或 milestone 审批。Knowledge Context 记录相关主题、已读 authority/heading、未核对项及冲突/过期/缺失处理；验证策略与风险需在 proposal 中可见。
 
 完成前在原合同后按顺序追加以下非空 section，它们不属于批准合同：
 
@@ -128,13 +140,13 @@ checks 使用 argv 数组；`cwd` 是位于项目根目录内的 repo-relative �
 
 State 只由 `change.py` 原子写入。初始 State 保存 `revision: null`、`phase: shape`、`base_head: null`、`approval_head: null`、`verified_head: null`。批准后保存批准 revision、首次批准前的 `base_head`、approval commit SHA，以及当前 verification：每条记录的完整规范化定义、HEAD、exit code 和有界 summary；同时保存每条 Acceptance 的 `missing|passed`、可选手工观察/review 与知识结果。
 
-State 不保存合同正文、content hash、完整命令输出、diff、Agent/transcript、attempt、Task、path ownership 或验证历史。
+State 的可选 `approval_source` 保存主会话声明的批准会话/消息定位；knowledge 保存 `assessment` 与 `digests`（路径到 SHA256 十六进制摘要，删除为 null）。不保存合同正文、完整命令输出、diff、Agent/transcript、attempt、Task、path ownership 或验证历史。来源不是宿主认证凭据，摘要不证明知识分析语义正确。
 
 ## Runtime commands and gates
 
 CLI 仅有 `create`、`approve`、`status`、`record-check`、`verify`、`complete`、`archive` 七个命令；成功、参数错误和 schema 错误均以 JSON 表达。`record-check` 只比较调用方给出的 argv、HEAD、exit code 与当前定义并记录结果，绝不执行 argv。
 
-`approve` 要求完整合同、完整 delivery、附着 HEAD、空 index 和干净产品工作区；它只提交三件套，subject 为 `approve(<id>): confirm revision <n>`。提交成功但 State 回写中断时，`status` 只读识别并返回 `recover-approval`；主会话重跑 `approve`，复核合同和 clean gate 后写回该提交，不重复确认或创建新提交。重新批准保留首次 `base_head`，替换 approval HEAD，并清空旧验证。
+新 `approve --approval-source '<会话/消息定位与明确决定>'` 要求非空来源、完整 proposal、完整 delivery、附着 HEAD、空 index 和干净产品工作区；它只提交三件套，subject 为 `approve(<id>): confirm revision <n>`。提交成功但 State 回写中断时，`status` 只读识别并返回 `recover-approval`；主会话重跑 `approve`，复核合同和 clean gate 后写回该提交，不重复确认或创建新提交。重新批准保留首次 `base_head`，替换 approval HEAD，并清空旧验证。完整新批准的提交回写中断恢复可不传 `--approval-source`；不为旧批准补造来源。旧 v3 active 有批准 revision 但缺完整 proposal 或来源时，status 路由到 `revise-proposal`/等待用户：主会话补齐 sections、提升 revision、展示完整方案并重批；不默认沿用旧授权。未批准 shape 按普通 proposal 补全。v2 active 仍 fail closed。旧 v3 archive 仅按显式 ID 兼容原 schema/snapshot 的定点恢复，不批量改写、不要求给已提交历史补新字段；其他旧 archive 不扫描。
 
 `verify --manual` 每个参数是一个包含 `acceptance`、`status`、`steps`、`result`、`executor` 的 JSON 对象，例如：
 
@@ -146,11 +158,11 @@ CLI 仅有 `create`、`approve`、`status`、`record-check`、`verify`、`comple
 
 正常 `verify` 要求批准合同未漂移、delivery 覆盖完整、产品工作区干净，且所有当前定义的项目与 change checks 都在当前 HEAD 通过；stale complete 恢复时仅允许 State 已精确登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty，其他 dirty 路径仍被拒绝。HEAD、合同或 check 的 `source`、`id`、`run`、`cwd`、`timeout_seconds`、`covers` 任一漂移（包括新增或删除 check ID）都会使旧依据失效；重跑 `verify` 会移除已不在当前定义中的旧记录。当前 HEAD 上显式 reviewer `FAIL` 会阻断 `verify` 和 `complete`；同一 HEAD 的 `PASS` 可解除该阻断。未提供 `--manual` 时保留同一 HEAD 的已有手工依据；提供 `--manual` 时以该次完整批次替换，旧 HEAD 依据自然失效。`complete` 还要求每条 Acceptance 有当前依据、当前 HEAD 等于 `verified_head`、完成 section 已写入，以及明确且精确的知识结果；terminal evidence 仍为当前时 `verify` 不会降级 complete State，stale complete 恢复时可按验证结果转为 `verified|build`。
 
-`status.next_action` 按当前事实恢复，并在工作包中返回 index 与 dirty-product clean gate：可识别的批准提交回写中断为 `recover-approval`；`shape` 或尚无可恢复批准为 `confirm-contract`；当前 reviewer `FAIL` 或 `manual_blocker` 优先为 `build`；检查缺失、失败或过期为 `run-required-checks`；verified evidence 因 HEAD 漂移失效为 `build`；其余尚未绑定的证据为 `verify`；当前 `verified` 仅在 index 为空且除 Finish 可确认的 knowledge 候选外无产品 dirty 时为 `finish`。`complete` 仅在 terminal evidence、完成章节与 clean gate 均当前时为 `archive`；clean gate 只允许 State 已登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty。完成章节缺失为 `finish`，证据或 clean gate 漂移按相同规则回到 Build/检查并允许 `record-check`、`verify` 重建依据，不重新确认未变化的合同。工作包同时返回 `verified_head`、缺失 Acceptance 和当前 reviewer/manual blocker。
+`status.next_action` 按当前事实恢复，并在工作包中返回 index 与 dirty-product clean gate：可识别的批准提交回写中断为 `recover-approval`；`shape` 或尚无可恢复批准为 `confirm-contract`；当前 reviewer `FAIL` 或 `manual_blocker` 优先为 `build`；检查缺失、失败或过期为 `run-required-checks`；verified evidence 因 HEAD 漂移失效为 `build`；其余尚未绑定的证据为 `verify`；当前 `verified` 仅在 index 为空且除 Finish 可确认的 knowledge 候选外无产品 dirty 时为 `finish`。`complete` 仅在 terminal evidence、完成章节与 clean gate 均当前时为 `archive`；clean gate 只允许 State 已登记的 `APPLIED|PARTIAL` knowledge 路径保持 dirty。完成章节缺失为 `finish`，证据或 clean gate 漂移按相同规则回到 Build/检查并允许 `record-check`、`verify` 重建依据，不重新确认未变化的合同。工作包同时返回 `verified_head`、缺失 Acceptance 和当前 reviewer/manual blocker；方案恢复另提供 `approval_source`（旧记录可为 null）、`proposal_missing`（缺失的 Design/Scope/Knowledge Context 列表）、`design`、`scope`、`knowledge_context`。旧 active 有批准 revision 但缺来源时 `next_action=revise-proposal`、`disposition=await-user`；未批准 shape 仍为 `confirm-contract`。
 
-知识结果为 `NO_OP|APPLIED|PARTIAL|REJECTED`。`NO_OP|REJECTED` 不带路径；`APPLIED|PARTIAL` 必须给出与当前 dirty knowledge 路径精确一致的 `.dev-docs/knowledge/**` 或 `.dev-docs/index.md` 路径。
+`complete --knowledge-assessment '<主题核对依据、结论、理由与剩余风险>'` 必须非空，同时要求完整 proposal。NO_OP 必须说明核对过的主题及为何无新增/失效，不能将已知失效被跳过记为 NO_OP；详见 knowledge reference。知识结果为 `NO_OP|APPLIED|PARTIAL|REJECTED`。`NO_OP|REJECTED` 不带路径；`APPLIED|PARTIAL` 必须给出与当前 dirty knowledge 路径精确一致的 `.dev-docs/knowledge/**` 或 `.dev-docs/index.md` 路径。
 
-`archive` 只处理已完成的显式 change，完整保留三件套，subject 为 `archive(<id>): retain complete change record`。正常归档及移动后尚未提交的恢复都重新验证批准合同、完整 delivery、当前 check 定义和 terminal evidence，并要求知识路径仍与实际 dirty knowledge 集合精确一致；撤销或丢失知识改动返回 `KNOWLEDGE_PATH_MISMATCH`。移动前确认 archive 目标未被 Git 忽略，否则返回 `ARCHIVE_TARGET_IGNORED` 且不移动、不暂存。它只暂存 active/archive 三件套和确认的知识路径，不吸收无关修改；暂存或提交失败时仅撤销该 transition 实际已暂存的路径，保留移动后的目录供显式 ID 重跑，不能撤销暂存时报告精确待恢复路径。
+`archive` 只处理已完成的显式 change，完整保留三件套，subject 为 `archive(<id>): retain complete change record`。正常归档及移动后尚未提交的恢复都重新验证批准合同、完整 delivery、当前 check 定义和 terminal evidence，并要求知识路径仍与实际 dirty knowledge 集合精确一致、内容摘要仍匹配 complete 时绑定的值；同路径正文变化也会拒绝归档。digests 为 complete 时工作区 raw SHA256，只在移动前/未提交移动恢复复核；已提交恢复依赖三件套精确匹配归档 commit、transition 路径与证据链，不将 Git blob（可能经 autocrlf/clean filter 转换）与 raw 摘要比较，不阻止后续正常知识更新；撤销或丢失知识改动返回 `KNOWLEDGE_PATH_MISMATCH`。移动前确认 archive 目标未被 Git 忽略，否则返回 `ARCHIVE_TARGET_IGNORED` 且不移动、不暂存。它只暂存 active/archive 三件套和确认的知识路径，不吸收无关修改；暂存或提交失败时仅撤销该 transition 实际已暂存的路径，保留移动后的目录供显式 ID 重跑，不能撤销暂存时报告精确待恢复路径。
 
 已提交归档的成功重跑幂等，不要求归档提交恰好为 HEAD。Runtime 只查询显式 ID 的 archive State 文件引入历史，找到当前分支历史中的精确归档提交；要求工作区三件套与该提交一致，并以原 `verified_head` 的项目 check 定义验证历史 terminal evidence。归档文件漂移返回 `ARCHIVE_CONTENT_DRIFT`，不修改它们；后续普通产品提交或检查配置变化不会使已完成归档变成未完成。此路径不重新吸收知识或创建提交，不扫描其他 archive。
 

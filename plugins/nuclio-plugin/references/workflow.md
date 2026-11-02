@@ -1,6 +1,6 @@
 # Nuclio v3 Workflow
 
-Nuclio v3 是面向 Claude Code 与 Codex 的薄 Runtime。主会话是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`；`change.py` 是唯一 State writer。用户确认结果合同，主会话管理交付，Runtime 只保存可恢复事实、绑定当前验证并判断是否可完成。
+Nuclio v3 是面向 Claude Code、Codex 与 DeepSeek Harness 的薄 Runtime；只有用户显式选择才启用，不按普通 change 自动调用，不提供全局写入拦截。主会话是唯一控制器，独占用户 Gate、结果合同判断、`delivery.yaml` 维护、Runtime 调用、最终验证、知识决定、`complete` 和 `archive`；`change.py` 是唯一 State writer。用户一次确认结果、关键设计和影响面，主会话管理交付，Runtime 只保存可恢复事实、绑定当前验证并判断是否可完成。
 
 路径、显式调用、确认与代理能力遵循 [宿主适配](host-runtime.md)。
 
@@ -14,11 +14,11 @@ Nuclio 生命周期始终在调用开始时的当前模式内运行，不调用 
 Shape -> 一次明确的结果合同确认 -> Build <-> Verify -> Finish -> complete -> archive
 ```
 
-- **Shape**：无 active change 时，从 `.dev-docs/index.md` 路由相关知识并只读调查请求与仓库，确定合法 change ID、类型和结果合同；仅在下述分支隔离成功后创建 `change.md`。每个调查开始前按工作独立性、上下文隔离收益和协调成本判断直接调查或积极委派，由模型自主切成互斥、有停止条件且只回答当前合同缺口的调查包；复用已有结论，不派发重叠调查。已有 active change 按恢复路径继续，不重复分支操作。合同包含 Goal、Context、Constraints、Non-goals 与可观察 Acceptance。
-- **确认**：只确认结果合同。milestone、路径、实现、代理、review、检查增强和合同不变的失败修复由主会话自主决定。新产品语义、兼容性、外部副作用或不可逆结果才提升 revision 并重新确认。
+- **Shape**：无 active change 时，从 `.dev-docs/index.md` 路由相关知识并只读调查请求与仓库，确定合法 change ID、类型和结果合同；仅在下述分支隔离成功后创建 `change.md`。每个调查开始前按工作独立性、上下文隔离收益和协调成本判断直接调查或积极委派，由模型自主切成互斥、有停止条件且只回答当前合同缺口的调查包；复用已有结论，不派发重叠调查。已有 active change 先核对请求归属；不匹配或不明确时停止，提供保留现场/先完成旧项，不自动跳过、吸收或假暂停；匹配才恢复，不重复分支操作。proposal 包含 Goal、Context、Constraints、Non-goals、可观察 Acceptance、Design、Scope 与 Knowledge Context。
+- **确认**：一次展示并批准结果 + 关键设计 + 影响面，包含知识依据、验证策略和风险。必需 Design/Scope 冻结，Knowledge Context 可更新；无架构增量明确写无。等待明确回复，以 `approve --approval-source` 记录当前 revision 的会话/消息定位；空回复、取消、超时和工具权限许可不是批准。来源仅为主会话声明。milestone、逐文件路径、代码组织、代理、review、检查增强和同方案返修自主决定；关键架构、兼容性、权限、事务/事实源、不可逆副作用或实质范围变化才提升 revision 重批。
 - **Build**：主会话创建和维护 `delivery.yaml`，用 milestone 覆盖所有 Acceptance；多 milestone 时最后一项为覆盖全部 Acceptance 的 integration。每个 Build/返修工作包开始前只读取紧凑控制信息，并按独立性、隔离收益与协调成本判断直接执行或积极委派，由模型自主拆分，不依赖模型名、具体代理工具、固定代理数量或宿主自动委派模式。多文件/多模块调查、大输出诊断、可独立验收的实现轨道、只需摘要的任务和 fresh-context review，在预期改善速度、覆盖或上下文质量时应积极委派；少量工具调用、单文件小改、紧密顺序依赖、共享资源争用或需要持续共享上下文时直接执行。委派必须覆盖相关 Acceptance、Constraints/Non-goals、实现边界、集成接缝、预期 changed paths 与 exact checks，使工作包可独立验收；只传当前合同、milestone/handoff、索引路由的知识路径及读取理由和必要范围，不复制知识正文。代理吸收局部探索、诊断和原始输出，不调用 Skill、不继续委派、不写 Runtime 状态；产品写入保持顺序。
 - **Verify**：仅在候选 HEAD/工作区稳定后，由主会话执行 exact argv，以 `record-check` 记录命令、exit code 和短摘要，随后调用 `verify`。失败、缺失或过期依据结束本轮 Verify 并回到 Build；大输出或多文件诊断优先隔离委派，简单明确失败可直接修复，不在 Verify 中边诊断边改代码，也不引入旧的修复审批或用户确认。
-- **Finish**：验证通过后，从索引读取受影响知识，同时审查新增候选和存量失效。无候选使用 `NO_OP`；有候选只作一次“写入并归档（推荐）/跳过并归档”决定，再连续 complete/archive。
+- **Finish**：验证通过后，从索引读取受影响知识，同时审查新增候选和存量失效。无候选使用带已核对主题/理由的 `NO_OP`；跳过已知失效须记 REJECTED/PARTIAL 和残余风险，在用户允许时为当前 index/主题入口保留可发现提示；若连提示也拒绝写入，明确报告风险未持久化到入口，不偷写。候选只作一次“写入并归档（推荐）/跳过并归档”决定，再以 `complete --knowledge-assessment` 连续完成/归档；Runtime 绑定知识内容摘要，拒绝同路径正文漂移。
 
 ## Runtime
 
@@ -30,7 +30,9 @@ python3 "${NUCLIO_SKILL_DIR}/../../scripts/change.py" --project-root "${NUCLIO_P
 
 调用。`${NUCLIO_SKILL_DIR}` 只定位 bundled script；`${NUCLIO_PROJECT_DIR}` 是唯一写入根目录。插件源码和 Marketplace cache 只读。
 
-`status --id <change-id> --json` 是已知唯一 active change 的恢复入口：先仅检查 `.dev-docs/changes/` 的直接子目录并排除 `archive/`。无候选时不调用 `status`，进入 Shape；恰有一个候选时，以目录名作为 change ID 调用 `status`；多个候选时 fail closed，报告歧义而不猜测或调用 Runtime。随后先保留或读取紧凑工作包、当前合同、milestone/handoff 和由索引路由的相关知识，并按当前 evidence 计算的 `next_action` 恢复到合同确认、Build、Verify、Finish 或 archive。进入 Build 时遵循上述先判断后读取的分支：若派发，主会话不预读该委派范围的局部代码、测试、配置或测试诊断，由代理在必要范围内读取并吸收局部探索、测试诊断和原始输出；活动范围对主会话排他，只有定点验收和目的明确的独立复核例外。若直接实施，主会话才读取相关代码、测试和配置。`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。不要以旧聊天、全部 archive 或整个知识库恢复工作。v2 active 输入（包括 `plan.yaml`）必须 fail closed；旧 archive 不扫描、不解析、不修改。
+`status --id <change-id> --json` 是已知唯一 active change 的恢复入口：先仅检查 `.dev-docs/changes/` 的直接子目录并排除 `archive/`。无候选时不调用 `status`，进入 Shape；恰有一个候选时，以目录名作为 change ID 调用 `status`；多个候选时 fail closed，报告歧义而不猜测或调用 Runtime。随后先保留或读取紧凑工作包、当前合同、milestone/handoff 和由索引路由的相关知识，并按当前 evidence 计算的 `next_action` 恢复到合同确认、Build、Verify、Finish 或 archive。进入 Build 时遵循上述先判断后读取的分支：若派发，主会话不预读该委派范围的局部代码、测试、配置或测试诊断，由代理在必要范围内读取并吸收局部探索、测试诊断和原始输出；活动范围对主会话排他，只有定点验收和目的明确的独立复核例外。若直接实施，主会话才读取相关代码、测试和配置。`review_blocker` 非空时先在 Build 处理 finding。complete 后若 HEAD、check 或 Acceptance evidence 漂移，按同一 Build/Verify 路径重建依据，不重新确认未变化的合同。不要以旧聊天、全部 archive 或整个知识库恢复工作。v2 active 输入（包括 `plan.yaml`）必须 fail closed；旧 archive 不扫描或批量解析/修改；仅用户明确 ID 的旧 v3 archive 可按原合同定点恢复。
+
+恢复先展示 change ID/revision、批准状态、Design/Scope、Knowledge Context 覆盖和下一步。旧 v3 active 缺完整方案/批准来源时按 `revise-proposal` 补齐、提升 revision 并重新批准；未批准 shape 正常补全。旧 v3 archive 保持显式 ID 的原合同定点恢复，不批量迁移。
 
 两种中断有专门恢复路径。`status.next_action=recover-approval` 表示批准提交已存在、State 尚未写回，主会话重跑 `approve --id <change-id>` 后重新读取 status，不重复确认。无 active 候选且用户当前明确提供恢复/归档 ID 时，Shape 先定点检查该 ID 的 archive 目录；存在则直接 `archive --id <change-id>`，不进入新建的起点 clean 检查或分支流程。目标缺失或与现有 active ID 冲突时停止；没有 ID 时要求用户明确目标，不扫描或猜测 archive。多个 active 仍 fail closed。此例外适用于移动后提交失败及确认既有归档，仅由 Runtime 验证指定 v3 完成态。
 

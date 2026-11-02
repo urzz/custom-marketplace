@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   MarketplaceSkillProvider,
   apply,
@@ -126,6 +127,24 @@ Watched body
   assert.equal(watcherInvalidated > 0, true);
   await watched.dispose();
   controller.abort();
+
+  // 验证实际分发合同，而不只验证合成 frontmatter。
+  const bundled = new MarketplaceSkillProvider(
+    { logger: { warn() {} } },
+    { signal: new AbortController().signal, invalidate() {} },
+    { root: fileURLToPath(new URL("..", import.meta.url)), watch: false }
+  );
+  try {
+    const shipped = await bundled.list();
+    for (const name of ["nuclio-init", "nuclio-work"]) {
+      const skill = shipped.find((entry) => entry.name === name);
+      assert.ok(skill, `missing bundled skill: ${name}`);
+      assert.deepEqual(skill.invocation, { modelInvocable: false, userInvocable: true });
+      assert.ok((await bundled.get(skill)).content.includes("显式"));
+    }
+  } finally {
+    await bundled.dispose();
+  }
   console.log("dsh provider tests passed");
 } finally {
   await rm(root, { recursive: true, force: true });
